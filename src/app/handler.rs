@@ -744,6 +744,11 @@ impl ApplicationHandler for App {
                         (x + dx / zoom, y + dy / zoom),
                     );
                 }
+                if let Some((factor, anchor)) = output.zoom
+                    && in_game
+                {
+                    crate::app::input::camera::apply_touch_zoom(state, factor, anchor);
+                }
                 self.dispatching_touch = true;
                 for event in output.events.into_iter().flatten() {
                     self.window_event(event_loop, _id, event);

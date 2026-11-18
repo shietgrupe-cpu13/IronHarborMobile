@@ -7,8 +7,21 @@
         <item name="android:windowBackground">@drawable/splash_background</item>
     </style>
 
+    <style name="Theme.Vera20k.Launcher" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowBackground">@color/launcher_background</item>
+        <item name="android:statusBarColor">@color/launcher_background</item>
+        <item name="android:navigationBarColor">@color/launcher_background</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:colorAccent">@color/launcher_accent</item>
+        <item name="android:fontFamily">sans</item>
+        <item name="android:defaultFocusHighlightEnabled">false</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+    </style>
+
     <!-- One theme per launcher entry. Before Android 12 the launch window is the
          same for both; from 12 the system splash can carry the chosen icon. -->
-    <style name="Theme.Vera20k.RetailSplash" parent="Theme.Vera20k" />
-    <style name="Theme.Vera20k.VeraSplash" parent="Theme.Vera20k" />
+    <style name="Theme.Vera20k.RetailSplash" parent="Theme.Vera20k.Launcher" />
+    <style name="Theme.Vera20k.VeraSplash" parent="Theme.Vera20k.Launcher" />
 </resources>

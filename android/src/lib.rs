@@ -89,7 +89,8 @@ fn apply_app_icon(vera_icon: bool) {
 /// back through [`Java_org_vera20k_VeraActivity_nativeOnLanNetworkChanged`].
 fn bind_lan_network() {
     let bound = with_activity(|env, activity| {
-        env.call_method(activity, "bindLanNetwork", "()V", &[]).is_ok()
+        env.call_method(activity, "bindLanNetwork", "()V", &[])
+            .is_ok()
     });
     if bound != Some(true) {
         log::warn!("Could not bind the LAN visit to the Wi-Fi network");
@@ -207,6 +208,38 @@ pub extern "system" fn Java_org_vera20k_VeraActivity_nativeConfigForImport(
         let config_path = vera20k::util::platform_dir::get()
             .ok_or_else(|| anyhow::anyhow!("The app data directory is unavailable"))?
             .join("config.toml");
+        let previous = match std::fs::read_to_string(config_path) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(error) => return Err(error.into()),
+        };
+        let contents = vera20k::util::config::set_paths_key(&previous, "ra2_dir", &directory);
+        Ok(env.new_string(contents)?.into_raw())
+    })();
+    match result {
+        Ok(contents) => contents,
+        Err(error) => {
+            let _ = env.throw_new("java/io/IOException", error.to_string());
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Launcher-side variant of the import config builder. The Kotlin launcher
+/// passes its app-private files directory directly, so this callback works
+/// before NativeActivity has initialized `ndk_context` and does not start a
+/// second engine or event loop.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeConfigForImport(
+    mut env: jni::JNIEnv,
+    _activity: JObject,
+    directory: JString,
+    files_directory: JString,
+) -> jstring {
+    let result = (|| -> anyhow::Result<jstring> {
+        let directory: String = env.get_string(&directory)?.into();
+        let files_directory: String = env.get_string(&files_directory)?.into();
+        let config_path = std::path::Path::new(&files_directory).join("config.toml");
         let previous = match std::fs::read_to_string(config_path) {
             Ok(contents) => contents,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),

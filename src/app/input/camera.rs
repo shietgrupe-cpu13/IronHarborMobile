@@ -1735,6 +1735,27 @@ pub(crate) fn apply_zoom(state: &mut AppState, delta_lines: f32) {
     state.match_state.input.zoom_target = new_target;
 }
 
+/// Apply a pinch zoom anchored to the midpoint of the two contacts. This is
+/// presentation-only; it changes no simulation inputs or state.
+pub(crate) fn apply_touch_zoom(state: &mut AppState, factor: f32, anchor: [f32; 2]) {
+    if !factor.is_finite() || factor <= 0.0 {
+        return;
+    }
+    let input = &mut state.match_state.input;
+    let old = input.zoom_target;
+    let target = (old * factor).clamp(MIN_ZOOM, MAX_ZOOM);
+    if (target - old).abs() < 1e-6 {
+        return;
+    }
+    let zoom = input.zoom_level.max(0.01);
+    input.zoom_anchor_world = [
+        input.camera_x + anchor[0] / zoom,
+        input.camera_y + anchor[1] / zoom,
+    ];
+    input.zoom_anchor_screen = anchor;
+    input.zoom_target = target;
+}
+
 /// Optional view-distance tiers. The window size never changes; the camera's
 /// world-per-pixel scale does, so the battlefield covers the tier's logical
 /// resolution at a 1280x800 reference frame while the frame stays the window's.

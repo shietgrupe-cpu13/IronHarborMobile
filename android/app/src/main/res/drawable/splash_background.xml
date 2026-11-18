@@ -1,12 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The launch window before the first frame: the brand art centred on its own
-     background colour, so the tap-to-first-frame gap shows the splash rather
-     than a plain window. -->
-<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:drawable="@color/splash_background" />
-    <item>
-        <bitmap
-            android:gravity="center"
-            android:src="@drawable/splash_hero" />
-    </item>
-</layer-list>
+<!-- Original neutral background; keep third-party game art out of the fork. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <gradient
+        android:angle="270"
+        android:startColor="@color/launcher_background"
+        android:endColor="#111914" />
+</shape>

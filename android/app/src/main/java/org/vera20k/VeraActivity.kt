@@ -158,11 +158,7 @@ class VeraActivity : NativeActivity() {
         // foreground PNG is the same artwork the launcher composites.
         val icon = BitmapFactory.decodeResource(
             resources,
-            if (veraIcon) {
-                R.mipmap.ic_launcher_vera_foreground
-            } else {
-                R.mipmap.ic_launcher_retail_foreground
-            },
+            R.mipmap.ic_launcher_vera_foreground,
         ) ?: return
         setTaskDescription(
             TaskDescription(applicationInfo.loadLabel(packageManager).toString(), icon),

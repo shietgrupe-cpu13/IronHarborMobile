@@ -4,6 +4,7 @@ import static org.junit.Assert.*;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import org.junit.Rule;
@@ -36,48 +37,48 @@ public class AssetImportJobTest {
     @Test public void failedCopyLeavesTheOldInstallAndRetryHasNoStaleRules() throws Exception {
         File files = temporary.newFolder("files");
         Path oldRules = Files.createDirectory(files.toPath().resolve("old")).resolve("RULESMD.INI");
-        Files.writeString(oldRules, "old rules");
+        writeString(oldRules, "old rules");
         Path config = files.toPath().resolve("config.toml");
-        Files.writeString(config, "old config");
+        writeString(config, "old config");
         File[] failedDirectory = new File[1];
         try (AssetImportJob job = begin()) {
             assertThrows(IOException.class, () -> job.run(files, directory -> {
                 failedDirectory[0] = directory;
-                Files.writeString(AssetImportJob.child(directory, "RULESMD.INI").toPath(), "stale");
+                writeString(AssetImportJob.child(directory, "RULESMD.INI").toPath(), "stale");
                 throw new IOException("copy failed");
             }, directory -> {
                 throw new AssertionError("a failed copy must not publish config");
             }));
             assertFalse(failedDirectory[0].exists());
-            assertEquals("old config", Files.readString(config));
-            assertEquals("old rules", Files.readString(oldRules));
+            assertEquals("old config", readString(config));
+            assertEquals("old rules", readString(oldRules));
         }
         try (AssetImportJob retry = begin()) {
             File installed = retry.run(files, directory -> {
                 assertFalse(AssetImportJob.child(directory, "RULESMD.INI").exists());
-                Files.writeString(AssetImportJob.child(directory, "ra2md.mix").toPath(), "new assets");
-                assertEquals("old config", Files.readString(config));
+                writeString(AssetImportJob.child(directory, "ra2md.mix").toPath(), "new assets");
+                assertEquals("old config", readString(config));
             }, directory -> {
-                assertEquals("old config", Files.readString(config));
+                assertEquals("old config", readString(config));
                 return "new config";
             });
             assertNotEquals(failedDirectory[0], installed);
             assertFalse(AssetImportJob.child(installed, "RULESMD.INI").exists());
-            assertEquals("new assets", Files.readString(installed.toPath().resolve("ra2md.mix")));
-            assertEquals("new config", Files.readString(config));
-            assertEquals("old rules", Files.readString(oldRules));
+            assertEquals("new assets", readString(installed.toPath().resolve("ra2md.mix")));
+            assertEquals("new config", readString(config));
+            assertEquals("old rules", readString(oldRules));
         }
     }
 
     @Test public void cancellationKeepsAdmissionUntilCleanupAndCloseWithoutPublishing() throws Exception {
         File files = temporary.newFolder("files");
         Path config = files.toPath().resolve("config.toml");
-        Files.writeString(config, "old config");
+        writeString(config, "old config");
         File[] cancelledDirectory = new File[1];
         try (AssetImportJob job = begin()) {
             assertThrows(AssetImportJob.Cancelled.class, () -> job.run(files, directory -> {
                 cancelledDirectory[0] = directory;
-                Files.writeString(AssetImportJob.child(directory, "ra2md.mix").toPath(), "partial");
+                writeString(AssetImportJob.child(directory, "ra2md.mix").toPath(), "partial");
                 assertTrue(AssetImportJob.cancelActive());
                 assertBusy();
                 job.checkCancelled();
@@ -85,7 +86,7 @@ public class AssetImportJobTest {
                 throw new AssertionError("a cancelled copy must not publish config");
             }));
             assertFalse(cancelledDirectory[0].exists());
-            assertEquals("old config", Files.readString(config));
+            assertEquals("old config", readString(config));
             assertBusy();
         }
         try (AssetImportJob retry = begin()) {
@@ -97,6 +98,14 @@ public class AssetImportJobTest {
         AssetImportJob job = AssetImportJob.begin();
         assertNotNull("a completed job must release admission", job);
         return job;
+    }
+
+    private static void writeString(Path path, String value) throws IOException {
+        Files.write(path, value.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static String readString(Path path) throws IOException {
+        return new String(Files.readAllBytes(path), StandardCharsets.UTF_8);
     }
 
     private static void assertBusy() {

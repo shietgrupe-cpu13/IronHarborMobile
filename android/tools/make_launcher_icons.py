@@ -1,13 +1,8 @@
 #!/usr/bin/env python3
-"""Render the Android launcher icons from the project's two source PNGs.
+"""Render the Android launcher icon from VERA's original source PNG.
 
-The desktop picks its window icon at run time (`src/app/window_icon.rs`): the
-retail red star read out of the player's `GAME.EXE`, or VERA's artwork. An
-Android launcher icon has to be a packaged resource, so both are rendered here
-once and checked in:
-
-  .github/release/icon.png   the red star the release packages ship
-  src/app/vera_icon.png      the artwork the VERA Icon box selects
+Android launcher icons are generated from the original VERA icon only. The
+upstream retail icon is intentionally not included in this Android fork.
 
 Run from the repository root with Pillow available:
 
@@ -41,10 +36,7 @@ LEGACY_DP = 48
 ADAPTIVE_DP = 108
 SAFE_ZONE_DP = 72
 
-ICONS = {
-    "retail": ROOT / ".github/release/icon.png",
-    "vera": ROOT / "src/app/vera_icon.png",
-}
+ICONS = {"vera": ROOT / "src/app/vera_icon.png"}
 
 
 def dominant_colour(image: Image.Image) -> tuple[int, int, int]:

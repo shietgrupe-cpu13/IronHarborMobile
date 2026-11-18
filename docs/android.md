@@ -1,10 +1,11 @@
 # Android build
 
-**Status: initial Android support.** The contributor reported a debug APK playing
+**Status: Android launcher baseline.** The contributor reported a debug APK playing
 the intro movie, reaching the main menu, and importing a retail installation on an
-Android 16 arm64 tablet (OnePlus Pad 2 Pro). The review fixes have not been built or
-tested on Android hardware; the earlier results below do not validate them. The
-open items at the bottom still separate this from a release.
+Android 16 arm64 tablet (OnePlus Pad 2 Pro). Launcher baseline b2 builds and passes
+JVM tests, but has not been exercised on Android hardware; the historical device
+results below do not validate this branch. The open items at the bottom still
+separate this from a release.
 
 ## Layout
 
@@ -16,6 +17,8 @@ Everything Android-specific lives in `android/`: it is both the
 | `android/Cargo.toml`, `android/src/lib.rs` | The `vera20k-android` cdylib: `android_main`, the working-directory fix, and the hand-off to `vera20k::entry::run_with_loop`. Body is `#![cfg(target_os = "android")]`, so desktop builds compile it empty. |
 | `android/app/` | The only Gradle module: `VeraActivity`, `hasCode="true"`. |
 | `android/app/src/main/java/org/vera20k/VeraActivity.kt` | Starts the system folder picker and reads the selected tree through Android's `ContentResolver`. |
+| `android/app/src/main/java/org/vera20k/LauncherActivity.kt` | Native Views command center for installation, settings, touch, mods, and diagnostics; starts `VeraActivity` only when required archives are present. |
+| `android/app/src/main/java/org/vera20k/LauncherInstallation.kt` | Reads the configured game path and reports the two launcher readiness checks. |
 | `android/app/src/main/java/org/vera20k/AssetImportJob.kt` | Owns import admission, cancellation, safe destination paths and atomic publication of the completed copy. Its filesystem tests run on the JVM. |
 | `android/app/src/main/jniLibs/` | Where `cargo ndk -o` writes `libvera20k_android.so`. Generated, git-ignored. |
 | `src/entry.rs` | Start-up shared with the desktop binary: logging, panic hook, banner, event loop, exit status. `main.rs` is now just the CLI switches plus a call into it. |
@@ -65,61 +68,13 @@ and add `-t x86_64` when you need it. Drop it for releases. On macOS/Linux, use
 for `CARGO_PROFILE_SHIPPING_STRIP`, and
 `./android/gradlew -p android :app:assembleDebug`.
 
-## Launcher icon
+## Android fork branding and launcher
 
-The desktop picks its window icon at run time (`src/app/window_icon.rs`): the
-retail red star read out of the player's `GAME.EXE`, or VERA's artwork when the
-Options page's VERA Icon box is ticked. A launcher icon has to be a resource
-compiled into the package, so Android carries both instead:
+This Android fork packages only the VERA icon from `src/app/vera_icon.png`. The upstream retail icon and scene splash are not included. Both launcher aliases retained for the engine's existing icon preference show the VERA icon. `android/tools/make_launcher_icons.py` generates only that icon's density and adaptive resources. Android 12+ splash screens use the VERA icon on a neutral dark background.
 
-- `res/mipmap-*/ic_launcher_retail.png` from `.github/release/icon.png`, the red
-  star the release packages already ship — the default, matching
-  `[VERA] VeraIcon=false`.
-- `res/mipmap-*/ic_launcher_vera.png` from `src/app/vera_icon.png`, the artwork
-  the VERA Icon box selects.
+The Kotlin `LauncherActivity` uses platform Android Views and a landscape-first dark command-center layout. The launcher and existing NativeActivity run in separate Android processes; only the game process owns the winit event loop. Pressing Play starts the existing `VeraActivity` after checking for `ra2.mix` and `ra2md.mix` in the configured game directory. Import uses the system Storage Access Framework folder picker, copies to app-private staging storage, and publishes the new config only after a complete copy. It does not request all-files storage permission.
 
-The red star is game art, not ours: Command & Conquer, Red Alert and Yuri's
-Revenge are trademarks of Electronic Arts Inc., and the program icon is Red
-Alert 2's red star, owned by Electronic Arts. VERA20k is not affiliated with or
-endorsed by Electronic Arts. `.github/release/README.txt.in` and the Windows
-version resource say the same for the release packages.
-
-Each density also has a `*_foreground.png` on a 108 dp canvas with the artwork
-inside the 72 dp safe zone, and `res/mipmap-anydpi-v26/ic_launcher_<name>.xml`
-pairs it with a median-colour background, so every launcher mask crops the icon
-correctly. `res/values/ic_launcher_backgrounds.xml` holds those colours.
-
-The same artwork is the Android 12+ splash icon: each entry's theme
-(`Theme.Vera20k.RetailSplash` / `Theme.Vera20k.VeraSplash`, declared per alias)
-names its own foreground, so the launch window matches the icon the player
-tapped. Before Android 12 the launch window is the shared `splash_background`
-artwork, which both entries use.
-
-Regenerate after either source image changes:
-
-```powershell
-python android/tools/make_launcher_icons.py
-```
-
-The Options page's VERA Icon box (`[VERA] VeraIcon`) selects between them at run
-time. A launcher icon is a compiled resource, so the manifest declares two
-`activity-alias` entries — `org.vera20k.LauncherRetail` (enabled) and
-`org.vera20k.LauncherVera` — and `VeraActivity.applyAppIcon` enables one and
-disables the other through `PackageManager` with `DONT_KILL_APP`. Rust calls it
-at start-up and on every toggle through `vera20k::util::app_icon`, which the
-Android crate hooks in `android_main`.
-
-Two behaviours to expect. First, changing the box **closes the game**: disabling the
-alias that launched the task removes that task, and one process cannot serve a
-second one (winit builds a single event loop per process), so the activity ends
-deliberately rather than leaving a headless process behind. Reopen the game from
-its new icon. Relaunching it automatically was tried and abandoned: it needs a
-background activity start, which Android refuses once the process is no longer in
-front. Second, the home screen picks the new icon up when the launcher next
-reloads its list, and a shortcut pinned before the switch keeps the old
-component's icon (the launcher owns pinned shortcuts, not the app). The app
-switcher's entry updates at once from the task description.
-
+See [android-launcher.md](android-launcher.md) for launcher sections, supported controls, current limitations, and baseline verification.
 ## LAN play on Android
 
 LAN play between devices needs all of the following, and a missing one looks
@@ -254,4 +209,5 @@ They have not been independently reproduced for the current code.
 
 ## TODO
 
-Save/Map files import/export, touch UI, audio focus, LAN locks, CI.
+Save/Map files import/export, touch sensitivity/overlay configuration, audio
+focus, LAN locks, CI.
