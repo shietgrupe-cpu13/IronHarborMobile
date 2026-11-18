@@ -164,6 +164,36 @@ fn superweapon_money_cameo_refresh_tracks_wallet_without_membership_rebuild() {
     assert_eq!(projection.cameo_strips().saved_identities(), order);
 }
 
+#[cfg(feature = "phobos")]
+#[test]
+fn phobos_show_cameo_no_hides_superweapon_from_build_sidebar_candidates() {
+    let rules = RuleSet::from_ini_with_fixed_art_for_test(
+        &crate::sim::arena_fixture::clear_ground_ini(
+            "[Countries]\n0=Americans\n[SuperWeaponTypes]\n0=Hidden\n\
+             [Hidden]\nType=PsychicReveal\nSW.ShowCameo=no\n",
+        ),
+        &crate::rules::ini_parser::IniFile::empty(),
+    )
+    .unwrap();
+    let (mut sim, owner) = world(&rules, &[]);
+    let id = sim.interner().get("Hidden").unwrap();
+    let mut instance = crate::sim::superweapon::SuperWeaponInstance::new(id, owner, 0);
+    instance.set_is_active_for_test(true);
+    sim.super_weapons_mut_for_test()
+        .entry(owner)
+        .or_default()
+        .insert(id, instance);
+    let supers = crate::sim::superweapon::superweapon_views_for_owner(&sim, &rules, &owner);
+    let candidates = cameo_candidates(&sim, &rules, None, owner, &[], &supers);
+
+    assert!(
+        candidates
+            .iter()
+            .all(|candidate| candidate.id != CameoId::SuperWeapon(id)),
+        "SW.ShowCameo=no hides technical superweapons from the right build strip"
+    );
+}
+
 /// The view revision is the redraw gate's sidebar input: an equal view
 /// republished by the per-pass gadget refresh keeps it, any change moves it.
 #[test]

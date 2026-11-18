@@ -1464,6 +1464,10 @@ fn super_cameo(
     id: InternedId,
 ) -> Option<Cameo> {
     let kind = rules.super_weapon(sim.interner().try_resolve(id)?)?;
+    #[cfg(feature = "phobos")]
+    if !kind.sw_show_cameo {
+        return None;
+    }
     Some(Cameo {
         id: CameoId::SuperWeapon(id),
         tab: crate::ui::sidebar::SidebarTab::Defense,

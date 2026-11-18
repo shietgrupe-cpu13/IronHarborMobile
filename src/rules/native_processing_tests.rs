@@ -42,6 +42,42 @@ fn weapon_types_register_before_animation_reads_each_rules_layer() {
 }
 
 #[test]
+fn ares_weapon_anim_list_allocates_unregistered_animation_references() {
+    use crate::rules::ruleset::RuleSet;
+    let _ares = crate::rules::ares_switch::read_ares_way(true);
+    let processed = RulesLayerStack::new(IniFile::from_str(
+        "[Animations]\n0=REGISTERED\n[WeaponTypes]\n0=MODWEAPON\n\
+         [MODWEAPON]\nDamage=1\nAnim=MODMUZZLE\n",
+    ))
+    .process_with_fixed_art(&IniFile::empty())
+    .unwrap();
+    let rules = RuleSet::from_processed_rules(&processed).unwrap();
+    assert_eq!(
+        rules.weapon("MODWEAPON").unwrap().anim,
+        ["MODMUZZLE"],
+        "Ares must preserve the retail Find-or-Allocate list read"
+    );
+}
+
+#[test]
+fn ares_warhead_anim_list_allocates_unregistered_animation_references() {
+    use crate::rules::ruleset::RuleSet;
+    let _ares = crate::rules::ares_switch::read_ares_way(true);
+    let processed = RulesLayerStack::new(IniFile::from_str(
+        "[Warheads]\n0=MODWARHEAD\n[Animations]\n0=REGISTERED\n\
+         [MODWARHEAD]\nAnimList=MODIMPACT\n",
+    ))
+    .process_with_fixed_art(&IniFile::empty())
+    .unwrap();
+    let rules = RuleSet::from_processed_rules(&processed).unwrap();
+    assert_eq!(
+        rules.warhead("MODWARHEAD").unwrap().anim_list,
+        ["MODIMPACT"],
+        "Ares must preserve the retail Find-or-Allocate list read"
+    );
+}
+
+#[test]
 fn civilian_type_reads_preserve_physical_layers_save_and_reset() {
     // InfantryType5237A1/52455F: own-ID bool, false only at construction.
     let root = |civilian: &str| {

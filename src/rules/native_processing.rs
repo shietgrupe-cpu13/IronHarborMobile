@@ -9927,13 +9927,10 @@ impl RulesPassProcessor {
                 state.damage = raw.read_int("Damage", state.damage);
                 state.speed = raw.read_speed("Speed", state.speed);
                 state.range_leptons = raw.read_range("Range", state.range_leptons);
-                // Ares 3.0 WeaponTypeClass_LoadFromINI_ListLength (1005C0F0,
-                // hook 0x772462): ParseList, shared 0x800 buffer, Find-only.
-                let anims = if ares_way {
-                    self.resolve_existing_list_from(&raw, "Anim", RulesTypeFamily::Animation, 0x800)
-                } else {
-                    self.resolve_list_from(&raw, "Anim", RulesTypeFamily::Animation, 0x80)
-                };
+                // Weapon animations are resolved with FindOrAllocate in both
+                // vanilla and Ares rules; mods may reference an animation here
+                // without listing it under [Animations].
+                let anims = self.resolve_list_from(&raw, "Anim", RulesTypeFamily::Animation, 0x80);
                 if let Some(anims) = anims {
                     self.family_mut(RulesTypeFamily::Weapon)[index].weapon.anim = anims;
                 }
@@ -10161,11 +10158,11 @@ impl RulesPassProcessor {
                 // (1005C0E0, hook 0x75DAE6) skips the later DebrisTypes read.
                 let (anim_list, ares_debris_types) = if ares_way {
                     (
-                        self.resolve_existing_list_from(
+                        self.resolve_list_from(
                             &raw,
                             "AnimList",
                             RulesTypeFamily::Animation,
-                            0x800,
+                            0x80,
                         ),
                         Some(self.resolve_existing_list_from(
                             &raw,
