@@ -3,6 +3,7 @@ package org.vera20k
 import android.app.Activity
 import android.app.ActivityManager
 import android.content.Intent
+import android.content.ClipData
 import android.content.pm.PackageManager
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -53,6 +54,7 @@ class LauncherActivity : Activity() {
     private var importing = false
     private var copiedBytes = 0L
     private var reportedBytes = 0L
+    private var exportingDiagnostics = false
     private lateinit var pageBody: LinearLayout
     private lateinit var tabs: LinearLayout
     private lateinit var playButton: TextView
@@ -373,14 +375,18 @@ class LauncherActivity : Activity() {
         infoRow(device, "Vulkan", "Required by package; live adapter not queried here")
         infoRow(device, "Memory", "${memory.availMem / (1024 * 1024)} MB available · native heap ${Debug.getNativeHeapAllocatedSize() / (1024 * 1024)} MB")
         infoRow(device, "FPS / frame time", "In-game telemetry is not connected to the launcher")
-        infoRow(device, "Engine logs", File(filesDir, "logs").absolutePath)
+        infoRow(device, "Log export", "Full retained engine logs and crash report in a ZIP")
         pageBody.addView(device, margin(bottom = 12))
-        pageBody.addView(actionButton("SHARE DIAGNOSTIC SUMMARY", primary = false) {
+        pageBody.addView(actionButton(
+            if (exportingDiagnostics) "PREPARING DIAGNOSTICS ZIP…" else "EXPORT FULL DIAGNOSTICS ZIP",
+            primary = false,
+        ) {
             shareDiagnostics(memory)
-        })
+        }.apply { isEnabled = !exportingDiagnostics })
     }
 
     private fun shareDiagnostics(memory: ActivityManager.MemoryInfo) {
+        if (exportingDiagnostics) return
         val report = buildString {
             appendLine("Iron Harbor Mobile diagnostics (based on YuriPlanet VERA20K)")
             appendLine("Version: ${appVersion()}")
@@ -392,14 +398,51 @@ class LauncherActivity : Activity() {
             appendLine("Native heap: ${Debug.getNativeHeapAllocatedSize() / (1024 * 1024)} MB")
             appendLine("Installation configured: ${installation.configuredDirectory?.absolutePath ?: "no"}")
             appendLine("Engine logs: ${File(filesDir, "logs").absolutePath}")
+            appendLine("The attached ZIP includes every retained regular file in the engine logs directory and except.txt when present.")
+            appendLine("Android system logcat is separate and is not included.")
             appendLine("No game assets are included in this report.")
         }
-        val send = Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"
-            putExtra(Intent.EXTRA_SUBJECT, "Iron Harbor Mobile diagnostics")
-            putExtra(Intent.EXTRA_TEXT, report)
-        }
-        startActivity(Intent.createChooser(send, "Share diagnostic summary"))
+        exportingDiagnostics = true
+        renderPage()
+        Toast.makeText(this, "Preparing the full diagnostics ZIP…", Toast.LENGTH_SHORT).show()
+        Thread({
+            try {
+                val bundle = DiagnosticLogArchive.create(filesDir, cacheDir, report)
+                val uri = Uri.Builder()
+                    .scheme("content")
+                    .authority("$packageName.diagnostics")
+                    .appendPath("diagnostics")
+                    .appendPath(bundle.file.name)
+                    .build()
+                runOnUiThread {
+                    exportingDiagnostics = false
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    if (page == Page.DIAGNOSTICS) renderPage()
+                    if (bundle.logFileCount == 0 && !bundle.crashReportIncluded) {
+                        Toast.makeText(this, "No saved engine logs yet; the ZIP contains the device summary.", Toast.LENGTH_LONG).show()
+                    }
+                    val send = Intent(Intent.ACTION_SEND).apply {
+                        type = "application/zip"
+                        putExtra(Intent.EXTRA_SUBJECT, "Iron Harbor Mobile full diagnostics")
+                        putExtra(Intent.EXTRA_TEXT, report)
+                        putExtra(Intent.EXTRA_STREAM, uri)
+                        clipData = ClipData.newUri(contentResolver, bundle.file.name, uri)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    val chooser = Intent.createChooser(send, "Share full diagnostics")
+                    chooser.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    startActivity(chooser)
+                }
+            } catch (error: Exception) {
+                runOnUiThread {
+                    exportingDiagnostics = false
+                    if (!isFinishing && !isDestroyed) {
+                        if (page == Page.DIAGNOSTICS) renderPage()
+                        Toast.makeText(this, "Could not export diagnostics: ${error.message ?: error.javaClass.simpleName}", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        }, "diagnostic-log-export").start()
     }
 
     private fun refreshInstallation() {

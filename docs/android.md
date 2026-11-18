@@ -83,6 +83,12 @@ The b3 fork uses the independent product name **Iron Harbor Mobile** and applica
 For an ARM64 shipping build, set `CARGO_PROFILE_SHIPPING_STRIP=symbols`, build with `cargo ndk -t arm64-v8a --platform 26 -o android/app/src/main/jniLibs build --locked --profile shipping -p vera20k-android --no-default-features`, then run `android/gradlew.bat -p android :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease`. Use JDK 17+, Android SDK 36/build-tools 36.1.0, NDK 28.2.13676358, and Gradle 8.13. The app declares only `arm64-v8a`, matching the native library produced by this recipe.
 
 Build b3 verified six Android JVM tests, a shipping-profile ARM64 Rust build, signed debug and release APKs, the release application ID/SDK levels, 16 KB APK native-entry alignment, and 16 KB ELF LOAD alignment. The package contains no Yuri's Revenge installation files. No device was attached during this build; Android 16 POCO gameplay remains unverified. See [the b3 report](android-release-b3.md); detailed build logs are retained in the local `out/logs/` directory.
+
+## Full Android log export — build b4
+
+The Diagnostics screen can export a ZIP containing the complete retained regular files in app-private `files/logs/`, including the engine's current and rotated files, plus the panic report `files/except.txt` when present. It includes the device summary and an inventory of included files. A private, non-exported content provider grants temporary read access only to generated ZIPs in the app cache; no storage permission is added. System logcat is not included. The b4 release APK increments version code to 208 so it can update the b3 package when signed with the same local release key.
+
+The two new archive tests verify byte-complete current/rotated logs and panic reports, exclusion of unrelated app files, and rejection of traversal/missing export paths. The six existing Android JVM tests also pass. The current device has no ADB connection, so the Android Sharesheet/receiving-app handoff has not been tested on-device. See the [b4 log-export report](android-log-export-b4.md); detailed build logs remain in the local `out/logs/` directory.
 ## LAN play on Android
 
 LAN play between devices needs all of the following, and a missing one looks

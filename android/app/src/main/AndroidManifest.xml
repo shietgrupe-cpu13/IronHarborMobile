@@ -88,6 +88,12 @@
             </intent-filter>
 
         </activity-alias>
+
+        <provider
+            android:name="org.vera20k.DiagnosticArchiveProvider"
+            android:authorities="${applicationId}.diagnostics"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 
 </manifest>
