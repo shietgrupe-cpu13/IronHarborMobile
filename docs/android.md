@@ -82,7 +82,7 @@ The b3 fork uses the independent product name **Iron Harbor Mobile** and applica
 
 For an ARM64 shipping build, set `CARGO_PROFILE_SHIPPING_STRIP=symbols`, build with `cargo ndk -t arm64-v8a --platform 26 -o android/app/src/main/jniLibs build --locked --profile shipping -p vera20k-android --no-default-features`, then run `android/gradlew.bat -p android :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease`. Use JDK 17+, Android SDK 36/build-tools 36.1.0, NDK 28.2.13676358, and Gradle 8.13. The app declares only `arm64-v8a`, matching the native library produced by this recipe.
 
-Build b3 verified six Android JVM tests, a shipping-profile ARM64 Rust build, signed debug and release APKs, the release application ID/SDK levels, 16 KB APK native-entry alignment, and 16 KB ELF LOAD alignment. The package contains no Yuri's Revenge installation files. No device was attached during this build; Android 16 POCO gameplay remains unverified. Build logs and hashes are in `out/logs/release-b3-android-report.md`.
+Build b3 verified six Android JVM tests, a shipping-profile ARM64 Rust build, signed debug and release APKs, the release application ID/SDK levels, 16 KB APK native-entry alignment, and 16 KB ELF LOAD alignment. The package contains no Yuri's Revenge installation files. No device was attached during this build; Android 16 POCO gameplay remains unverified. See [the b3 report](android-release-b3.md); detailed build logs are retained in the local `out/logs/` directory.
 ## LAN play on Android
 
 LAN play between devices needs all of the following, and a missing one looks

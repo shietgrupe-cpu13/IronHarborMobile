@@ -25,7 +25,7 @@ The Android package uses only the original Iron Harbor vector mark and a neutral
 
 ## Verification and limitations
 
-Build b2 compiled the ARM64 Rust library using the optimized `fast` profile and packaged a debug APK. Build b3 uses the optimized `shipping` Rust profile and produces independently branded Iron Harbor Mobile debug and release APKs (`org.ironharbor.mobile`). The Android JVM suite reports six passing tests. APK v2 signatures, 16 KB ZIP alignment, and `0x4000` ELF LOAD alignment pass. The package is ARM64-only and targets Android API 36. See `out/logs/release-b3-android-report.md` and the associated build logs for artifact hashes and detailed checks.
+Build b2 compiled the ARM64 Rust library using the optimized `fast` profile and packaged a debug APK. Build b3 uses the optimized `shipping` Rust profile and produces independently branded Iron Harbor Mobile debug and release APKs (`org.ironharbor.mobile`). The Android JVM suite reports six passing tests. APK v2 signatures, 16 KB ZIP alignment, and `0x4000` ELF LOAD alignment pass. The package is ARM64-only and targets Android API 36. See [the b3 report](android-release-b3.md); detailed build logs are retained locally under `out/logs/`.
 
 ADB currently sees no device. The launcher has not been installed or run on a POCO/Android 16 device, so its rendered appearance, SAF provider behavior, Vulkan initialization, audio, game launch/resume, touch response, and match behavior remain unverified on hardware. Continue/resume save detection, writable graphics/audio settings, a mod manager, live Vulkan information, frame telemetry, touch sensitivity, and overlay editing are unavailable in this baseline. No benchmark or FPS improvement is claimed.
 
