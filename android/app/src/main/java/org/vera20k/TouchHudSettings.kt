@@ -12,6 +12,8 @@ internal object TouchHudSettings {
     const val HUD_OPACITY = "hud_opacity"
     const val HUD_LAYOUT = "hud_layout"
     const val HUD_COLLAPSED = "hud_collapsed"
+    const val HUD_CONTROL_SETS = "hud_control_sets"
+    const val HUD_ACTIVE_SET = "hud_active_set"
 
     const val LAYOUT_FREE = 0
     const val LAYOUT_TWO_THUMB = 1
@@ -145,13 +147,15 @@ internal object TouchHudSettings {
         opacity: Int,
         layout: Int,
         keyBindings: Map<String, Int> = emptyMap(),
+        controlSets: Map<String, Int> = emptyMap(),
     ): String = listOf(
         "format=iron-harbor-hud",
-        "version=1",
+        "version=2",
         "visible=${encodeVisible(visible)}",
         "positions=${encodePositions(positions)}",
         "sizes=${encodeSizes(sizes)}",
         "keybindings=${encodeKeyBindings(keyBindings)}",
+        "controlsets=${encodeControlSets(controlSets)}",
         "scale=${clampScale(scale)}",
         "opacity=${clampOpacity(opacity)}",
         "layout=${layout.coerceIn(LAYOUT_FREE, LAYOUT_YURI)}",
@@ -166,6 +170,7 @@ internal object TouchHudSettings {
         val opacity: Int,
         val layout: Int,
         val keyBindings: Map<String, Int>,
+        val controlSets: Map<String, Int>,
     )
 
     fun decodeLayoutBackup(source: String): LayoutBackup? {
@@ -173,7 +178,8 @@ internal object TouchHudSettings {
             val separator = line.indexOf('=')
             if (separator <= 0) null else line.substring(0, separator) to line.substring(separator + 1)
         }.toMap()
-        if (fields["format"] != "iron-harbor-hud" || fields["version"] != "1") return null
+        val version = fields["version"]?.toIntOrNull()
+        if (fields["format"] != "iron-harbor-hud" || version !in 1..2) return null
         val visible = parseVisible(fields["visible"], true)
         val scale = fields["scale"]?.toIntOrNull() ?: return null
         val opacity = fields["opacity"]?.toIntOrNull() ?: return null
@@ -187,6 +193,7 @@ internal object TouchHudSettings {
             opacity,
             layout,
             parseKeyBindings(fields["keybindings"]),
+            if (version == 2) parseControlSets(fields["controlsets"]) else emptyMap(),
         )
     }
 
@@ -204,4 +211,19 @@ internal object TouchHudSettings {
     fun encodeKeyBindings(keyBindings: Map<String, Int>): String = remappableActions.asSequence()
         .mapNotNull { action -> keyBindings[action.id]?.takeIf { it in 1..1024 }?.let { action.id to it } }
         .joinToString(";") { (id, keyCode) -> "$id:$keyCode" }
+
+    fun parseControlSets(encoded: String?): Map<String, Int> {
+        val valid = remappableActions.mapTo(hashSetOf()) { it.id }
+        return encoded.orEmpty().split(';').mapNotNull { entry ->
+            val pair = entry.split(':', limit = 2)
+            if (pair.size != 2 || pair[0] !in valid) return@mapNotNull null
+            val set = pair[1].toIntOrNull() ?: return@mapNotNull null
+            if (set !in 0..2) return@mapNotNull null
+            pair[0] to set
+        }.toMap()
+    }
+
+    fun encodeControlSets(controlSets: Map<String, Int>): String = remappableActions.asSequence()
+        .mapNotNull { action -> controlSets[action.id]?.takeIf { it in 0..2 }?.let { action.id to it } }
+        .joinToString(";") { (id, set) -> "$id:$set" }
 }

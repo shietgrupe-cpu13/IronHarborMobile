@@ -469,8 +469,9 @@ class LauncherActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(4), dp(18), dp(4))
         }
-        root.addView(text("Choose visible controls, a starting layout, and transfer your setup with the system document picker. In-game drag and per-button sizing are saved when you tap SAVE HUD.", 13, R.color.launcher_muted), margin(bottom = 8))
+        root.addView(text("Choose visible controls, assign them to Always / Set 1 / Set 2, then switch sets from the in-game HUD. Drag, resize, and transfer your setup when needed.", 13, R.color.launcher_muted), margin(bottom = 8))
         val checkboxes = mutableListOf<Pair<String, CheckBox>>()
+        val controlSets = TouchHudSettings.parseControlSets(prefs.getString(TouchHudSettings.HUD_CONTROL_SETS, null)).toMutableMap()
         choices.forEach { action ->
             val check = CheckBox(this).apply {
                 val bound = prefs.contains("key_${action.id}") || action.defaultKeyCode != KeyEvent.KEYCODE_UNKNOWN
@@ -478,7 +479,25 @@ class LauncherActivity : Activity() {
                 setTextColor(color(R.color.launcher_text))
                 isChecked = action.id in visible
             }
-            root.addView(check)
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            row.addView(check, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            if (action.groupNumber == null) {
+                val setSpinner = Spinner(this).apply {
+                    adapter = ArrayAdapter(this@LauncherActivity, android.R.layout.simple_spinner_dropdown_item, listOf("Always", "Set 1", "Set 2"))
+                    setSelection((controlSets[action.id] ?: 0).coerceIn(0, 2))
+                }
+                setSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+                    override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                        controlSets[action.id] = position
+                    }
+                    override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+                }
+                row.addView(setSpinner, LinearLayout.LayoutParams(dp(112), ViewGroup.LayoutParams.WRAP_CONTENT))
+            }
+            root.addView(row)
             checkboxes += action.id to check
         }
         fun seekRow(title: String, initial: Int, min: Int, max: Int, onLabel: (Int) -> String): Pair<SeekBar, TextView> {
@@ -542,6 +561,7 @@ class LauncherActivity : Activity() {
                 val previousLayout = prefs.getInt(TouchHudSettings.HUD_LAYOUT, TouchHudSettings.LAYOUT_FREE)
                 val edit = prefs.edit()
                     .putString(TouchHudSettings.HUD_VISIBLE, TouchHudSettings.encodeVisible(selected))
+                    .putString(TouchHudSettings.HUD_CONTROL_SETS, TouchHudSettings.encodeControlSets(controlSets))
                     .putInt(TouchHudSettings.HUD_SCALE, TouchHudSettings.clampScale(scale.progress + 70))
                     .putInt(TouchHudSettings.HUD_OPACITY, TouchHudSettings.clampOpacity(opacity.progress + 30))
                     .putInt(TouchHudSettings.HUD_LAYOUT, layout.selectedItemPosition)
@@ -576,6 +596,7 @@ class LauncherActivity : Activity() {
             TouchHudSettings.remappableActions.mapNotNull { action ->
                 if (prefs.contains("key_${action.id}")) action.id to prefs.getInt("key_${action.id}", 0) else null
             }.toMap(),
+            TouchHudSettings.parseControlSets(prefs.getString(TouchHudSettings.HUD_CONTROL_SETS, null)),
         )
         runCatching { (contentResolver.openOutputStream(uri, "wt") ?: error("Selected document could not be opened")).bufferedWriter().use { it.write(payload) } }
             .onSuccess { Toast.makeText(this, "HUD layout exported.", Toast.LENGTH_SHORT).show() }
@@ -607,6 +628,7 @@ class LauncherActivity : Activity() {
         }
         val edit = getSharedPreferences(TouchHudSettings.PREFS, MODE_PRIVATE).edit()
             .putString(TouchHudSettings.HUD_VISIBLE, TouchHudSettings.encodeVisible(imported.visible))
+            .putString(TouchHudSettings.HUD_CONTROL_SETS, TouchHudSettings.encodeControlSets(imported.controlSets))
             .putString(TouchHudSettings.HUD_POSITIONS, TouchHudSettings.encodePositions(imported.positions))
             .putString(TouchHudSettings.HUD_SIZES, TouchHudSettings.encodeSizes(imported.sizes))
             .putInt(TouchHudSettings.HUD_SCALE, imported.scale)

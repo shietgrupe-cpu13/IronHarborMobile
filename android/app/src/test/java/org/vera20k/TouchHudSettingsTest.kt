@@ -70,6 +70,7 @@ class TouchHudSettingsTest {
             70,
             TouchHudSettings.LAYOUT_YURI,
             mapOf("FIRE" to 32, "PATROL" to 1030, "UNKNOWN" to 44),
+            mapOf("FIRE" to 1, "PATROL" to 2, "STOP" to 9, "MOVE" to 0),
         )
         val decoded = TouchHudSettings.decodeLayoutBackup(encoded)
         assertEquals(setOf("STOP", "C3"), decoded?.visible)
@@ -78,8 +79,13 @@ class TouchHudSettingsTest {
         assertEquals(70, decoded?.opacity)
         assertEquals(TouchHudSettings.LAYOUT_YURI, decoded?.layout)
         assertEquals(mapOf("FIRE" to 32), decoded?.keyBindings)
-        assertEquals(null, TouchHudSettings.decodeLayoutBackup(encoded.replace("version=1", "version=88")))
+        assertEquals(mapOf("FIRE" to 1, "MOVE" to 0, "PATROL" to 2), decoded?.controlSets)
+        assertEquals(null, TouchHudSettings.decodeLayoutBackup(encoded.replace("version=2", "version=88")))
         assertEquals(null, TouchHudSettings.decodeLayoutBackup(encoded.replace("scale=120", "scale=999")))
         assertEquals(mapOf("GUARD" to 29), TouchHudSettings.parseKeyBindings("GUARD:29;STOP:0;FIRE:nope;OTHER:41"))
+        assertEquals(mapOf("MOVE" to 2), TouchHudSettings.parseControlSets("MOVE:2;STOP:9;C1:1;BAD:nope"))
+        val legacy = encoded.replace("version=2", "version=1").lineSequence()
+            .filterNot { it.startsWith("controlsets=") }.joinToString("\n")
+        assertEquals(emptyMap<String, Int>(), TouchHudSettings.decodeLayoutBackup(legacy)?.controlSets)
     }
 }

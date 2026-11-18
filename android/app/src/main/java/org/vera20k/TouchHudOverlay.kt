@@ -21,6 +21,7 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
     private val buttons = linkedMapOf<String, TextView>()
     private var editButton: TextView? = null
     private var foldButton: TextView? = null
+    private val setButtons = mutableListOf<TextView>()
     private var editMode = false
 
     fun attach() {
@@ -36,10 +37,12 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
             buttons.values.forEach { runCatching { manager.removeView(it) } }
             editButton?.let { runCatching { manager.removeView(it) } }
             foldButton?.let { runCatching { manager.removeView(it) } }
+            setButtons.forEach { runCatching { manager.removeView(it) } }
         }
         buttons.clear()
         editButton = null
         foldButton = null
+        setButtons.clear()
         windowManager = null
     }
 
@@ -48,9 +51,11 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
         buttons.values.forEach { runCatching { manager.removeView(it) } }
         editButton?.let { runCatching { manager.removeView(it) } }
         foldButton?.let { runCatching { manager.removeView(it) } }
+        setButtons.forEach { runCatching { manager.removeView(it) } }
         buttons.clear()
         editButton = null
         foldButton = null
+        setButtons.clear()
 
         val visible = TouchHudSettings.parseVisible(
             prefs.getString(TouchHudSettings.HUD_VISIBLE, null),
@@ -62,9 +67,14 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
         val opacity = TouchHudSettings.clampOpacity(prefs.getInt(TouchHudSettings.HUD_OPACITY, 88)) / 100f
         val layout = prefs.getInt(TouchHudSettings.HUD_LAYOUT, TouchHudSettings.LAYOUT_FREE)
             .coerceIn(TouchHudSettings.LAYOUT_FREE, TouchHudSettings.LAYOUT_YURI)
+        val controlSets = TouchHudSettings.parseControlSets(prefs.getString(TouchHudSettings.HUD_CONTROL_SETS, null))
+        val activeSet = prefs.getInt(TouchHudSettings.HUD_ACTIVE_SET, 1).coerceIn(1, 2)
         val collapsed = prefs.getBoolean(TouchHudSettings.HUD_COLLAPSED, false) && !editMode
 
-        TouchHudSettings.buttons.filter { it.id in visible && !collapsed }.forEach { action ->
+        TouchHudSettings.buttons.filter {
+            it.id in visible && !collapsed &&
+                (it.groupNumber != null || (controlSets[it.id] ?: 0) == 0 || controlSets[it.id] == activeSet)
+        }.forEach { action ->
             val itemScale = globalScale * (sizes[action.id] ?: 100) / 100f
             val view = TextView(activity).apply {
                 text = action.label
@@ -120,6 +130,25 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
         }
         editButton = editor
         addPanel(manager, editor, 0.82f to 0.06f)
+
+        (1..2).forEach { setNumber ->
+            val setButton = TextView(activity).apply {
+                text = "SET $setNumber"
+                gravity = Gravity.CENTER
+                setTextColor(Color.WHITE)
+                textSize = 11f
+                typeface = Typeface.DEFAULT_BOLD
+                setPadding(dp(10), dp(8), dp(10), dp(8))
+                background = buttonBackground(0.94f, edit = activeSet == setNumber)
+                contentDescription = "Show control set $setNumber"
+                setOnClickListener {
+                    prefs.edit().putInt(TouchHudSettings.HUD_ACTIVE_SET, setNumber).apply()
+                    populate()
+                }
+            }
+            setButtons += setButton
+            addPanel(manager, setButton, if (setNumber == 1) 0.48f to 0.06f else 0.64f to 0.06f)
+        }
 
         val fold = TextView(activity).apply {
             text = if (collapsed) "SHOW HUD" else "HIDE HUD"
