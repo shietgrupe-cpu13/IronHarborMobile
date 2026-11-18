@@ -257,6 +257,52 @@ pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeConfigForImport(
     }
 }
 
+/// Build the next-launch mod/profile config with the engine's own config
+/// writers. Kotlin publishes the returned text atomically after the selection
+/// succeeds; the running NativeActivity keeps its current resource set.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeConfigForSelection(
+    mut env: jni::JNIEnv,
+    _activity: JObject,
+    mod_name: JString,
+    profile: JString,
+    files_directory: JString,
+) -> jstring {
+    let result = (|| -> anyhow::Result<jstring> {
+        let mod_name: String = env.get_string(&mod_name)?.into();
+        let profile: String = env.get_string(&profile)?.into();
+        let files_directory: String = env.get_string(&files_directory)?.into();
+        let profile = match profile.as_str() {
+            "yr" => vera20k::util::ini_roots::IniProfile::Yr,
+            "mo" => vera20k::util::ini_roots::IniProfile::Mo,
+            "auto" => vera20k::util::ini_roots::IniProfile::Auto,
+            "custom" => vera20k::util::ini_roots::IniProfile::Custom,
+            _ => anyhow::bail!("Unsupported INI profile: {profile}"),
+        };
+        let config_path = std::path::Path::new(&files_directory).join("config.toml");
+        let previous = match std::fs::read_to_string(config_path) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(error) => return Err(error.into()),
+        };
+        let contents = vera20k::util::config::set_ini_profile(
+            &vera20k::util::config::set_paths_key(&previous, "mod", &mod_name),
+            profile,
+        );
+        vera20k::util::config::GameConfig::validate_config_text(&contents).map_err(|error| {
+            anyhow::anyhow!("Updated config is not accepted by the engine: {error:#}")
+        })?;
+        Ok(env.new_string(contents)?.into_raw())
+    })();
+    match result {
+        Ok(contents) => contents,
+        Err(error) => {
+            let _ = env.throw_new("java/io/IOException", error.to_string());
+            std::ptr::null_mut()
+        }
+    }
+}
+
 /// The import's copy progress, in bytes. Runs on the copy's own thread.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_vera20k_VeraActivity_nativeImportProgress(

@@ -41,6 +41,7 @@ class LauncherActivity : Activity() {
 
     private companion object {
         const val REQUEST_PICK_GAME = 0x564c
+        const val REQUEST_PICK_MOD = 0x564d
         const val REQUIRED_FREE_BYTES = 1700L shl 20
         const val PROGRESS_STEP_BYTES = 16L shl 20
 
@@ -51,6 +52,12 @@ class LauncherActivity : Activity() {
 
     private var page = Page.HOME
     private var installation = LauncherInstallation(null, listOf("ra2.mix", "ra2md.mix"))
+    private var modCatalog = LauncherModCatalog(emptyList(), null, LauncherIniProfile.YR, null)
+    private var modSelectionNote: String? = null
+    private var modImporting = false
+    private var modCopiedBytes = 0L
+    private var modReportedBytes = 0L
+    private var modImportNote: String? = null
     private var importing = false
     private var copiedBytes = 0L
     private var reportedBytes = 0L
@@ -62,6 +69,7 @@ class LauncherActivity : Activity() {
     private var importNote: String? = null
 
     private external fun nativeConfigForImport(directory: String, filesDirectory: String): String
+    private external fun nativeConfigForSelection(modName: String, profile: String, filesDirectory: String): String
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -85,6 +93,24 @@ class LauncherActivity : Activity() {
     @Deprecated("The SAF tree picker returns through this activity result")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_PICK_MOD) {
+            val tree = if (resultCode == RESULT_OK) data?.data else null
+            if (tree == null) {
+                modImportNote = "Mod import cancelled. Installed mods were not changed."
+                renderPage()
+                return
+            }
+            try {
+                contentResolver.takePersistableUriPermission(
+                    tree,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            } catch (_: SecurityException) {
+                // The picker grant remains valid for this foreground import.
+            }
+            importMod(tree)
+            return
+        }
         if (requestCode != REQUEST_PICK_GAME) return
         val tree = if (resultCode == RESULT_OK) data?.data else null
         if (tree == null) {
@@ -208,13 +234,34 @@ class LauncherActivity : Activity() {
     }
 
     private fun renderHome() {
-        pageBody.addView(kicker("ANDROID COMMAND CENTER  /  ${appVersion()}"))
-        pageBody.addView(text("Command the next\nfrontier.", 34, R.color.launcher_text, bold = true))
+        val hero = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(20), dp(20), dp(14), dp(20))
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                intArrayOf(color(R.color.launcher_surface_alt), color(R.color.launcher_surface), color(R.color.launcher_background)),
+            ).apply {
+                cornerRadius = dp(22).toFloat()
+                setStroke(dp(1), color(R.color.launcher_border))
+            }
+        }
+        val heroCopy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        heroCopy.addView(kicker("INDEPENDENT MOBILE CLIENT  /  ${appVersion()}"))
+        heroCopy.addView(text("IRON HARBOR\nFIELD COMMAND", 27, R.color.launcher_text, bold = true, tracking = 0.025f))
+        heroCopy.addView(text("Based on YuriPlanet VERA20K", 13, R.color.launcher_muted), margin(top = 6))
+        hero.addView(heroCopy, LinearLayout.LayoutParams(0, -2, 1f))
+        hero.addView(ImageView(this).apply {
+            setImageResource(R.mipmap.ic_launcher_ironharbor)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            contentDescription = "Original Iron Harbor radar and harbor emblem"
+        }, LinearLayout.LayoutParams(dp(92), dp(92)))
+        pageBody.addView(hero, margin(bottom = 14))
         pageBody.addView(text(
-            "An independent mobile client based on YuriPlanet's VERA20K engine. Your game files stay private to this device and are never included in this app.",
-            15,
+            "Your legally obtained game files stay on this device and are never bundled with the app.",
+            14,
             R.color.launcher_muted,
-        ), margin(bottom = 18))
+        ), margin(bottom = 14))
 
         val stateCard = card()
         val ready = installation.ready
@@ -338,27 +385,153 @@ class LauncherActivity : Activity() {
     private fun renderTouch() {
         pageBody.addView(kicker("INPUT PROFILE"))
         pageBody.addView(text("Touch controls", 30, R.color.launcher_text, bold = true))
-        pageBody.addView(text("Gesture handling lives in the Rust app input mapper and does not change simulation rules.", 14, R.color.launcher_muted), margin(bottom = 14))
-        val card = card()
-        card.addView(kicker("CURRENT GESTURES"))
-        infoRow(card, "Tap", "Select / activate")
-        infoRow(card, "Quick one-finger drag", "Camera pan during a match")
-        infoRow(card, "Hold then drag", "Box selection")
-        infoRow(card, "Two-finger drag", "Camera pan")
-        infoRow(card, "Pinch", "Presentation zoom")
-        infoRow(card, "Two-finger tap", "Context / cancel action")
-        infoRow(card, "Sensitivity / overlay", "Not configurable in this launcher baseline")
-        pageBody.addView(card)
+        pageBody.addView(text("VERA20K keeps its native touch-to-input mapper. These gestures feed the existing mouse and camera controls without changing simulation rules.", 14, R.color.launcher_muted), margin(bottom = 14))
+        val gestures = card()
+        gestures.addView(kicker("SUPPORTED GESTURES"))
+        infoRow(gestures, "Tap", "Select or activate")
+        infoRow(gestures, "Quick drag", "Camera pan during a match")
+        infoRow(gestures, "Hold, then drag", "Box selection")
+        infoRow(gestures, "Two-finger drag", "Camera pan")
+        infoRow(gestures, "Pinch", "Presentation zoom")
+        infoRow(gestures, "Two-finger tap", "Context / cancel action")
+        pageBody.addView(gestures, margin(bottom = 12))
+
+        val layout = card()
+        layout.addView(kicker("MOVE AVAILABLE GAME UI"))
+        layout.addView(text("Edit Layout", 19, R.color.launcher_text, bold = true))
+        layout.addView(text(
+            "In a match, open Options > Interface > Edit Layout. Drag supported panels and layout-added buttons, then choose Save. Reset restores the current game's default layout.",
+            14,
+            R.color.launcher_muted,
+        ), margin(top = 7))
+        layout.addView(text(
+            "The engine's editor repositions existing UI. VERA20K does not yet provide RA2YRPORT's separate floating touch-action overlay or button remapping, so this launcher does not show controls for those unsupported features.",
+            13,
+            R.color.launcher_warning,
+        ), margin(top = 9))
+        layout.addView(actionButton("START GAME TO EDIT THE HUD", primary = true) {
+            if (installation.ready) launchGame() else {
+                importNote = "Import your game folder before opening the HUD editor."
+                page = Page.FILES
+                renderPage()
+            }
+        }, margin(top = 12))
+        pageBody.addView(layout)
     }
 
     private fun renderMods() {
         pageBody.addView(kicker("CONTENT PROFILES"))
         pageBody.addView(text("Mods", 30, R.color.launcher_text, bold = true))
-        val card = card()
-        card.addView(kicker("NOT AVAILABLE IN THIS BUILD", R.color.launcher_warning))
-        card.addView(text("This build does not currently expose a mod profile manager.", 16, R.color.launcher_text, bold = true))
-        card.addView(text("No compatibility or launch profile is implied here. The engine uses the selected Yuri's Revenge installation and its supported rules.", 13, R.color.launcher_muted), margin(top = 8))
-        pageBody.addView(card)
+        val current = card()
+        current.addView(kicker("ENGINE CONFIGURATION"))
+        current.addView(text(
+            "Next launch: ${modCatalog.selectedMod ?: "Vanilla Yuri's Revenge"}",
+            16,
+            R.color.launcher_text,
+            bold = true,
+        ))
+        current.addView(text(
+            "INI profile: ${modCatalog.profile.title}",
+            14,
+            R.color.launcher_muted,
+        ), margin(top = 5))
+        current.addView(text(
+            "Selections are saved through the engine config writer and read when the game process starts. They do not replace resources in an active match.",
+            13,
+            R.color.launcher_muted,
+        ), margin(top = 8))
+        if (!installation.ready) {
+            current.addView(text(
+                "Import a valid Yuri's Revenge installation before changing the active mod or profile.",
+                13,
+                R.color.launcher_warning,
+            ), margin(top = 8))
+        }
+        if (modCatalog.profile == LauncherIniProfile.AUTO) {
+            current.addView(text(
+                "Auto detects INI roots. It keeps the Yuri's Revenge archive family; choose Mental Omega for expandmo archives.",
+                13,
+                R.color.launcher_warning,
+            ), margin(top = 8))
+        }
+        if (modCatalog.configError != null) {
+            current.addView(text(
+                "Cannot read config.toml: ${modCatalog.configError}",
+                13,
+                R.color.launcher_warning,
+            ), margin(top = 8))
+        }
+        if (!modCatalog.containsSelectedMod()) {
+            current.addView(text(
+                "The configured mod folder is missing. Select Vanilla or an installed folder to repair the choice.",
+                13,
+                R.color.launcher_warning,
+            ), margin(top = 8))
+        }
+        pageBody.addView(current, margin(bottom = 12))
+
+        val profiles = card()
+        profiles.addView(kicker("SUPPORTED INI ROOT PROFILES"))
+        listOf(LauncherIniProfile.YR, LauncherIniProfile.MO, LauncherIniProfile.AUTO).forEach { profile ->
+            profiles.addView(actionButton(
+                if (modCatalog.profile == profile) "✓  ${profile.title.uppercase()}  ·  SELECTED" else profile.title.uppercase(),
+                primary = modCatalog.profile == profile,
+            ) { applyModSelection(modCatalog.selectedMod, profile) }, margin(top = 7))
+        }
+        if (modCatalog.profile == LauncherIniProfile.CUSTOM) {
+            profiles.addView(text(
+                "Custom is already selected in engine config. Editing its INI roots in the launcher is not supported yet.",
+                13,
+                R.color.launcher_warning,
+            ), margin(top = 8))
+        }
+        pageBody.addView(profiles, margin(bottom = 12))
+
+        val installed = card()
+        installed.addView(kicker("INSTALLED DATA MODS"))
+        installed.addView(actionButton(
+            if (modImporting) "IMPORTING MOD…" else "IMPORT MOD FOLDER",
+            primary = false,
+        ) { if (!modImporting) chooseModFolder() }, margin(top = 7))
+        if (modImporting) {
+            installed.addView(text(
+                "Copying ${modCopiedBytes / (1024 * 1024)} MB into private Mods storage. The source folder is unchanged.",
+                13,
+                R.color.launcher_muted,
+            ), margin(top = 7))
+            installed.addView(actionButton("CANCEL MOD IMPORT", primary = false) {
+                if (ModImportJob.cancelActive()) {
+                    modImportNote = "Cancelling mod import; temporary files will be cleaned up."
+                    renderPage()
+                }
+            }, margin(top = 7))
+        }
+        installed.addView(text(
+            "Choose one mod folder to copy into private storage. DLL or executable patches are not run by VERA20K, and compatibility depends on engine support.",
+            13,
+            R.color.launcher_muted,
+        ), margin(top = 8))
+        installed.addView(actionButton(
+            if (modCatalog.selectedMod == null) "✓  VANILLA YURI'S REVENGE  ·  SELECTED" else "USE VANILLA YURI'S REVENGE",
+            primary = modCatalog.selectedMod == null,
+        ) { applyModSelection(null, modCatalog.profile) }, margin(top = 10))
+        if (modCatalog.installedMods.isEmpty()) {
+            installed.addView(text("No mod folders found under ${File(filesDir, "Mods").absolutePath}.", 13, R.color.launcher_muted), margin(top = 8))
+        }
+        modCatalog.installedMods.forEach { folder ->
+            installed.addView(text(folder, 15, R.color.launcher_text, bold = true), margin(top = 13))
+            installed.addView(actionButton(
+                if (folder.equals(modCatalog.selectedMod, ignoreCase = true)) "✓  SELECTED FOR NEXT LAUNCH" else "USE THIS MOD",
+                primary = folder.equals(modCatalog.selectedMod, ignoreCase = true),
+            ) { applyModSelection(folder, modCatalog.profile) }, margin(top = 5))
+        }
+        pageBody.addView(installed)
+        modSelectionNote?.let { note ->
+            pageBody.addView(text(note, 13, R.color.launcher_muted), margin(top = 10))
+        }
+        modImportNote?.let { note ->
+            pageBody.addView(text(note, 13, R.color.launcher_muted), margin(top = 8))
+        }
     }
 
     private fun renderDiagnostics() {
@@ -374,7 +547,8 @@ class LauncherActivity : Activity() {
         infoRow(device, "ABI", Build.SUPPORTED_ABIS.joinToString())
         infoRow(device, "Vulkan", "Required by package; live adapter not queried here")
         infoRow(device, "Memory", "${memory.availMem / (1024 * 1024)} MB available · native heap ${Debug.getNativeHeapAllocatedSize() / (1024 * 1024)} MB")
-        infoRow(device, "FPS / frame time", "In-game telemetry is not connected to the launcher")
+        infoRow(device, "Performance profile", "In-game Options > Performance Stats shows frame/tick rate, CPU phases, core load and GPU timing")
+        infoRow(device, "Launcher telemetry", "Performance samples are not yet exported to the launcher or log ZIP")
         infoRow(device, "Log export", "Full retained engine logs and crash report in a ZIP")
         pageBody.addView(device, margin(bottom = 12))
         pageBody.addView(actionButton(
@@ -447,7 +621,39 @@ class LauncherActivity : Activity() {
 
     private fun refreshInstallation() {
         installation = LauncherInstallation.read(filesDir)
+        modCatalog = LauncherModCatalog.read(filesDir)
         renderPage()
+    }
+
+    private fun applyModSelection(modName: String?, profile: LauncherIniProfile) {
+        if (!installation.ready) {
+            modSelectionNote = "Import a valid game installation before changing a mod or INI profile."
+            renderPage()
+            return
+        }
+        if (modCatalog.configError != null) {
+            modSelectionNote = "Fix the unreadable config before changing a mod or profile."
+            renderPage()
+            return
+        }
+        if (modName != null && modCatalog.installedMods.none { it == modName }) {
+            modSelectionNote = "That mod folder is no longer available. Refresh the launcher and try again."
+            refreshInstallation()
+            return
+        }
+        try {
+            val contents = nativeConfigForSelection(
+                modName.orEmpty(),
+                profile.configValue,
+                filesDir.absolutePath,
+            )
+            LauncherConfigPublisher.publish(filesDir, contents)
+            modSelectionNote = "Saved. ${modName ?: "Vanilla Yuri's Revenge"} with ${profile.title} will be read at the next game launch."
+            refreshInstallation()
+        } catch (error: Exception) {
+            modSelectionNote = "Selection was not applied: ${error.message ?: error.javaClass.simpleName}"
+            renderPage()
+        }
     }
 
     private fun chooseGameFolder() {
@@ -455,6 +661,117 @@ class LauncherActivity : Activity() {
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
         }
         startActivityForResult(intent, REQUEST_PICK_GAME)
+    }
+
+    private fun chooseModFolder() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        }
+        startActivityForResult(intent, REQUEST_PICK_MOD)
+    }
+
+    private fun importMod(tree: Uri) {
+        val job = ModImportJob.begin()
+        if (job == null) {
+            modImportNote = "Another mod import is already running."
+            renderPage()
+            return
+        }
+        modImporting = true
+        modCopiedBytes = 0
+        modReportedBytes = 0
+        modImportNote = "Checking the selected mod folder…"
+        page = Page.MODS
+        renderPage()
+        Thread({
+            val result = try {
+                val name = selectedTreeName(tree)
+                val destination = job.run(filesDir, name) { staging ->
+                    val count = copyModTree(tree, staging, job)
+                    if (count == 0) throw IOException("The selected folder contains no files")
+                }
+                "Imported $name (${modCopiedBytes / (1024 * 1024)} MB) to ${destination.absolutePath}. Choose its INI profile before launch."
+            } catch (_: ModImportJob.Cancelled) {
+                "Mod import cancelled. The selected mod folder was not changed."
+            } catch (error: Throwable) {
+                "Mod import failed: ${error.message ?: error.javaClass.simpleName}"
+            } finally {
+                job.close()
+                runCatching {
+                    contentResolver.releasePersistableUriPermission(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+            }
+            runOnUiThread {
+                modImporting = false
+                modImportNote = result
+                refreshInstallation()
+            }
+        }, "vera20k-mod-import").start()
+    }
+
+    private fun selectedTreeName(tree: Uri): String {
+        val id = DocumentsContract.getTreeDocumentId(tree)
+        val document = DocumentsContract.buildDocumentUriUsingTree(tree, id)
+        return contentResolver.query(
+            document,
+            arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
+            null,
+            null,
+            null,
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0) else null
+        }?.takeIf { it.isNotBlank() } ?: throw IOException("Cannot read the selected folder name")
+    }
+
+    private fun copyModTree(tree: Uri, directory: File, job: ModImportJob): Int =
+        copyModChildren(tree, DocumentsContract.getTreeDocumentId(tree), directory, job)
+
+    private fun copyModChildren(tree: Uri, documentId: String, directory: File, job: ModImportJob): Int {
+        job.checkCancelled()
+        val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, documentId)
+        val columns = arrayOf(
+            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            DocumentsContract.Document.COLUMN_MIME_TYPE,
+        )
+        var copiedFiles = 0
+        contentResolver.query(children, columns, null, null, null)?.use { cursor ->
+            while (cursor.moveToNext()) {
+                job.checkCancelled()
+                val id = cursor.getString(0)
+                val name = cursor.getString(1) ?: continue
+                val mime = cursor.getString(2)
+                val destination = AssetImportJob.child(directory, name)
+                if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
+                    if (!destination.mkdir()) throw IOException("Cannot create folder $name")
+                    copiedFiles += copyModChildren(tree, id, destination, job)
+                } else {
+                    val uri = DocumentsContract.buildDocumentUriUsingTree(tree, id)
+                    contentResolver.openInputStream(uri)?.use { input ->
+                        destination.outputStream().use { output ->
+                            val buffer = ByteArray(1 shl 16)
+                            while (true) {
+                                job.checkCancelled()
+                                val count = input.read(buffer)
+                                if (count < 0) break
+                                output.write(buffer, 0, count)
+                                modCopiedBytes += count
+                            }
+                        }
+                    } ?: throw IOException("Cannot read $name")
+                    copiedFiles++
+                    if (modCopiedBytes - modReportedBytes >= PROGRESS_STEP_BYTES) {
+                        val megabytes = modCopiedBytes / (1024 * 1024)
+                        runOnUiThread {
+                            modImportNote = "Copying mod files · $megabytes MB"
+                            if (page == Page.MODS) renderPage()
+                        }
+                        modReportedBytes = modCopiedBytes
+                    }
+                }
+            }
+        } ?: throw IOException("Cannot list the selected mod folder")
+        return copiedFiles
     }
 
     private fun importGame(tree: Uri) {
@@ -589,7 +906,7 @@ class LauncherActivity : Activity() {
     private fun card(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(dp(16), dp(14), dp(16), dp(14))
-        background = rounded(color(R.color.launcher_surface), color(R.color.launcher_border), 16)
+        background = rounded(color(R.color.launcher_surface), color(R.color.launcher_border), 18)
     }
 
     private fun infoRow(parent: LinearLayout, label: String, value: String) {
@@ -625,11 +942,11 @@ class LauncherActivity : Activity() {
 
     private fun actionButton(label: String, primary: Boolean, action: () -> Unit): TextView = TextView(this).apply {
         text = label
-        textSize = if (primary) 16f else 12f
+        textSize = if (primary) 16f else 13f
         typeface = Typeface.DEFAULT_BOLD
-        letterSpacing = 0.08f
+        letterSpacing = 0.045f
         gravity = Gravity.CENTER
-        minHeight = dp(if (primary) 62 else 50)
+        minHeight = dp(if (primary) 62 else 54)
         setPadding(dp(14), dp(10), dp(14), dp(10))
         setTextColor(color(if (primary) R.color.launcher_background else R.color.launcher_text))
         background = rounded(

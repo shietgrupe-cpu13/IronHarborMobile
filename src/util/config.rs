@@ -96,7 +96,11 @@ impl PathsConfig {
         // The browser build keeps mods apart from the saved profile: its page
         // imports the one a launch plays (web.rs `import_mod_file`) and
         // never stores it back.
-        if cfg!(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown")) {
+        if cfg!(all(
+            feature = "wasm",
+            target_arch = "wasm32",
+            target_os = "unknown"
+        )) {
             return PathBuf::from(WEB_MODS_DIR);
         }
         self.settings_dir.join("Mods")
@@ -373,6 +377,19 @@ impl GameConfig {
     /// whole numbers. Other keys and sections are skipped without reading their
     /// values, so old configs with retired keys (`vsync`, `sim_tick_hz`) load.
     fn parse(contents: &str) -> Result<Self> {
+        Self::parse_with_default_settings_dir(contents, None)
+    }
+
+    /// Validate serialized config without consulting platform paths or reading
+    /// user files. Used by the Android launcher before publishing a selection.
+    pub fn validate_config_text(contents: &str) -> Result<()> {
+        Self::parse_with_default_settings_dir(contents, Some(PathBuf::new())).map(|_| ())
+    }
+
+    fn parse_with_default_settings_dir(
+        contents: &str,
+        fallback_settings_dir: Option<PathBuf>,
+    ) -> Result<Self> {
         let mut ra2_dir = None;
         let mut settings_dir = None;
         let mut mod_name = None;
@@ -447,7 +464,13 @@ impl GameConfig {
             paths: PathsConfig {
                 legacy_settings_dir: settings_dir.clone().unwrap_or_else(|| ra2_dir.clone()),
                 ra2_dir,
-                settings_dir: settings_dir.map_or_else(default_settings_dir, Ok)?,
+                settings_dir: match settings_dir {
+                    Some(directory) => directory,
+                    None => match fallback_settings_dir {
+                        Some(directory) => directory,
+                        None => default_settings_dir()?,
+                    },
+                },
                 mod_name,
             },
             graphics,
@@ -479,6 +502,55 @@ impl GameConfig {
 /// (`# key = …`), else the line goes under the first `[paths]` header, or into
 /// a new `[paths]` section at the end. Every other line is kept.
 pub fn set_paths_key(contents: &str, key: &str, value: &str) -> String {
+    set_config_string_key(contents, "paths", key, value)
+}
+
+/// Set the INI root profile without discarding any existing custom roots or
+/// unrelated configuration. The engine reads this on its next initialization.
+pub fn set_ini_profile(contents: &str, profile: crate::util::ini_roots::IniProfile) -> String {
+    let name = match profile {
+        crate::util::ini_roots::IniProfile::Yr => "yr",
+        crate::util::ini_roots::IniProfile::Mo => "mo",
+        crate::util::ini_roots::IniProfile::Auto => "auto",
+        crate::util::ini_roots::IniProfile::Custom => "custom",
+    };
+    let contents = set_config_string_key(contents, "ini", "profile", name);
+    if profile == crate::util::ini_roots::IniProfile::Custom {
+        return contents;
+    }
+    // Preset profiles cannot be combined with custom root names. Keep those
+    // values as comments so selecting a preset is reversible and explicit.
+    let mut section = "";
+    contents
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim();
+            if trimmed.starts_with('[') {
+                section = section_name(trimmed).unwrap_or_default();
+                return line.to_owned();
+            }
+            if section == "ini"
+                && !trimmed.starts_with('#')
+                && trimmed
+                    .split_once('=')
+                    .is_some_and(|(key, _)| matches!(key.trim(), "rules" | "art" | "ai"))
+            {
+                format!("# {}", trimmed)
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(if contents.contains("\r\n") {
+            "\r\n"
+        } else {
+            "\n"
+        })
+        + if contents.ends_with('\n') { "\n" } else { "" }
+}
+
+/// Set one string in a config section while keeping the other lines intact.
+fn set_config_string_key(contents: &str, target_section: &str, key: &str, value: &str) -> String {
     let contents = contents.strip_prefix('\u{feff}').unwrap_or(contents);
     let newline = if contents.contains("\r\n") {
         "\r\n"
@@ -496,12 +568,12 @@ pub fn set_paths_key(contents: &str, key: &str, value: &str) -> String {
         let line = line.trim();
         if line.starts_with('[') {
             section = section_name(line).unwrap_or_default();
-            if section == "paths" && header.is_none() {
+            if section == target_section && header.is_none() {
                 header = Some(index);
             }
             continue;
         }
-        if section != "paths" {
+        if section != target_section {
             continue;
         }
         match line.strip_prefix('#') {
@@ -519,7 +591,7 @@ pub fn set_paths_key(contents: &str, key: &str, value: &str) -> String {
             if lines.last().is_some_and(|line| !line.trim().is_empty()) {
                 lines.push(String::new());
             }
-            lines.push("[paths]".to_owned());
+            lines.push(format!("[{target_section}]"));
             lines.push(assignment);
         }
     }
@@ -934,6 +1006,43 @@ mod tests {
         let config = GameConfig::parse(&text).unwrap();
         assert_eq!(config.paths.ra2_dir, Path::new("/Games/RA2\u{1}"));
         assert_eq!(config.profile.player_name(), Some("p"));
+    }
+
+    #[test]
+    fn launcher_mod_and_ini_profile_edits_are_read_by_the_engine_config() {
+        let contents = set_ini_profile(
+            &set_paths_key("[paths]\nra2_dir = \"/game\"\n", "mod", "Mental Omega"),
+            crate::util::ini_roots::IniProfile::Mo,
+        );
+        let config = GameConfig::parse(&contents).expect("launcher output is valid engine config");
+        assert_eq!(config.paths.mod_name(), Some("Mental Omega"));
+        assert_eq!(config.ini.profile, crate::util::ini_roots::IniProfile::Mo);
+        assert!(contents.contains("[ini]\nprofile = \"mo\""));
+    }
+
+    #[test]
+    fn launcher_can_clear_mod_and_select_vanilla_roots() {
+        let contents = set_ini_profile(
+            &set_paths_key(
+                "[paths]\nra2_dir = \"/game\"\nmod = \"Old Mod\"\n[ini]\nprofile = \"mo\"\n",
+                "mod",
+                "",
+            ),
+            crate::util::ini_roots::IniProfile::Yr,
+        );
+        let config = GameConfig::parse(&contents).expect("vanilla selection remains valid");
+        assert_eq!(config.paths.mod_name(), None);
+        assert_eq!(config.ini.profile, crate::util::ini_roots::IniProfile::Yr);
+    }
+
+    #[test]
+    fn selecting_mo_from_custom_keeps_old_roots_inert_and_valid() {
+        let contents = set_ini_profile(
+            "[paths]\nra2_dir = \"/game\"\n[ini]\nprofile = \"custom\"\nrules = \"rulesx.ini\"\nart = \"artx.ini\"\nai = \"aix.ini\"\n",
+            crate::util::ini_roots::IniProfile::Mo,
+        );
+        GameConfig::validate_config_text(&contents).expect("preset removes active custom roots");
+        assert!(contents.contains(r#"# rules = "rulesx.ini""#));
     }
 
     #[test]
