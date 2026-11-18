@@ -425,6 +425,13 @@ impl App {
                 crate::app::mods::begin(&config.paths, mod_switch, capture_dimensions.is_some())
             })
             .unwrap_or_default();
+        // The crash-recovery run omits the failed mod. Select roots from the
+        // same stock installation that will actually be mounted, without
+        // changing the user's saved mod or profile selection.
+        let startup_ini_config = game_config
+            .as_ref()
+            .map(|config| mods.startup_ini_config(&config.ini))
+            .unwrap_or_default();
         // VERARULES.INI is no longer read: a file that still holds settings
         // is named once the main menu is up, in the language just chosen.
         if capture_dimensions.is_none()
@@ -586,6 +593,7 @@ impl App {
                 startup_files,
                 personal_rules,
                 mods,
+                startup_ini_config,
                 options_profile,
                 startup_options,
                 startup_audio,
@@ -614,6 +622,7 @@ impl App {
         startup_files: StartupFiles,
         personal_rules: crate::rules::personal_rules::PersonalRules,
         mods: crate::app::mods::Mods,
+        startup_ini_config: crate::util::ini_roots::IniRootConfig,
         options_profile: RetailOptionsProfile,
         startup_options: RetailStartupOptions,
         startup_audio: StartupAudioDisposition,
@@ -659,10 +668,10 @@ impl App {
                     startup_options.media_archive_mode,
                     ares_setting,
                     crate::assets::asset_manager::ArchiveFamily::for_ini_profile(
-                        config.ini.profile,
+                        startup_ini_config.profile,
                     ),
                 )
-                .and_then(|assets| assets.with_ini_roots(&config.ini))
+                .and_then(|assets| assets.with_ini_roots(&startup_ini_config))
                     .with_context(|| crate::i18n::tr("VERA:CannotLoadArchives")),
                 &mut main_menu_shell_error,
             )
@@ -786,10 +795,7 @@ impl App {
                 crate::app::process_assets::ProcessAssets::new_with_ini_config(
                     startup_options.media_archive_mode,
                     startup_audio.load_audio_indices,
-                    game_config
-                        .as_ref()
-                        .map(|config| config.ini.clone())
-                        .unwrap_or_default(),
+                    startup_ini_config.clone(),
                 )
                 .with_personal_rules(personal_rules)
                 .with_mod_dir(mods.dir().map(Path::to_path_buf))

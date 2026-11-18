@@ -110,6 +110,10 @@ pub(crate) struct ActiveMod {
 #[derive(Default)]
 pub(crate) struct Mods {
     pub(crate) active: Option<ActiveMod>,
+    /// The previous start died while loading this mod. This run intentionally
+    /// omits it, so its INI roots and archive family must come from the stock
+    /// game rather than files that are no longer mounted.
+    recovered_without_mod: bool,
     /// Why the mod asked for is not in use, or did not load: shown once the
     /// main menu is at rest.
     notice: Option<String>,
@@ -137,6 +141,24 @@ impl Mods {
     /// The folder the game files and the maps are read from first.
     pub(crate) fn dir(&self) -> Option<&Path> {
         self.active.as_ref().map(|active| active.dir.as_path())
+    }
+
+    /// INI configuration that belongs to the files mounted for this run.
+    /// A one-run failed-mod recovery must not keep roots that live only in the
+    /// skipped mod. The user's persisted config is left untouched so the next
+    /// ordinary launch can retry the selected mod.
+    pub(crate) fn startup_ini_config(
+        &self,
+        configured: &crate::util::ini_roots::IniRootConfig,
+    ) -> crate::util::ini_roots::IniRootConfig {
+        if self.recovered_without_mod {
+            log::warn!(
+                "Failed-mod recovery: using stock Yuri's Revenge INI roots for this launch; saved mod and profile selection are unchanged"
+            );
+            crate::util::ini_roots::IniRootConfig::default()
+        } else {
+            configured.clone()
+        }
     }
 
     /// The switch that gives a run this program starts the same mod, or none:
@@ -666,6 +688,7 @@ pub(crate) fn begin(paths: &PathsConfig, switch: Option<&ModSwitch>, hidden: boo
                     "VERA:ModSkipped",
                     &[("mod", &active.title)],
                 ));
+                mods.recovered_without_mod = true;
                 return mods;
             }
             // Without the record the mod still plays; only the way out of a
@@ -882,6 +905,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&record).unwrap(), "Winter War");
         let second = begin(&paths, None, false);
         assert!(second.active.is_none() && second.notice.is_some());
+        assert!(second.recovered_without_mod);
         assert!(!record.exists());
         let third = begin(&paths, None, false);
         assert!(third.active.is_some());
@@ -897,6 +921,30 @@ mod tests {
         third.record.unwrap().clear();
         assert!(!record.exists());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_mod_recovery_uses_stock_roots_without_changing_saved_profile() {
+        use crate::util::ini_roots::{IniProfile, IniRootConfig};
+
+        let configured = IniRootConfig {
+            profile: IniProfile::Mo,
+            sound: Some("soundmo.ini".into()),
+            theater_suffix: Some("mo".into()),
+            ..IniRootConfig::default()
+        };
+        let recovery = Mods {
+            recovered_without_mod: true,
+            ..Mods::default()
+        };
+        let effective = recovery.startup_ini_config(&configured);
+
+        assert_eq!(effective, IniRootConfig::default());
+        assert_eq!(configured.profile, IniProfile::Mo);
+        assert_eq!(configured.sound.as_deref(), Some("soundmo.ini"));
+
+        let ordinary = Mods::default().startup_ini_config(&configured);
+        assert_eq!(ordinary, configured);
     }
 
     #[test]
