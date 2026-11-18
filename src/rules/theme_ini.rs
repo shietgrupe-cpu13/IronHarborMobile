@@ -77,6 +77,20 @@ impl ThemeCatalog {
             .and_then(|index| self.entries.get(index))
     }
 
+    /// Stop retrying a track whose file could not be prepared for playback.
+    /// This changes only the runtime catalog's scan result, not its entries or
+    /// source INI, and leaves the persisted installation untouched.
+    pub fn mark_unavailable(&mut self, index: i32) -> bool {
+        let Some(entry) = usize::try_from(index)
+            .ok()
+            .and_then(|index| self.entries.get_mut(index))
+        else {
+            return false;
+        };
+        entry.available = false;
+        true
+    }
+
     /// ThemeClass::From_Name721210, original instruction listing: raw section
     /// key compared by stricmp7C8D20, first match; empty/unknown returns -1.
     /// Availability, Normal and playback gates do not participate.

@@ -21,6 +21,10 @@ crate-type = ["cdylib"]
 [features]
 default = ["dev-overlays"]
 dev-overlays = ["vera20k/dev-overlays"]
+# Mental Omega and other Phobos-based mods need the engine's optional Phobos
+# rules/runtime support. The feature is opt-in at build time and does not
+# change the default behavior of vanilla Yuri's Revenge data.
+phobos = ["vera20k/phobos"]
 
 [target.'cfg(target_os = "android")'.dependencies]
 # The client, for entry::run_with_loop and the App it drives.

@@ -496,7 +496,11 @@ impl ThemeRuntime {
     /// Sound, Vox and Theme (`AudioSystem::Pump 0x00406F70`) share one cursor.
     fn next_song(&self, prev: i32, draw_main: &mut impl FnMut(i32, i32) -> i32) -> i32 {
         let count = self.entries().len() as i32;
-        if prev >= 0 && (self.entry_repeats(prev) || self.global_repeat) {
+        // A failed physical preparation retires the runtime entry as
+        // unavailable; do not let its Repeat/global-repeat flags pin AUTO to
+        // that entry forever. This leaves repeat semantics unchanged for every
+        // playable track and never alters persisted theme data.
+        if prev >= 0 && self.is_allowed(prev) && (self.entry_repeats(prev) || self.global_repeat) {
             return prev;
         }
         if self.shuffle {
@@ -943,8 +947,15 @@ impl ThemeRuntime {
                     }
                     None => {
                         // PlayFile's failure is ignored (`0x00720CF2`):
-                        // active is the index while nothing streams.
+                        // active is the index while nothing streams. Retire
+                        // this missing/unreadable file from the process-local
+                        // auto-play catalog so Repeat and AUTO cannot retry it
+                        // every tick and stall the rest of the playlist.
+                        if let Some(catalog) = self.catalog.as_mut() {
+                            catalog.mark_unavailable(index);
+                        }
                         self.slots.active = index;
+                        return action;
                     }
                 }
             } else {
@@ -1055,6 +1066,24 @@ mod tests {
             vec![0.0, 0.0],
             22_050,
         ))
+    }
+
+    #[test]
+    fn failed_repeatable_loading_theme_is_retired_from_auto_play() {
+        let mut theme = stock_runtime();
+        let loading = theme.from_name("LOADING");
+        let mut missing = |_stem: &str| None;
+
+        let action = theme.play_song(loading, gates(true), MusicOutputState::Idle, &mut missing);
+        assert!(action.start.is_none());
+        assert_eq!(theme.slots().active, loading);
+        assert!(!theme.is_allowed(loading));
+
+        let mut no_draw = no_draw;
+        assert_eq!(
+            theme.next_song(loading, &mut no_draw),
+            theme.from_name("BrainFreeze")
+        );
     }
 
     fn no_draw(_low: i32, _high: i32) -> i32 {

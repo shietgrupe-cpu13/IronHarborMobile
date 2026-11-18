@@ -236,12 +236,27 @@ impl IniRootConfig {
     /// winners are unavailable; do not fall through to a lower-priority source.
     /// SOUNDMD/EVAMD overrides are not probed: a missing presentation file keeps
     /// the audio reader's tolerant empty catalog, as it does for the fixed names.
-    pub fn resolve(&self, mut available: impl FnMut(&str) -> bool) -> Result<IniRoots, String> {
+    pub fn resolve(&self, available: impl FnMut(&str) -> bool) -> Result<IniRoots, String> {
+        self.resolve_with_yr_probe(available, false)
+    }
+
+    /// Resolve a selection for the Android launcher, where a profile must be
+    /// proven usable before it is saved. Ordinary YR startup intentionally
+    /// keeps its historical lazy root handling.
+    pub fn resolve_strict(&self, available: impl FnMut(&str) -> bool) -> Result<IniRoots, String> {
+        self.resolve_with_yr_probe(available, true)
+    }
+
+    fn resolve_with_yr_probe(
+        &self,
+        mut available: impl FnMut(&str) -> bool,
+        probe_yr: bool,
+    ) -> Result<IniRoots, String> {
         self.validate()?;
         // Preserve legacy YR admission: consumers still report missing roots
         // at their original load stage. Merely constructing an asset manager
         // must not eagerly require AI in asset-only tools or small fixtures.
-        if self.profile == IniProfile::Yr {
+        if self.profile == IniProfile::Yr && !probe_yr {
             let mut roots = IniRoots::default();
             self.apply_optional_roots(&mut roots);
             return Ok(roots);
@@ -271,18 +286,21 @@ impl IniRootConfig {
             self.apply_optional_roots(&mut selected);
             return Ok(selected);
         }
-        let mut selected = if self.profile == IniProfile::Mo {
-            IniRoots::preset(IniProfile::Mo)
-        } else {
-            // Start from the YR preset so the optional audio roots and the
-            // theater suffix keep one default source, then replace the
-            // required triplet.
-            let mut custom = IniRoots::preset(IniProfile::Yr);
-            custom.profile = IniProfile::Custom;
-            custom.rules = self.rules.clone().unwrap();
-            custom.art = self.art.clone().unwrap();
-            custom.ai = self.ai.clone().unwrap();
-            custom
+        let mut selected = match self.profile {
+            IniProfile::Yr => IniRoots::preset(IniProfile::Yr),
+            IniProfile::Mo => IniRoots::preset(IniProfile::Mo),
+            IniProfile::Custom => {
+                // Start from the YR preset so the optional audio roots and the
+                // theater suffix keep one default source, then replace the
+                // required triplet.
+                let mut custom = IniRoots::preset(IniProfile::Yr);
+                custom.profile = IniProfile::Custom;
+                custom.rules = self.rules.clone().unwrap();
+                custom.art = self.art.clone().unwrap();
+                custom.ai = self.ai.clone().unwrap();
+                custom
+            }
+            IniProfile::Auto => unreachable!("Auto returns after probing both presets"),
         };
         let missing: Vec<_> = selected
             .names()
@@ -404,6 +422,50 @@ mod tests {
                 .resolve(|name| name != "aimo.ini")
                 .unwrap_err()
                 .contains("aimo.ini")
+        );
+    }
+
+    #[test]
+    fn strict_launcher_resolution_probes_yr_and_never_crosses_profiles() {
+        let yr = IniRootConfig {
+            profile: IniProfile::Yr,
+            ..Default::default()
+        };
+        let yr_files = ["rulesmd.ini", "artmd.ini", "aimd.ini"];
+        assert_eq!(
+            yr.resolve_strict(|name| yr_files.contains(&name))
+                .unwrap()
+                .profile(),
+            IniProfile::Yr
+        );
+        let error = yr.resolve_strict(|name| name != "aimd.ini").unwrap_err();
+        assert!(error.contains("aimd.ini"));
+        assert!(
+            error.contains("no YR fallback is allowed"),
+            "strict profile errors must tell the launcher no fallback occurred"
+        );
+
+        let mo = IniRootConfig {
+            profile: IniProfile::Mo,
+            ..Default::default()
+        };
+        let both = [
+            "rulesmd.ini",
+            "artmd.ini",
+            "aimd.ini",
+            "rulesmo.ini",
+            "artmo.ini",
+            "aimo.ini",
+        ];
+        assert_eq!(
+            mo.resolve_strict(|name| both.contains(&name))
+                .unwrap()
+                .profile(),
+            IniProfile::Mo
+        );
+        assert!(
+            mo.resolve_strict(|name| !matches!(name, "rulesmo.ini" | "artmo.ini" | "aimo.ini"))
+                .is_err()
         );
     }
 

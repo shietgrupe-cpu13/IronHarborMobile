@@ -124,6 +124,10 @@ fn built_in_scheme(name: &str) -> Option<ColorSchemeEntry> {
 )]
 pub struct SkirmishColorMode {
     unlimited: bool,
+    /// MO's `[MPColors]` ids address its `[Colors]` entries directly, except
+    /// for the non-selectable Flash/White entry at index 2.
+    #[serde(default)]
+    mo_color_order: bool,
     /// The `[Colors]` entry of each extra lobby colour, in list order; only
     /// the first `extra_count` are set.
     #[serde(default)]
@@ -137,6 +141,7 @@ impl SkirmishColorMode {
     /// extra lobby colours.
     pub const VANILLA: Self = Self {
         unlimited: false,
+        mo_color_order: false,
         extra_entries: [0; MAX_EXTRA_COLORS],
         extra_count: 0,
     };
@@ -147,8 +152,23 @@ impl SkirmishColorMode {
         ..Self::VANILLA
     };
 
+    /// Mental Omega's 13-entry multiplayer colour table.
+    pub const MENTAL_OMEGA: Self = Self {
+        mo_color_order: true,
+        ..Self::VANILLA
+    };
+
     pub fn unlimited(self) -> bool {
         self.unlimited
+    }
+
+    pub fn mo_color_order(self) -> bool {
+        self.mo_color_order
+    }
+
+    fn mo_entry(priority: i32) -> usize {
+        let index = priority.max(0) as usize;
+        index + usize::from(index >= 2)
     }
 
     /// A mode whose extra lobby colours are these `[Colors]` entries.
@@ -216,7 +236,9 @@ impl SkirmishColorMode {
     /// negative index for it, which addresses no `[Colors]` entry, so VERA
     /// clamps it to the first entry.
     pub fn scheme_index_for_priority(self, priority: i32) -> usize {
-        if self.unlimited {
+        if self.mo_color_order {
+            Self::mo_entry(priority) * 2 + 1
+        } else if self.unlimited {
             crate::rules::color_scheme::linked_color_tail(priority.wrapping_mul(2).wrapping_add(1))
         } else if let Some(entry) = self.extra_entry(priority) {
             entry * 2 + 1
@@ -230,7 +252,9 @@ impl SkirmishColorMode {
     /// The vanilla answer stays owned by
     /// [`crate::rules::color_scheme::scheme_entry_for_priority`].
     pub fn entry_for_priority(self, priority: i32) -> usize {
-        if self.unlimited {
+        if self.mo_color_order {
+            Self::mo_entry(priority)
+        } else if self.unlimited {
             self.scheme_index_for_priority(priority) / 2
         } else if let Some(entry) = self.extra_entry(priority) {
             entry
@@ -253,6 +277,17 @@ impl SkirmishColorMode {
             {
                 return Self::UNLIMITED;
             }
+        }
+        // MO's 13 `[MPColors]` ids index its `[Colors]` list, with the
+        // non-selectable Flash/White entry at index 2 omitted. This exact
+        // table shape is absent from stock YR, preserving its native palette.
+        let mo_schemes = crate::rules::color_scheme::parse_color_schemes(ini);
+        if mo_schemes.len() >= 14
+            && mo_schemes[0].name.eq_ignore_ascii_case("Teal")
+            && mo_schemes[2].name.eq_ignore_ascii_case("LightGrey")
+            && mo_schemes[7].name.eq_ignore_ascii_case("NeonBlue")
+        {
+            return Self::MENTAL_OMEGA;
         }
         let names = listed_names(ini)
             .or_else(|| listed_names(built_in()))
@@ -308,6 +343,40 @@ impl SkirmishColorMode {
 #[cfg(all(test, tests_rules_o_z))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mental_omega_color_ids_skip_the_nonselectable_flash_entry() {
+        let mode = SkirmishColorMode::MENTAL_OMEGA;
+        assert_eq!(mode.entry_for_priority(0), 0);
+        assert_eq!(mode.entry_for_priority(2), 3);
+        assert_eq!(mode.entry_for_priority(6), 7);
+        assert_eq!(mode.scheme_index_for_priority(6), 15);
+        assert_eq!(SkirmishColorMode::VANILLA.entry_for_priority(6), 8);
+    }
+
+    #[cfg(feature = "phobos")]
+    #[test]
+    fn rules_detect_mo_colors_without_changing_stock_yuri_color_order() {
+        let mo = IniFile::from_str(
+            "[Colors]\nTeal=128,255,128\nRed=0,255,255\nLightGrey=0,0,255\n\
+             LightBlue=128,255,255\nGreen=85,255,255\nPurple=190,135,170\n\
+             Gold=35,255,255\nNeonBlue=150,255,255\nOrange=20,255,255\n\
+             Magenta=210,255,255\nRusset=20,205,160\nDarkGreen=60,200,180\n\
+             Crimson=240,255,175\nSky=155,155,255\n",
+        );
+        assert_eq!(
+            SkirmishColorMode::from_ini(&mo, &mut Vec::new()),
+            SkirmishColorMode::MENTAL_OMEGA
+        );
+
+        let yr = IniFile::from_str(
+            "[Colors]\nGold=35,255,255\nRed=0,255,255\nBlue=150,255,255\nGreen=85,255,255\n",
+        );
+        assert_eq!(
+            SkirmishColorMode::from_ini(&yr, &mut Vec::new()),
+            SkirmishColorMode::VANILLA
+        );
+    }
 
     #[test]
     fn unlimited_mode_runs_the_native_tail_after_the_patch() {

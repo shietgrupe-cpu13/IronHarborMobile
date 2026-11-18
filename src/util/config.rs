@@ -346,7 +346,18 @@ impl GameConfig {
     }
 
     fn parse_from(contents: &str, path: &Path) -> Result<Self> {
-        let mut config = Self::parse(contents).context(ConfigFileError {
+        Self::parse_text_at(contents, path)
+    }
+
+    /// Parse a config string with the same relative-path and settings-root
+    /// semantics as a file at `path`. Android's launcher uses this to validate
+    /// a proposed config before atomically publishing it.
+    pub fn parse_text_at(contents: &str, path: &Path) -> Result<Self> {
+        let mut config = Self::parse_with_default_settings_dir(
+            contents,
+            Some(path.parent().unwrap_or_else(|| Path::new(".")).to_owned()),
+        )
+        .context(ConfigFileError {
             path: path.to_owned(),
             parse: true,
         })?;
@@ -864,6 +875,22 @@ mod tests {
         )
         .unwrap();
         let config = fixture.load().unwrap();
+        assert_eq!(config.paths.ra2_dir, fixture.0.join("app/retail files"));
+        assert_eq!(
+            config.paths.settings_dir(),
+            fixture.0.join("app/client profile")
+        );
+    }
+
+    #[test]
+    fn launcher_candidate_text_uses_config_directory_for_relative_paths() {
+        let fixture = ConfigFixture::new();
+        let path = fixture.0.join("app/config.toml");
+        let config = GameConfig::parse_text_at(
+            "[paths]\nra2_dir = 'retail files'\nsettings_dir = 'client profile'\n",
+            &path,
+        )
+        .unwrap();
         assert_eq!(config.paths.ra2_dir, fixture.0.join("app/retail files"));
         assert_eq!(
             config.paths.settings_dir(),

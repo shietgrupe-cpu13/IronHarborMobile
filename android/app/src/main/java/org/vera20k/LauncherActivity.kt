@@ -58,6 +58,7 @@ class LauncherActivity : Activity() {
     private var modCopiedBytes = 0L
     private var modReportedBytes = 0L
     private var modImportNote: String? = null
+    private var validatingLaunch = false
     private var importing = false
     private var copiedBytes = 0L
     private var reportedBytes = 0L
@@ -70,6 +71,8 @@ class LauncherActivity : Activity() {
 
     private external fun nativeConfigForImport(directory: String, filesDirectory: String): String
     private external fun nativeConfigForSelection(modName: String, profile: String, filesDirectory: String): String
+    private external fun nativeConfigForMod(modName: String, filesDirectory: String): String
+    private external fun nativeValidateCurrentSelection(filesDirectory: String): String
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -280,14 +283,15 @@ class LauncherActivity : Activity() {
         ), margin(top = 5))
         pageBody.addView(stateCard, margin(bottom = 12))
 
-        playButton = actionButton("START GAME", primary = true) {
+        playButton = actionButton(if (validatingLaunch) "CHECKING GAME FILES…" else "START GAME", primary = true) {
+            if (validatingLaunch) return@actionButton
             if (installation.ready) launchGame() else {
                 importNote = "Import your game folder before launching."
                 page = Page.FILES
                 renderPage()
             }
         }
-        playButton.isEnabled = installation.ready && !importing
+        playButton.isEnabled = installation.ready && !importing && !validatingLaunch
         pageBody.addView(playButton, margin(bottom = 10))
         pageBody.addView(actionButton("GAME FILES  ·  IMPORT OR CHANGE", primary = false) {
             page = Page.FILES
@@ -514,7 +518,7 @@ class LauncherActivity : Activity() {
         installed.addView(actionButton(
             if (modCatalog.selectedMod == null) "✓  VANILLA YURI'S REVENGE  ·  SELECTED" else "USE VANILLA YURI'S REVENGE",
             primary = modCatalog.selectedMod == null,
-        ) { applyModSelection(null, modCatalog.profile) }, margin(top = 10))
+        ) { applyModSelection(null, null) }, margin(top = 10))
         if (modCatalog.installedMods.isEmpty()) {
             installed.addView(text("No mod folders found under ${File(filesDir, "Mods").absolutePath}.", 13, R.color.launcher_muted), margin(top = 8))
         }
@@ -523,7 +527,7 @@ class LauncherActivity : Activity() {
             installed.addView(actionButton(
                 if (folder.equals(modCatalog.selectedMod, ignoreCase = true)) "✓  SELECTED FOR NEXT LAUNCH" else "USE THIS MOD",
                 primary = folder.equals(modCatalog.selectedMod, ignoreCase = true),
-            ) { applyModSelection(folder, modCatalog.profile) }, margin(top = 5))
+            ) { applyModSelection(folder, null) }, margin(top = 5))
         }
         pageBody.addView(installed)
         modSelectionNote?.let { note ->
@@ -625,7 +629,7 @@ class LauncherActivity : Activity() {
         renderPage()
     }
 
-    private fun applyModSelection(modName: String?, profile: LauncherIniProfile) {
+    private fun applyModSelection(modName: String?, profile: LauncherIniProfile?) {
         if (!installation.ready) {
             modSelectionNote = "Import a valid game installation before changing a mod or INI profile."
             renderPage()
@@ -642,13 +646,19 @@ class LauncherActivity : Activity() {
             return
         }
         try {
-            val contents = nativeConfigForSelection(
-                modName.orEmpty(),
-                profile.configValue,
-                filesDir.absolutePath,
-            )
+            val contents = if (profile == null && LauncherModCatalog.requiresMoProfile(modName.orEmpty())) {
+                nativeConfigForSelection(modName.orEmpty(), LauncherIniProfile.MO.configValue, filesDir.absolutePath)
+            } else if (profile == null) {
+                nativeConfigForMod(modName.orEmpty(), filesDir.absolutePath)
+            } else {
+                nativeConfigForSelection(modName.orEmpty(), profile.configValue, filesDir.absolutePath)
+            }
             LauncherConfigPublisher.publish(filesDir, contents)
-            modSelectionNote = "Saved. ${modName ?: "Vanilla Yuri's Revenge"} with ${profile.title} will be read at the next game launch."
+            modSelectionNote = if (profile == null) {
+                "Saved. The engine selected a complete INI root profile for ${modName ?: "Vanilla Yuri's Revenge"}; it takes effect next launch."
+            } else {
+                "Saved. ${modName ?: "Vanilla Yuri's Revenge"} with ${profile.title} will be read at the next game launch."
+            }
             refreshInstallation()
         } catch (error: Exception) {
             modSelectionNote = "Selection was not applied: ${error.message ?: error.javaClass.simpleName}"
@@ -690,7 +700,7 @@ class LauncherActivity : Activity() {
                     val count = copyModTree(tree, staging, job)
                     if (count == 0) throw IOException("The selected folder contains no files")
                 }
-                "Imported $name (${modCopiedBytes / (1024 * 1024)} MB) to ${destination.absolutePath}. Choose its INI profile before launch."
+                "Imported $name (${modCopiedBytes / (1024 * 1024)} MB) to ${destination.absolutePath}. Selecting it will test complete INI roots before saving a profile."
             } catch (_: ModImportJob.Cancelled) {
                 "Mod import cancelled. The selected mod folder was not changed."
             } catch (error: Throwable) {
@@ -887,11 +897,31 @@ class LauncherActivity : Activity() {
     }
 
     private fun launchGame() {
-        try {
-            startActivity(Intent(this, VeraActivity::class.java))
-        } catch (error: Exception) {
-            Toast.makeText(this, "Could not start the game: ${error.message}", Toast.LENGTH_LONG).show()
-        }
+        if (validatingLaunch) return
+        validatingLaunch = true
+        renderPage()
+        Thread({
+            val validation = runCatching { nativeValidateCurrentSelection(filesDir.absolutePath) }
+            runOnUiThread {
+                validatingLaunch = false
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                validation.fold(
+                    onSuccess = {
+                        try {
+                            startActivity(Intent(this, VeraActivity::class.java))
+                        } catch (error: Exception) {
+                            Toast.makeText(this, "Could not start the game: ${error.message}", Toast.LENGTH_LONG).show()
+                        }
+                    },
+                    onFailure = { error ->
+                        modSelectionNote = "Cannot launch this game/mod selection: ${error.message ?: error.javaClass.simpleName}. Choose a profile whose required roots are available."
+                        modCatalog = LauncherModCatalog.read(filesDir)
+                        page = Page.MODS
+                        renderPage()
+                    },
+                )
+            }
+        }, "vera20k-launch-preflight").start()
     }
 
     private fun appVersion(): String = runCatching {

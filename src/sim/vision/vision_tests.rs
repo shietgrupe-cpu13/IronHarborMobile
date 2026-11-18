@@ -383,6 +383,22 @@ fn test_sight_capped_at_max_range() {
     assert!(!fog.is_cell_visible(intern::test_intern("Americans"), 31, 20));
 }
 
+#[test]
+fn ares_sight_uses_extended_spread_while_vanilla_stays_at_ten() {
+    let vanilla = collect_reveal_cells(30, 30, 15, false, 0, false, None, (60, 60), None);
+    let ares = collect_reveal_cells(30, 30, 15, true, 0, false, None, (60, 60), None);
+
+    assert!(
+        !vanilla.contains(&(45, 30)),
+        "vanilla keeps the radius-10 cap"
+    );
+    assert!(
+        ares.contains(&(45, 30)),
+        "Ares admits the radius-15 axis cell"
+    );
+    assert!(ares.contains(&(40, 40)), "Ares uses its octagonal spread");
+}
+
 /// `TechnoClass::UpdateReveal @ 0x0070AF50`: a `SIGHT`-ability veteran sees
 /// `ftol(Sight * VeteranSight)`; the same veteran of a type without the
 /// ability, or any rank under stock `VeteranSight=0.0`, keeps `Sight`.
@@ -770,7 +786,7 @@ fn a_tracked_pass_after_a_sweep_marks_the_swept_cells_a_footprint_covers() {
         owner: intern::test_intern("Soviet"),
         origin: (18, 18, 0),
         radius: 1,
-        cells: collect_reveal_cells(18, 18, 1, 0, false, None, (24, 24), None),
+        cells: collect_reveal_cells(18, 18, 1, false, 0, false, None, (24, 24), None),
     };
     sight_world
         .fog
@@ -1267,7 +1283,7 @@ fn sight_zero_reveals_nothing() {
 fn an_airborne_viewer_reveals_under_its_sprite() {
     let (w, h) = (64u16, 64u16);
     let mut vis = OwnerVisibility::new(w, h);
-    for (x, y) in super::collect_reveal_cells(30, 30, 1, 1500, false, None, (w, h), None) {
+    for (x, y) in super::collect_reveal_cells(30, 30, 1, false, 1500, false, None, (w, h), None) {
         vis.mark_visible(x, y);
     }
     assert!(
@@ -1294,6 +1310,7 @@ fn an_airborne_viewer_sees_past_a_cliff() {
         30,
         30,
         5,
+        false,
         0,
         true,
         Some(CellLevels::Plane(&heights)),
@@ -1307,6 +1324,7 @@ fn an_airborne_viewer_sees_past_a_cliff() {
         30,
         30,
         5,
+        false,
         1500,
         true,
         Some(CellLevels::Plane(&heights)),
@@ -1383,7 +1401,7 @@ fn a_jumpjet_below_its_floor_sees_from_its_location_z() {
         None,
     );
     let owner = intern::test_intern("Americans");
-    let expected = super::collect_reveal_cells(30, 30, 1, 208, false, None, (w, h), None);
+    let expected = super::collect_reveal_cells(30, 30, 1, false, 208, false, None, (w, h), None);
     assert!(!expected.is_empty());
     for ry in 0..h {
         for rx in 0..w {
@@ -1417,10 +1435,11 @@ fn a_ground_viewer_sees_from_its_location_z() {
         &ti(),
     );
     let owner = intern::test_intern("Americans");
-    let expected = super::collect_reveal_cells(30, 30, 1, 4 * 104, false, None, (w, h), None);
+    let expected =
+        super::collect_reveal_cells(30, 30, 1, false, 4 * 104, false, None, (w, h), None);
     assert_ne!(
         expected,
-        super::collect_reveal_cells(30, 30, 1, 0, false, None, (w, h), None),
+        super::collect_reveal_cells(30, 30, 1, false, 0, false, None, (w, h), None),
         "precondition: the lift moves the disc"
     );
     for ry in 0..h {

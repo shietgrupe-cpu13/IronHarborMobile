@@ -523,6 +523,23 @@ impl AssetManager {
         Ok(self)
     }
 
+    /// Validate roots against the same loose-file and mounted-archive winners
+    /// used by gameplay, without changing this manager's selected roots.
+    pub fn validate_ini_roots_strict(
+        &self,
+        config: &crate::util::ini_roots::IniRootConfig,
+    ) -> Result<crate::util::ini_roots::IniRoots, AssetError> {
+        config
+            .resolve_strict(|name| {
+                self.resolve_ref(name)
+                    .is_some_and(|source| !source.bytes.is_empty())
+            })
+            .map_err(|detail| AssetError::ParseError {
+                format: "INI root selection".into(),
+                detail,
+            })
+    }
+
     /// Recovery preserves the already resolved names, not a fresh Auto probe.
     pub fn with_selected_ini_roots(mut self, roots: crate::util::ini_roots::IniRoots) -> Self {
         self.ini_roots = roots;
@@ -673,6 +690,29 @@ impl AssetManager {
             );
         }
         Ok(manager)
+    }
+
+    /// Build the launch's read-only startup archive view and strictly validate
+    /// an INI profile. Unlike `with_mod_and_ares`, this inspection helper does
+    /// not publish process-global Ares state, so a launcher preflight cannot
+    /// affect a running NativeActivity.
+    pub fn inspect_launch_ini_roots(
+        ra2_dir: &Path,
+        mod_dir: Option<&Path>,
+        media_mode: MediaArchiveMode,
+        ares_setting: crate::util::ares_launch::AresSetting,
+        config: &crate::util::ini_roots::IniRootConfig,
+    ) -> Result<crate::util::ini_roots::IniRoots, AssetError> {
+        let family = ArchiveFamily::for_ini_profile(config.profile);
+        let manager = Self::open_startup_archives(
+            ra2_dir,
+            mod_dir,
+            media_mode,
+            ares_setting,
+            family,
+            StartupArchivePolicy::OptionalWarnings,
+        )?;
+        manager.validate_ini_roots_strict(config)
     }
 
     /// Inspect the ordinary startup stack while retaining readable archives for

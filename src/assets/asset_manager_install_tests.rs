@@ -71,6 +71,42 @@ fn startup_continues_without_map_and_movie_media() {
 }
 
 #[test]
+fn launcher_ini_preflight_uses_runtime_mod_overlay_and_rejects_incomplete_mo() {
+    let install = audio_test_install("launcher-ini-preflight");
+    let mod_dir = install.path().join("Mods/mentalomega330mod");
+    std::fs::create_dir_all(&mod_dir).unwrap();
+    for name in ["rulesmo.ini", "artmo.ini", "aimo.ini"] {
+        std::fs::write(mod_dir.join(name), b"[LauncherProbe]\nValue=MO\n").unwrap();
+    }
+    let config = crate::util::ini_roots::IniRootConfig {
+        profile: crate::util::ini_roots::IniProfile::Mo,
+        ..Default::default()
+    };
+
+    let selected = AssetManager::inspect_launch_ini_roots(
+        install.path(),
+        Some(&mod_dir),
+        MediaArchiveMode::STOCK_DIGITAL,
+        crate::util::ares_launch::AresSetting::Auto,
+        &config,
+    )
+    .unwrap();
+    assert_eq!(selected.profile(), crate::util::ini_roots::IniProfile::Mo);
+    assert_eq!(selected.names(), ["rulesmo.ini", "artmo.ini", "aimo.ini"]);
+
+    std::fs::remove_file(mod_dir.join("aimo.ini")).unwrap();
+    let error = AssetManager::inspect_launch_ini_roots(
+        install.path(),
+        Some(&mod_dir),
+        MediaArchiveMode::STOCK_DIGITAL,
+        crate::util::ares_launch::AresSetting::Auto,
+        &config,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("aimo.ini"));
+}
+
+#[test]
 fn inspection_accepts_nested_required_archives_without_optional_music() {
     let directory = audio_test_install("inspect-nested");
     std::fs::remove_file(directory.path().join("cachemd.mix")).unwrap();

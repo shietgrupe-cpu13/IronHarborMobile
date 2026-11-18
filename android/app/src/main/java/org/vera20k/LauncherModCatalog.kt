@@ -30,6 +30,11 @@ internal data class LauncherModCatalog(
         selectedMod == null || installedMods.any { it.equals(selectedMod, ignoreCase = true) }
 
     companion object {
+        /** Mental Omega needs its MO archive family and root names; never silently pair it with YR roots. */
+        @JvmStatic
+        fun requiresMoProfile(modName: String): Boolean =
+            modName.contains("mentalomega", ignoreCase = true)
+
         @JvmStatic
         fun read(filesDirectory: File): LauncherModCatalog {
             val installed = File(filesDirectory, "Mods").listFiles()

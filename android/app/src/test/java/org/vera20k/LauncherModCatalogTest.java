@@ -9,6 +9,12 @@ import org.junit.Test;
 
 public class LauncherModCatalogTest {
     @Test
+    public void mentalOmegaFolderNameRequiresMoInsteadOfYurProfiles() {
+        assertTrue(LauncherModCatalog.requiresMoProfile("MentalOmega330Mod"));
+        assertFalse(LauncherModCatalog.requiresMoProfile("Other Community Mod"));
+    }
+
+    @Test
     public void readsInstalledModsAndPersistedMoChoice() throws Exception {
         Path files = tempDirectory("ih-mod-catalog-");
         Files.createDirectories(files.resolve("Mods/Mental Omega"));

@@ -120,6 +120,9 @@ const PUBLISHED_FLAGS: u8 = FLAG_REVEALED
 /// the raw effective radius; the independent border traversal clamps to11.
 pub const MAX_SIGHT_RANGE: u16 = 10;
 
+/// Ares' CellSpreadEnumerator admits radii through 0x100.
+pub(crate) const ARES_REVEAL_RADIUS_MAX: u16 = 0x100;
+
 /// World height of one terrain level, in leptons. Same retail value the
 /// coordinate-Z evaluator uses (`util::lepton::LEPTONS_PER_LEVEL`); kept local
 /// because the reveal kernel's input is a height, not a bridge or range query.
@@ -2186,6 +2189,9 @@ pub struct VisionConfig {
     /// When true, terrain 4+ levels above the viewer at the midpoint blocks sight.
     /// Default true (the standard RA2/YR setting).
     reveal_by_height: bool,
+    /// Ruleset-selected Ares reveal geometry; vanilla remains on the retail
+    /// radius-10 spiral.
+    ares_sight: bool,
     /// The map `Size=` diamond (`MapClass+0xF4/+0xF8`) that bounds a reveal's
     /// lifted centre and each of its cells ([`collect_reveal_cells`]). A
     /// headless fixture without a map has none; the fog grid bounds it alone.
@@ -2206,6 +2212,7 @@ impl Default for VisionConfig {
             veteran_sight: 0.0,
             leptons_per_sight_increase: 0,
             reveal_by_height: true,
+            ares_sight: false,
             map_size: None,
             ally_reveal: true,
             passive_owners: Vec::new(),
@@ -2227,6 +2234,7 @@ impl VisionConfig {
             veteran_sight: rules.general.veteran_sight,
             leptons_per_sight_increase: rules.general.leptons_per_sight_increase,
             reveal_by_height: rules.general.reveal_by_height,
+            ares_sight: rules.ares(),
             map_size,
             ally_reveal: rules.general.ally_reveal,
             passive_owners,
@@ -2281,6 +2289,7 @@ impl VisionConfig {
             cell.0,
             cell.1,
             radius,
+            self.ares_sight,
             z,
             line_of_sight.is_some(),
             line_of_sight,
@@ -2447,7 +2456,15 @@ pub(crate) fn sight_admission(
     let cells = collect_reveal_cells(
         rx,
         ry,
-        geometry.radius.clamp(0, i32::from(MAX_SIGHT_RANGE)) as u16,
+        geometry.radius.clamp(
+            0,
+            i32::from(if config.ares_sight {
+                ARES_REVEAL_RADIUS_MAX
+            } else {
+                MAX_SIGHT_RANGE
+            }),
+        ) as u16,
+        config.ares_sight,
         height_leptons,
         config.reveal_by_height,
         height_grid,
@@ -2604,6 +2621,7 @@ fn reveal_radius_into(
         rx,
         ry,
         range,
+        false,
         height,
         by_height,
         height_grid,
@@ -2714,6 +2732,7 @@ pub(crate) fn collect_reveal_cells(
     center_rx: u16,
     center_ry: u16,
     range: u16,
+    ares_sight: bool,
     viewer_height_leptons: i32,
     reveal_by_height: bool,
     height_grid: Option<CellLevels<'_>>,
@@ -2728,10 +2747,6 @@ pub(crate) fn collect_reveal_cells(
         return Vec::new();
     };
 
-    // Clamp range to MAX_SIGHT_RANGE (the original also clamps to 10).
-    let clamped = (range as usize).min(MAX_SIGHT_RANGE as usize);
-    let spiral_end = REVEAL_RING_SIZES[clamped];
-    let mut cells = Vec::with_capacity(spiral_end);
     let viewer_level = viewer_height_leptons / LEPTONS_PER_HEIGHT_LEVEL;
     let z_shift = iso_height_shift_cells(viewer_height_leptons);
     let w = i32::from(width);
@@ -2741,6 +2756,47 @@ pub(crate) fn collect_reveal_cells(
             crate::map::playfield::size_diamond_contains(size_w, size_h, (x as i16, y as i16))
         })
     };
+
+    // Ares 0.6 `MapRevealer::RevealImpl` uses CellSpreadEnumerator and admits
+    // offsets when dx*dx + dy*dy < (spread+1)^2, producing the documented
+    // octagonal sight field for radii above the retail spiral's 10. Its LOS
+    // check degrades to the offset's sign relation because the retail mirror
+    // table has no entry beyond radius 10.
+    if ares_sight && range > MAX_SIGHT_RANGE {
+        let spread = usize::from(range.min(ARES_REVEAL_RADIUS_MAX));
+        let spread_i = spread as i32;
+        let limit_sqr = (spread as i64 + 1) * (spread as i64 + 1);
+        let mut cells = Vec::new();
+        for (dx, dy) in crate::sim::cell_rect::cell_spread_offsets(spread) {
+            let (dx, dy) = (i32::from(dx), i32::from(dy));
+            let distance_sqr = i64::from(dx) * i64::from(dx) + i64::from(dy) * i64::from(dy);
+            if dx.abs() > spread_i || distance_sqr >= limit_sqr {
+                continue;
+            }
+            let (rx, ry) = (cx + dx, cy + dy);
+            if !(on_map(rx, ry) && rx >= 0 && rx < w && ry >= 0 && ry < h) {
+                continue;
+            }
+            if reveal_by_height && let Some(levels) = height_grid {
+                let obs_x = rx + if dx < 0 { 1 } else { -1 };
+                let obs_y = ry + if dy < 0 { 1 } else { -1 };
+                if obs_x >= 0 && obs_x < w && obs_y >= 0 && obs_y < h {
+                    let obstruction =
+                        i32::from(levels.level(obs_x as u16, obs_y as u16, width) as i8);
+                    if viewer_level + 3 < obstruction {
+                        continue;
+                    }
+                }
+            }
+            cells.push((rx as u16, ry as u16));
+        }
+        return cells;
+    }
+
+    // The retail spiral clamps to 10; the expanded Ares path returned above.
+    let clamped = (range as usize).min(MAX_SIGHT_RANGE as usize);
+    let spiral_end = REVEAL_RING_SIZES[clamped];
+    let mut cells = Vec::with_capacity(spiral_end);
 
     for i in 0..spiral_end {
         let (dx, dy) = REVEAL_SPIRAL[i];
@@ -3090,6 +3146,7 @@ pub fn reveal_radius(
         center_rx,
         center_ry,
         range,
+        false,
         0,
         false,
         None,
@@ -3117,6 +3174,7 @@ pub(crate) fn reveal_shroud_on_fire(
         (coord.x / 256) as u16,
         (coord.y / 256) as u16,
         REVEAL_ON_FIRE_RADIUS,
+        config.ares_sight,
         coord.z,
         config.reveal_by_height,
         height_grid,
