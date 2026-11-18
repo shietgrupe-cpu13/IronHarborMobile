@@ -2,6 +2,7 @@ package org.vera20k
 
 import android.app.Activity
 import android.app.ActivityManager
+import android.app.AlertDialog
 import android.content.Intent
 import android.content.ClipData
 import android.content.pm.PackageManager
@@ -12,16 +13,19 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Debug
 import android.provider.DocumentsContract
+import android.view.KeyEvent
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
+import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import java.io.File
@@ -387,6 +391,28 @@ class LauncherActivity : Activity() {
     }
 
     private fun renderTouch() {
+        val controlPrefs = getSharedPreferences(TouchHudSettings.PREFS, MODE_PRIVATE)
+        val hudCard = card()
+        hudCard.addView(kicker("FLOATING COMMAND HUD"))
+        hudCard.addView(text("RA2YRPORT-style movable controls", 19, R.color.launcher_text, bold = true))
+        hudCard.addView(text("Show touch buttons over the game. Tap C1–C10 to select a control group; hold a C button to assign the current selection. Tap Edit HUD in-game to drag controls and adjust individual button size.", 14, R.color.launcher_muted), margin(top = 6, bottom = 8))
+        val enabled = CheckBox(this).apply {
+            text = "Show floating HUD in touch and mixed modes"
+            setTextColor(color(R.color.launcher_text))
+            isChecked = controlPrefs.getBoolean(TouchHudSettings.HUD_ENABLED, true)
+        }
+        hudCard.addView(enabled)
+        hudCard.addView(actionButton("CUSTOMIZE BUTTONS, SIZE AND OPACITY", primary = false) {
+            showTouchHudEditor()
+        }, margin(top = 8))
+        hudCard.addView(actionButton("REMAP ACTION KEYS", primary = false) {
+            chooseTouchHudKey()
+        }, margin(top = 7))
+        enabled.setOnCheckedChangeListener { _, checked ->
+            controlPrefs.edit().putBoolean(TouchHudSettings.HUD_ENABLED, checked).apply()
+        }
+        pageBody.addView(hudCard, margin(bottom = 12))
+
         pageBody.addView(kicker("INPUT PROFILE"))
         pageBody.addView(text("Touch controls", 30, R.color.launcher_text, bold = true))
         pageBody.addView(text("VERA20K keeps its native touch-to-input mapper. These gestures feed the existing mouse and camera controls without changing simulation rules.", 14, R.color.launcher_muted), margin(bottom = 14))
@@ -408,12 +434,8 @@ class LauncherActivity : Activity() {
             14,
             R.color.launcher_muted,
         ), margin(top = 7))
-        layout.addView(text(
-            "The engine's editor repositions existing UI. VERA20K does not yet provide RA2YRPORT's separate floating touch-action overlay or button remapping, so this launcher does not show controls for those unsupported features.",
-            13,
-            R.color.launcher_warning,
-        ), margin(top = 9))
-        layout.addView(actionButton("START GAME TO EDIT THE HUD", primary = true) {
+        layout.addView(text("Use the floating HUD editor above for independent command-button positions and sizing. The engine's Edit Layout remains for its existing game panels.", 13, R.color.launcher_muted), margin(top = 9))
+        layout.addView(actionButton("START GAME TO ARRANGE FLOATING BUTTONS", primary = true) {
             if (installation.ready) launchGame() else {
                 importNote = "Import your game folder before opening the HUD editor."
                 page = Page.FILES
@@ -421,6 +443,109 @@ class LauncherActivity : Activity() {
             }
         }, margin(top = 12))
         pageBody.addView(layout)
+    }
+
+    private fun showTouchHudEditor() {
+        val prefs = getSharedPreferences(TouchHudSettings.PREFS, MODE_PRIVATE)
+        val visible = TouchHudSettings.parseVisible(
+            prefs.getString(TouchHudSettings.HUD_VISIBLE, null),
+            prefs.contains(TouchHudSettings.HUD_VISIBLE),
+        ).toMutableSet()
+        val choices = TouchHudSettings.buttons
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(4), dp(18), dp(4))
+        }
+        root.addView(text("Choose the visible actions. In-game drag and per-button sizing are saved when you tap SAVE HUD.", 13, R.color.launcher_muted), margin(bottom = 8))
+        val checkboxes = mutableListOf<Pair<String, CheckBox>>()
+        choices.forEach { action ->
+            val check = CheckBox(this).apply {
+                text = action.label
+                setTextColor(color(R.color.launcher_text))
+                isChecked = action.id in visible
+            }
+            root.addView(check)
+            checkboxes += action.id to check
+        }
+        fun seekRow(title: String, initial: Int, min: Int, max: Int, onLabel: (Int) -> String): Pair<SeekBar, TextView> {
+            val label = text(onLabel(initial), 13, R.color.launcher_text)
+            root.addView(label, margin(top = 7))
+            val seek = SeekBar(this).apply {
+                this.max = max - min
+                progress = initial.coerceIn(min, max) - min
+                contentDescription = title
+            }
+            seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    label.text = onLabel(min + progress)
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+            root.addView(seek)
+            return seek to label
+        }
+        val scale = seekRow("Global HUD size", TouchHudSettings.clampScale(prefs.getInt(TouchHudSettings.HUD_SCALE, 100)), 70, 150) { "Global button size  /  $it%" }.first
+        val opacity = seekRow("HUD opacity", TouchHudSettings.clampOpacity(prefs.getInt(TouchHudSettings.HUD_OPACITY, 88)), 30, 100) { "Button opacity  /  $it%" }.first
+        val scroll = ScrollView(this).apply { addView(root) }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Customize floating HUD")
+            .setView(scroll)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Save HUD", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val selected = checkboxes.filter { it.second.isChecked }.mapTo(linkedSetOf()) { it.first }
+                prefs.edit()
+                    .putString(TouchHudSettings.HUD_VISIBLE, TouchHudSettings.encodeVisible(selected))
+                    .putInt(TouchHudSettings.HUD_SCALE, TouchHudSettings.clampScale(scale.progress + 70))
+                    .putInt(TouchHudSettings.HUD_OPACITY, TouchHudSettings.clampOpacity(opacity.progress + 30))
+                    .putBoolean(TouchHudSettings.HUD_ENABLED, true)
+                    .apply()
+                dialog.dismiss()
+                Toast.makeText(this, "HUD settings saved. They apply the next time you start a match.", Toast.LENGTH_LONG).show()
+            }
+        }
+        dialog.show()
+    }
+
+    private fun chooseTouchHudKey() {
+        val actions = TouchHudSettings.buttons.take(4)
+        AlertDialog.Builder(this)
+            .setTitle("Choose command to remap")
+            .setItems(actions.map { it.label }.toTypedArray()) { _, which -> captureTouchHudKey(actions[which].id) }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun captureTouchHudKey(id: String) {
+        val prefs = getSharedPreferences(TouchHudSettings.PREFS, MODE_PRIVATE)
+        val action = TouchHudSettings.buttons.first { it.id == id }
+        val code = prefs.getInt("key_$id", action.defaultKeyCode)
+        val prompt = TextView(this).apply {
+            text = "Current key: ${KeyEvent.keyCodeToString(code)}\n\nTap this panel, then press the physical keyboard key already assigned to ${action.label} in the game."
+            textSize = 16f
+            setTextColor(color(R.color.launcher_text))
+            setPadding(dp(24), dp(24), dp(24), dp(24))
+            isFocusable = true
+            isFocusableInTouchMode = true
+            setOnKeyListener { _, keyCode, event ->
+                if (event.action != KeyEvent.ACTION_DOWN || keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_UNKNOWN) return@setOnKeyListener false
+                if ((event.source and android.view.InputDevice.SOURCE_KEYBOARD) != android.view.InputDevice.SOURCE_KEYBOARD) return@setOnKeyListener true
+                prefs.edit().putInt("key_$id", keyCode).apply()
+                Toast.makeText(this@LauncherActivity, "${action.label} bound to ${KeyEvent.keyCodeToString(keyCode)}", Toast.LENGTH_SHORT).show()
+                true
+            }
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Bind ${action.label}")
+            .setView(prompt)
+            .setPositiveButton("Done", null)
+            .setNegativeButton("Cancel", null)
+            .create()
+        dialog.setOnShowListener { prompt.requestFocus() }
+        dialog.show()
     }
 
     private fun renderMods() {

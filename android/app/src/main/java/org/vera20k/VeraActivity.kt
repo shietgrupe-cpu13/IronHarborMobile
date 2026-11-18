@@ -13,6 +13,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.Uri
+import android.os.Bundle
 import android.os.Process
 import android.provider.DocumentsContract
 import android.provider.Settings
@@ -48,6 +49,17 @@ class VeraActivity : NativeActivity() {
         const val LAUNCHER_SECONDARY = "org.vera20k.LauncherSecondary"
     }
 
+    private var touchHud: TouchHudOverlay? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        window.decorView.post {
+            if (!isFinishing && !isDestroyed) {
+                touchHud = TouchHudOverlay(this).also { it.attach() }
+            }
+        }
+    }
+
     /**
      * Opens the system folder picker. Called from Rust on the UI thread
      * (`ui::asset_import::choose_folder`); the result arrives in
@@ -79,6 +91,8 @@ class VeraActivity : NativeActivity() {
      * means the activity is really going away.
      */
     override fun onDestroy() {
+        touchHud?.detach()
+        touchHud = null
         super.onDestroy()
         if (isFinishing) {
             Process.killProcess(Process.myPid())
