@@ -45,5 +45,41 @@ class TouchHudSettingsTest {
         assertEquals(29, TouchHudSettings.buttons.first { it.id == "GUARD" }.defaultKeyCode) // A
         assertEquals(32, TouchHudSettings.buttons.first { it.id == "DEPLOY" }.defaultKeyCode) // D
         assertEquals(51, TouchHudSettings.buttons.first { it.id == "SCATTER" }.defaultKeyCode) // W
+        assertEquals(24, TouchHudSettings.remappableActions.size)
+        assertEquals(0, TouchHudSettings.remappableActions.first { it.id == "FIRE" }.defaultKeyCode) // Unknown until bound to an existing game key.
+    }
+
+    @Test fun ra2InspiredPresetPositionsKeepControlsInsideNormalizedScreen() {
+        for (layout in TouchHudSettings.LAYOUT_FREE..TouchHudSettings.LAYOUT_YURI) {
+            TouchHudSettings.buttons.forEach { button ->
+                val (x, y) = TouchHudSettings.defaultPosition(button.id, layout)
+                assertTrue("${button.id} x=$x", x in 0f..1f)
+                assertTrue("${button.id} y=$y", y in 0f..1f)
+            }
+        }
+        assertTrue(TouchHudSettings.defaultPosition("C1", TouchHudSettings.LAYOUT_TWO_THUMB).first <
+            TouchHudSettings.defaultPosition("C1", TouchHudSettings.LAYOUT_YURI).first)
+    }
+
+    @Test fun hudLayoutBackupRoundTripsAndRejectsUnsupportedOrMalformedData() {
+        val encoded = TouchHudSettings.encodeLayoutBackup(
+            setOf("STOP", "C3"),
+            mapOf("STOP" to (0.2f to 0.7f), "C3" to (0.8f to 0.4f)),
+            mapOf("C3" to 125),
+            120,
+            70,
+            TouchHudSettings.LAYOUT_YURI,
+            mapOf("FIRE" to 32, "PATROL" to 1030, "UNKNOWN" to 44),
+        )
+        val decoded = TouchHudSettings.decodeLayoutBackup(encoded)
+        assertEquals(setOf("STOP", "C3"), decoded?.visible)
+        assertEquals(125, decoded?.sizes?.get("C3"))
+        assertEquals(120, decoded?.scale)
+        assertEquals(70, decoded?.opacity)
+        assertEquals(TouchHudSettings.LAYOUT_YURI, decoded?.layout)
+        assertEquals(mapOf("FIRE" to 32), decoded?.keyBindings)
+        assertEquals(null, TouchHudSettings.decodeLayoutBackup(encoded.replace("version=1", "version=88")))
+        assertEquals(null, TouchHudSettings.decodeLayoutBackup(encoded.replace("scale=120", "scale=999")))
+        assertEquals(mapOf("GUARD" to 29), TouchHudSettings.parseKeyBindings("GUARD:29;STOP:0;FIRE:nope;OTHER:41"))
     }
 }

@@ -20,6 +20,7 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
     private var windowManager: WindowManager? = null
     private val buttons = linkedMapOf<String, TextView>()
     private var editButton: TextView? = null
+    private var foldButton: TextView? = null
     private var editMode = false
 
     fun attach() {
@@ -34,9 +35,11 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
         if (manager != null) {
             buttons.values.forEach { runCatching { manager.removeView(it) } }
             editButton?.let { runCatching { manager.removeView(it) } }
+            foldButton?.let { runCatching { manager.removeView(it) } }
         }
         buttons.clear()
         editButton = null
+        foldButton = null
         windowManager = null
     }
 
@@ -44,8 +47,10 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
         val manager = windowManager ?: return
         buttons.values.forEach { runCatching { manager.removeView(it) } }
         editButton?.let { runCatching { manager.removeView(it) } }
+        foldButton?.let { runCatching { manager.removeView(it) } }
         buttons.clear()
         editButton = null
+        foldButton = null
 
         val visible = TouchHudSettings.parseVisible(
             prefs.getString(TouchHudSettings.HUD_VISIBLE, null),
@@ -55,8 +60,11 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
         val sizes = TouchHudSettings.parseSizes(prefs.getString(TouchHudSettings.HUD_SIZES, null)).toMutableMap()
         val globalScale = TouchHudSettings.clampScale(prefs.getInt(TouchHudSettings.HUD_SCALE, 100)) / 100f
         val opacity = TouchHudSettings.clampOpacity(prefs.getInt(TouchHudSettings.HUD_OPACITY, 88)) / 100f
+        val layout = prefs.getInt(TouchHudSettings.HUD_LAYOUT, TouchHudSettings.LAYOUT_FREE)
+            .coerceIn(TouchHudSettings.LAYOUT_FREE, TouchHudSettings.LAYOUT_YURI)
+        val collapsed = prefs.getBoolean(TouchHudSettings.HUD_COLLAPSED, false) && !editMode
 
-        TouchHudSettings.buttons.filter { it.id in visible }.forEach { action ->
+        TouchHudSettings.buttons.filter { it.id in visible && !collapsed }.forEach { action ->
             val itemScale = globalScale * (sizes[action.id] ?: 100) / 100f
             val view = TextView(activity).apply {
                 text = action.label
@@ -91,7 +99,7 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
                 setOnTouchListener(dragListener(this, action.id, positions))
             }
             buttons[action.id] = view
-            val point = positions[action.id] ?: TouchHudSettings.defaultPosition(action.id)
+            val point = positions[action.id] ?: TouchHudSettings.defaultPosition(action.id, layout)
             addPanel(manager, view, point)
         }
 
@@ -111,7 +119,24 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
             }
         }
         editButton = editor
-        addPanel(manager, editor, 0.92f to 0.08f)
+        addPanel(manager, editor, 0.82f to 0.06f)
+
+        val fold = TextView(activity).apply {
+            text = if (collapsed) "SHOW HUD" else "HIDE HUD"
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            textSize = 11f
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            background = buttonBackground(0.94f)
+            contentDescription = if (collapsed) "Show floating controls" else "Hide floating controls"
+            setOnClickListener {
+                prefs.edit().putBoolean(TouchHudSettings.HUD_COLLAPSED, !collapsed).apply()
+                populate()
+            }
+        }
+        foldButton = fold
+        addPanel(manager, fold, 0.82f to 0.15f)
     }
 
     private fun addPanel(manager: WindowManager, view: View, point: Pair<Float, Float>) {
@@ -200,6 +225,10 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
 
     private fun sendKey(id: String, default: Int) {
         val keyCode = prefs.getInt("key_$id", default)
+        if (keyCode == KeyEvent.KEYCODE_UNKNOWN) {
+            android.util.Log.w("IronHarborHUD", "No game key is bound for $id; bind its existing engine key in the launcher")
+            return
+        }
         activity.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
         activity.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
     }

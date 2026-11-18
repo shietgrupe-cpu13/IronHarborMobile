@@ -10,23 +10,42 @@ internal object TouchHudSettings {
     const val HUD_SIZES = "hud_sizes"
     const val HUD_SCALE = "hud_scale"
     const val HUD_OPACITY = "hud_opacity"
+    const val HUD_LAYOUT = "hud_layout"
+    const val HUD_COLLAPSED = "hud_collapsed"
+
+    const val LAYOUT_FREE = 0
+    const val LAYOUT_TWO_THUMB = 1
+    const val LAYOUT_YURI = 2
 
     data class Button(val id: String, val label: String, val defaultKeyCode: Int, val groupNumber: Int? = null)
 
     // Android KeyEvent values for S, A, D and W match winit's physical keys.
     // These are the stock VERA/RA2 Hotkey values; players can bind each action
     // to another key that already has the desired engine command.
-    val buttons: List<Button> = listOf(
+    private val commandButtons = listOf(
         Button("STOP", "STOP", 47),
         Button("GUARD", "GUARD", 29),
         Button("DEPLOY", "DEPLOY", 32),
         Button("SCATTER", "SCATTER", 51),
-    ) + (1..10).map { number ->
+    ) + listOf(
+        "FIRE" to "Force fire", "MOVE" to "Attack move", "ADD" to "Add selection",
+        "MORE" to "More commands", "BOX" to "Box selection", "ROUTE" to "Waypoint route",
+        "HOME" to "Home base", "TYPE" to "Select matching units", "NEXT" to "Next unit",
+        "PREV" to "Previous unit", "EVENT" to "Last event", "FOLLOW" to "Follow selection",
+        "BRIEF" to "Mission briefing", "PSI" to "Yuri: Psi Wave", "MINER" to "Slave Miner deploy / pack",
+        "REVEAL" to "Psychic Reveal", "DOMINATOR" to "Psychic Dominator",
+        "MUTATOR" to "Genetic Mutator", "BUILD" to "Build / confirm placement",
+        "PATROL" to "Patrol between two points",
+    ).map { (id, label) -> Button(id, label, 0) }
+
+    private val groupButtons = (1..10).map { number ->
         val digit = if (number == 10) 0 else number
         Button("C$number", "C$number", if (digit == 0) 7 else 7 + digit, number)
     }
 
-    val defaultVisible: Set<String> = buttons.take(9).mapTo(linkedSetOf()) { it.id }
+    val buttons: List<Button> = commandButtons.take(4) + groupButtons + commandButtons.drop(4)
+    val defaultVisible: Set<String> = commandButtons.take(4).mapTo(linkedSetOf()) { it.id } + groupButtons.take(5).map { it.id }
+    val remappableActions: List<Button> = commandButtons
 
     fun parseVisible(encoded: String?, isStored: Boolean): Set<String> {
         if (!isStored) return defaultVisible
@@ -44,18 +63,43 @@ internal object TouchHudSettings {
     fun clampOpacity(value: Int): Int = value.coerceIn(30, 100)
     fun clampButtonSize(value: Int): Int = value.coerceIn(70, 150)
 
-    fun defaultPosition(id: String): Pair<Float, Float> {
+    fun defaultPosition(id: String, layout: Int = LAYOUT_FREE): Pair<Float, Float> {
         val button = buttons.firstOrNull { it.id == id } ?: return 0.85f to 0.85f
-        val index = button.groupNumber?.minus(1) ?: when (id) {
-            "STOP" -> 0
-            "GUARD" -> 1
-            "DEPLOY" -> 2
-            "SCATTER" -> 3
-            else -> 0
+        val actionIndex = commandButtons.indexOfFirst { it.id == id }
+        if (layout == LAYOUT_TWO_THUMB) {
+            if (button.groupNumber != null) return 0.03f to (0.10f + ((button.groupNumber - 1) % 5) * 0.15f)
+            if (actionIndex >= 4) {
+                val slot = actionIndex - 4
+                return (0.55f + (slot % 4) * 0.12f) to (0.09f + (slot / 4) * 0.14f).coerceAtMost(0.79f)
+            }
+            return when (id) {
+                "STOP" -> 0.05f to 0.73f
+                "GUARD" -> 0.17f to 0.73f
+                "DEPLOY" -> 0.29f to 0.73f
+                "SCATTER" -> 0.41f to 0.73f
+                else -> 0.86f to 0.82f
+            }
         }
+        if (layout == LAYOUT_YURI) {
+            if (button.groupNumber != null) return 0.91f to (0.08f + ((button.groupNumber - 1) % 5) * 0.15f)
+            if (actionIndex >= 4) {
+                val slot = actionIndex - 4
+                return (0.52f + (slot % 4) * 0.12f) to (0.08f + (slot / 4) * 0.14f).coerceAtMost(0.78f)
+            }
+            return when (id) {
+                "STOP" -> 0.03f to 0.78f
+                "GUARD" -> 0.14f to 0.78f
+                "DEPLOY" -> 0.25f to 0.78f
+                "SCATTER" -> 0.36f to 0.78f
+                else -> 0.78f to 0.84f
+            }
+        }
+        val index = button.groupNumber?.minus(1) ?: actionIndex.coerceAtLeast(0)
         val row = if (button.groupNumber == null) 0 else 1 + index / 5
-        val column = if (button.groupNumber == null) index else index % 5
-        return (0.06f + column * 0.135f).coerceIn(0f, 1f) to (0.82f + row * 0.085f).coerceAtMost(1f)
+        val column = if (button.groupNumber == null) index % 8 else index % 5
+        val actionRow = if (button.groupNumber == null) index / 8 else row
+        return (0.04f + column * 0.12f).coerceIn(0f, 1f) to
+            (if (button.groupNumber == null) 0.82f - actionRow * 0.14f else 0.10f + actionRow * 0.15f).coerceIn(0f, 1f)
     }
 
     fun parsePositions(encoded: String?): Map<String, Pair<Float, Float>> {
@@ -91,4 +135,73 @@ internal object TouchHudSettings {
     fun encodeSizes(sizes: Map<String, Int>): String = buttons.asSequence()
         .mapNotNull { button -> sizes[button.id]?.let { button.id to clampButtonSize(it) } }
         .joinToString(";") { (id, size) -> "$id:$size" }
+
+    /** Stable, dependency-free backup format. Each value is validated on restore. */
+    fun encodeLayoutBackup(
+        visible: Set<String>,
+        positions: Map<String, Pair<Float, Float>>,
+        sizes: Map<String, Int>,
+        scale: Int,
+        opacity: Int,
+        layout: Int,
+        keyBindings: Map<String, Int> = emptyMap(),
+    ): String = listOf(
+        "format=iron-harbor-hud",
+        "version=1",
+        "visible=${encodeVisible(visible)}",
+        "positions=${encodePositions(positions)}",
+        "sizes=${encodeSizes(sizes)}",
+        "keybindings=${encodeKeyBindings(keyBindings)}",
+        "scale=${clampScale(scale)}",
+        "opacity=${clampOpacity(opacity)}",
+        "layout=${layout.coerceIn(LAYOUT_FREE, LAYOUT_YURI)}",
+        "",
+    ).joinToString("\n")
+
+    data class LayoutBackup(
+        val visible: Set<String>,
+        val positions: Map<String, Pair<Float, Float>>,
+        val sizes: Map<String, Int>,
+        val scale: Int,
+        val opacity: Int,
+        val layout: Int,
+        val keyBindings: Map<String, Int>,
+    )
+
+    fun decodeLayoutBackup(source: String): LayoutBackup? {
+        val fields = source.lineSequence().mapNotNull { line ->
+            val separator = line.indexOf('=')
+            if (separator <= 0) null else line.substring(0, separator) to line.substring(separator + 1)
+        }.toMap()
+        if (fields["format"] != "iron-harbor-hud" || fields["version"] != "1") return null
+        val visible = parseVisible(fields["visible"], true)
+        val scale = fields["scale"]?.toIntOrNull() ?: return null
+        val opacity = fields["opacity"]?.toIntOrNull() ?: return null
+        val layout = fields["layout"]?.toIntOrNull() ?: return null
+        if (visible.isEmpty() || scale !in 70..150 || opacity !in 30..100 || layout !in LAYOUT_FREE..LAYOUT_YURI) return null
+        return LayoutBackup(
+            visible,
+            parsePositions(fields["positions"]),
+            parseSizes(fields["sizes"]),
+            scale,
+            opacity,
+            layout,
+            parseKeyBindings(fields["keybindings"]),
+        )
+    }
+
+    fun parseKeyBindings(encoded: String?): Map<String, Int> {
+        val valid = remappableActions.mapTo(hashSetOf()) { it.id }
+        return encoded.orEmpty().split(';').mapNotNull { entry ->
+            val pair = entry.split(':', limit = 2)
+            if (pair.size != 2 || pair[0] !in valid) return@mapNotNull null
+            val keyCode = pair[1].toIntOrNull() ?: return@mapNotNull null
+            if (keyCode !in 1..1024) return@mapNotNull null
+            pair[0] to keyCode
+        }.toMap()
+    }
+
+    fun encodeKeyBindings(keyBindings: Map<String, Int>): String = remappableActions.asSequence()
+        .mapNotNull { action -> keyBindings[action.id]?.takeIf { it in 1..1024 }?.let { action.id to it } }
+        .joinToString(";") { (id, keyCode) -> "$id:$keyCode" }
 }

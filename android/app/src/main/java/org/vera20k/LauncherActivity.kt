@@ -26,6 +26,8 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.SeekBar
+import android.widget.Spinner
+import android.widget.ArrayAdapter
 import android.widget.TextView
 import android.widget.Toast
 import java.io.File
@@ -46,6 +48,8 @@ class LauncherActivity : Activity() {
     private companion object {
         const val REQUEST_PICK_GAME = 0x564c
         const val REQUEST_PICK_MOD = 0x564d
+        const val REQUEST_EXPORT_HUD = 0x564e
+        const val REQUEST_IMPORT_HUD = 0x564f
         const val REQUIRED_FREE_BYTES = 1700L shl 20
         const val PROGRESS_STEP_BYTES = 16L shl 20
 
@@ -116,6 +120,15 @@ class LauncherActivity : Activity() {
                 // The picker grant remains valid for this foreground import.
             }
             importMod(tree)
+            return
+        }
+        if (requestCode == REQUEST_EXPORT_HUD || requestCode == REQUEST_IMPORT_HUD) {
+            val uri = if (resultCode == RESULT_OK) data?.data else null
+            if (uri == null) {
+                Toast.makeText(this, "HUD layout transfer cancelled.", Toast.LENGTH_SHORT).show()
+                return
+            }
+            if (requestCode == REQUEST_EXPORT_HUD) exportHudLayout(uri) else importHudLayout(uri)
             return
         }
         if (requestCode != REQUEST_PICK_GAME) return
@@ -394,8 +407,8 @@ class LauncherActivity : Activity() {
         val controlPrefs = getSharedPreferences(TouchHudSettings.PREFS, MODE_PRIVATE)
         val hudCard = card()
         hudCard.addView(kicker("FLOATING COMMAND HUD"))
-        hudCard.addView(text("RA2YRPORT-style movable controls", 19, R.color.launcher_text, bold = true))
-        hudCard.addView(text("Show touch buttons over the game. Tap C1–C10 to select a control group; hold a C button to assign the current selection. Tap Edit HUD in-game to drag controls and adjust individual button size.", 14, R.color.launcher_muted), margin(top = 6, bottom = 8))
+        hudCard.addView(text("RA2YRPORT-inspired floating controls", 19, R.color.launcher_text, bold = true))
+        hudCard.addView(text("Choose a two-thumb or Yuri layout, customize visible buttons and size, then drag controls in-game. C1–C10 select groups; hold one to assign the current selection. Use HIDE HUD / SHOW HUD to fold the controls while playing.", 14, R.color.launcher_muted), margin(top = 6, bottom = 8))
         val enabled = CheckBox(this).apply {
             text = "Show floating HUD in touch and mixed modes"
             setTextColor(color(R.color.launcher_text))
@@ -456,11 +469,12 @@ class LauncherActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(4), dp(18), dp(4))
         }
-        root.addView(text("Choose the visible actions. In-game drag and per-button sizing are saved when you tap SAVE HUD.", 13, R.color.launcher_muted), margin(bottom = 8))
+        root.addView(text("Choose visible controls, a starting layout, and transfer your setup with the system document picker. In-game drag and per-button sizing are saved when you tap SAVE HUD.", 13, R.color.launcher_muted), margin(bottom = 8))
         val checkboxes = mutableListOf<Pair<String, CheckBox>>()
         choices.forEach { action ->
             val check = CheckBox(this).apply {
-                text = action.label
+                val bound = prefs.contains("key_${action.id}") || action.defaultKeyCode != KeyEvent.KEYCODE_UNKNOWN
+                text = if (bound) action.label else "${action.label}  ·  assign an existing game key first"
                 setTextColor(color(R.color.launcher_text))
                 isChecked = action.id in visible
             }
@@ -487,6 +501,34 @@ class LauncherActivity : Activity() {
         }
         val scale = seekRow("Global HUD size", TouchHudSettings.clampScale(prefs.getInt(TouchHudSettings.HUD_SCALE, 100)), 70, 150) { "Global button size  /  $it%" }.first
         val opacity = seekRow("HUD opacity", TouchHudSettings.clampOpacity(prefs.getInt(TouchHudSettings.HUD_OPACITY, 88)), 30, 100) { "Button opacity  /  $it%" }.first
+        root.addView(text("Layout preset", 13, R.color.launcher_text), margin(top = 8))
+        val layoutNames = listOf("Free / saved layout", "Two-thumb layout", "Yuri controls layout")
+        val layout = Spinner(this).apply {
+            adapter = ArrayAdapter(this@LauncherActivity, android.R.layout.simple_spinner_dropdown_item, layoutNames)
+            setSelection(prefs.getInt(TouchHudSettings.HUD_LAYOUT, TouchHudSettings.LAYOUT_FREE).coerceIn(0, layoutNames.lastIndex))
+        }
+        root.addView(layout)
+        root.addView(text("A preset resets button positions to its starting arrangement. You can drag buttons during a match afterward.", 12, R.color.launcher_muted), margin(top = 3, bottom = 5))
+        val backupButtons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val export = Button(this).apply { text = "EXPORT HUD" }
+        val import = Button(this).apply { text = "IMPORT HUD" }
+        backupButtons.addView(export, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        backupButtons.addView(import, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        root.addView(backupButtons)
+        export.setOnClickListener {
+            startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TITLE, "IronHarbor-HUD-Layout.ihhud")
+            }, REQUEST_EXPORT_HUD)
+        }
+        import.setOnClickListener {
+            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "*/*"
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }, REQUEST_IMPORT_HUD)
+        }
         val scroll = ScrollView(this).apply { addView(root) }
         val dialog = AlertDialog.Builder(this)
             .setTitle("Customize floating HUD")
@@ -497,12 +539,15 @@ class LauncherActivity : Activity() {
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val selected = checkboxes.filter { it.second.isChecked }.mapTo(linkedSetOf()) { it.first }
-                prefs.edit()
+                val previousLayout = prefs.getInt(TouchHudSettings.HUD_LAYOUT, TouchHudSettings.LAYOUT_FREE)
+                val edit = prefs.edit()
                     .putString(TouchHudSettings.HUD_VISIBLE, TouchHudSettings.encodeVisible(selected))
                     .putInt(TouchHudSettings.HUD_SCALE, TouchHudSettings.clampScale(scale.progress + 70))
                     .putInt(TouchHudSettings.HUD_OPACITY, TouchHudSettings.clampOpacity(opacity.progress + 30))
+                    .putInt(TouchHudSettings.HUD_LAYOUT, layout.selectedItemPosition)
                     .putBoolean(TouchHudSettings.HUD_ENABLED, true)
-                    .apply()
+                if (previousLayout != layout.selectedItemPosition) edit.putString(TouchHudSettings.HUD_POSITIONS, "")
+                edit.apply()
                 dialog.dismiss()
                 Toast.makeText(this, "HUD settings saved. They apply the next time you start a match.", Toast.LENGTH_LONG).show()
             }
@@ -511,7 +556,7 @@ class LauncherActivity : Activity() {
     }
 
     private fun chooseTouchHudKey() {
-        val actions = TouchHudSettings.buttons.take(4)
+        val actions = TouchHudSettings.remappableActions
         AlertDialog.Builder(this)
             .setTitle("Choose command to remap")
             .setItems(actions.map { it.label }.toTypedArray()) { _, which -> captureTouchHudKey(actions[which].id) }
@@ -519,12 +564,69 @@ class LauncherActivity : Activity() {
             .show()
     }
 
+    private fun exportHudLayout(uri: Uri) {
+        val prefs = getSharedPreferences(TouchHudSettings.PREFS, MODE_PRIVATE)
+        val payload = TouchHudSettings.encodeLayoutBackup(
+            TouchHudSettings.parseVisible(prefs.getString(TouchHudSettings.HUD_VISIBLE, null), prefs.contains(TouchHudSettings.HUD_VISIBLE)),
+            TouchHudSettings.parsePositions(prefs.getString(TouchHudSettings.HUD_POSITIONS, null)),
+            TouchHudSettings.parseSizes(prefs.getString(TouchHudSettings.HUD_SIZES, null)),
+            prefs.getInt(TouchHudSettings.HUD_SCALE, 100),
+            prefs.getInt(TouchHudSettings.HUD_OPACITY, 88),
+            prefs.getInt(TouchHudSettings.HUD_LAYOUT, TouchHudSettings.LAYOUT_FREE),
+            TouchHudSettings.remappableActions.mapNotNull { action ->
+                if (prefs.contains("key_${action.id}")) action.id to prefs.getInt("key_${action.id}", 0) else null
+            }.toMap(),
+        )
+        runCatching { (contentResolver.openOutputStream(uri, "wt") ?: error("Selected document could not be opened")).bufferedWriter().use { it.write(payload) } }
+            .onSuccess { Toast.makeText(this, "HUD layout exported.", Toast.LENGTH_SHORT).show() }
+            .onFailure { Toast.makeText(this, "Could not export HUD layout: ${it.message}", Toast.LENGTH_LONG).show() }
+    }
+
+    private fun importHudLayout(uri: Uri) {
+        val payload = runCatching {
+            val input = contentResolver.openInputStream(uri) ?: error("Selected document could not be opened")
+            input.bufferedReader().use { reader ->
+                val content = StringBuilder()
+                val buffer = CharArray(4096)
+                while (true) {
+                    val count = reader.read(buffer)
+                    if (count < 0) break
+                    if (content.length + count > 65536) error("HUD layout file is larger than 64 KB")
+                    content.append(buffer, 0, count)
+                }
+                content.toString()
+            }
+        }.getOrElse {
+            Toast.makeText(this, "Could not read HUD layout: ${it.message}", Toast.LENGTH_LONG).show()
+            return
+        }
+        val imported = TouchHudSettings.decodeLayoutBackup(payload)
+        if (imported == null) {
+            Toast.makeText(this, "That file is not a supported Iron Harbor HUD layout.", Toast.LENGTH_LONG).show()
+            return
+        }
+        val edit = getSharedPreferences(TouchHudSettings.PREFS, MODE_PRIVATE).edit()
+            .putString(TouchHudSettings.HUD_VISIBLE, TouchHudSettings.encodeVisible(imported.visible))
+            .putString(TouchHudSettings.HUD_POSITIONS, TouchHudSettings.encodePositions(imported.positions))
+            .putString(TouchHudSettings.HUD_SIZES, TouchHudSettings.encodeSizes(imported.sizes))
+            .putInt(TouchHudSettings.HUD_SCALE, imported.scale)
+            .putInt(TouchHudSettings.HUD_OPACITY, imported.opacity)
+            .putInt(TouchHudSettings.HUD_LAYOUT, imported.layout)
+            .putBoolean(TouchHudSettings.HUD_COLLAPSED, false)
+            .putBoolean(TouchHudSettings.HUD_ENABLED, true)
+        TouchHudSettings.remappableActions.forEach { edit.remove("key_${it.id}") }
+        imported.keyBindings.forEach { (id, keyCode) -> edit.putInt("key_$id", keyCode) }
+        edit.apply()
+        Toast.makeText(this, "HUD layout imported. It applies when the next match starts.", Toast.LENGTH_LONG).show()
+    }
+
     private fun captureTouchHudKey(id: String) {
         val prefs = getSharedPreferences(TouchHudSettings.PREFS, MODE_PRIVATE)
         val action = TouchHudSettings.buttons.first { it.id == id }
         val code = prefs.getInt("key_$id", action.defaultKeyCode)
         val prompt = TextView(this).apply {
-            text = "Current key: ${KeyEvent.keyCodeToString(code)}\n\nTap this panel, then press the physical keyboard key already assigned to ${action.label} in the game."
+            val currentKey = if (code == KeyEvent.KEYCODE_UNKNOWN) "Not bound" else KeyEvent.keyCodeToString(code)
+            text = "Current key: $currentKey\n\nTap this panel, then press the physical keyboard key already assigned to ${action.label} in the game. The HUD sends that key through VERA20K's existing engine input path."
             textSize = 16f
             setTextColor(color(R.color.launcher_text))
             setPadding(dp(24), dp(24), dp(24), dp(24))
