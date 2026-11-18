@@ -17,6 +17,8 @@ import android.os.Bundle
 import android.os.Process
 import android.provider.DocumentsContract
 import android.provider.Settings
+import android.system.ErrnoException
+import android.system.Os
 import java.io.File
 import java.io.IOException
 
@@ -52,10 +54,25 @@ class VeraActivity : NativeActivity() {
     private var touchHud: TouchHudOverlay? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        val requestedMode = TouchHudSettings.parseControlMode(
+            getSharedPreferences(TouchHudSettings.PREFS, MODE_PRIVATE)
+                .getString(TouchHudSettings.CONTROL_MODE, null),
+        )
+        var appliedMode = TouchHudSettings.MODE_MIXED
+        try {
+            // NativeActivity starts the Rust entry point from super.onCreate;
+            // publish the input mode before that entry point reads it.
+            Os.setenv("IH_CONTROL_MODE", requestedMode, true)
+            appliedMode = requestedMode
+        } catch (error: ErrnoException) {
+            android.util.Log.e("IronHarborInput", "Could not set native input mode", error)
+        }
         super.onCreate(savedInstanceState)
-        window.decorView.post {
-            if (!isFinishing && !isDestroyed) {
-                touchHud = TouchHudOverlay(this).also { it.attach() }
+        if (appliedMode != TouchHudSettings.MODE_EXTERNAL) {
+            window.decorView.post {
+                if (!isFinishing && !isDestroyed) {
+                    touchHud = TouchHudOverlay(this).also { it.attach() }
+                }
             }
         }
     }

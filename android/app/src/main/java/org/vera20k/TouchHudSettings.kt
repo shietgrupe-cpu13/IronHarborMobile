@@ -16,6 +16,16 @@ internal object TouchHudSettings {
     const val HUD_ACTIVE_SET = "hud_active_set"
     const val HUD_DOCK = "hud_dock"
     const val HUD_TOGGLE = "HUD_TOGGLE"
+    const val CONTROL_MODE = "control_mode"
+    const val MODE_TOUCH = "touch"
+    const val MODE_MIXED = "mixed"
+    const val MODE_EXTERNAL = "external"
+
+    fun parseControlMode(value: String?): String = when (value?.trim()?.lowercase()) {
+        MODE_TOUCH -> MODE_TOUCH
+        MODE_EXTERNAL -> MODE_EXTERNAL
+        else -> MODE_MIXED
+    }
 
     const val LAYOUT_FREE = 0
     const val LAYOUT_TWO_THUMB = 1

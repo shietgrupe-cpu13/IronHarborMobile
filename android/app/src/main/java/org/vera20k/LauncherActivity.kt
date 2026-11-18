@@ -439,6 +439,27 @@ class LauncherActivity : Activity() {
         infoRow(gestures, "Two-finger tap", "Context / cancel action")
         pageBody.addView(gestures, margin(bottom = 12))
 
+        val inputModeCard = card()
+        inputModeCard.addView(kicker("INPUT DEVICE MODE"))
+        inputModeCard.addView(text("Choose how game input is accepted", 19, R.color.launcher_text, bold = true))
+        inputModeCard.addView(text("Touch-only keeps screen gestures and the floating HUD. Mixed accepts both touch and external devices. External-only disables touch gestures and the HUD. This takes effect when the game is next launched.", 13, R.color.launcher_muted), margin(top = 6, bottom = 7))
+        val modes = listOf("Touch only", "Touch + mouse / keyboard", "Mouse + keyboard only")
+        val modeValues = listOf(TouchHudSettings.MODE_TOUCH, TouchHudSettings.MODE_MIXED, TouchHudSettings.MODE_EXTERNAL)
+        val mode = Spinner(this).apply {
+            adapter = ArrayAdapter(this@LauncherActivity, android.R.layout.simple_spinner_dropdown_item, modes)
+            setSelection(modeValues.indexOf(TouchHudSettings.parseControlMode(
+                controlPrefs.getString(TouchHudSettings.CONTROL_MODE, null),
+            )).coerceAtLeast(0))
+        }
+        mode.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                controlPrefs.edit().putString(TouchHudSettings.CONTROL_MODE, modeValues[position]).apply()
+            }
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+        }
+        inputModeCard.addView(mode)
+        pageBody.addView(inputModeCard, margin(bottom = 12))
+
         val layout = card()
         layout.addView(kicker("MOVE AVAILABLE GAME UI"))
         layout.addView(text("Edit Layout", 19, R.color.launcher_text, bold = true))

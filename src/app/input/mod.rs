@@ -44,6 +44,7 @@ pub(crate) mod tooltips;
 pub(crate) mod transport_orders;
 
 pub(crate) mod abort;
+pub(crate) mod android_control_mode;
 pub(crate) mod ares_cursor;
 pub(crate) mod surrender;
 #[cfg(all(test, tests_app_input_a_c))]

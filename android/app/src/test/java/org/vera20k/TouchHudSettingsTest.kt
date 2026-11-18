@@ -5,6 +5,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TouchHudSettingsTest {
+    @Test fun controlModePreferencesAreValidatedWithMixedDefault() {
+        assertEquals(TouchHudSettings.MODE_MIXED, TouchHudSettings.parseControlMode(null))
+        assertEquals(TouchHudSettings.MODE_TOUCH, TouchHudSettings.parseControlMode(" TOUCH "))
+        assertEquals(TouchHudSettings.MODE_EXTERNAL, TouchHudSettings.parseControlMode("external"))
+        assertEquals(TouchHudSettings.MODE_MIXED, TouchHudSettings.parseControlMode("invalid"))
+    }
+
     @Test fun visibleButtonStorageKeepsOnlyKnownIdsAndAllowsAllHidden() {
         assertEquals(TouchHudSettings.defaultVisible, TouchHudSettings.parseVisible(null, false))
         assertEquals(setOf("STOP", "C1"), TouchHudSettings.parseVisible("STOP,C1,UNKNOWN,STOP", true))

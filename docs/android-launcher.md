@@ -54,6 +54,18 @@ b15 adds direct per-button size selection in the launcher editor, three dock arr
 
 The b15 Android JVM suite passes 22 tests, including all dock/preset normalized coordinates and backup versions 1–3. Gradle completed in 17 seconds, reusing the same ARM64 Rust library. APK versionCode 219 passes debug signature, 16 KB ZIP alignment, ELF `0x4000` LOAD alignment and game-asset exclusion checks. See `out/logs/android-b15-report.md`. No device was available for visual/touch validation.
 
+## b16 external keyboard and mouse increment
+
+b16 adds three related input improvements while keeping the touch gesture path enabled in Touch and Mixed modes:
+
+1. The Android winit backend now routes mouse cursor motion, five mouse buttons, and wheel events as mouse events. Previously the Android backend's TODO path treated mouse down/move input as touch.
+2. Android virtual keyboard events (device ID `-1`, including the floating HUD's synthesized keys) are marked as synthetic so External mode can suppress HUD-injected input while accepting physical keyboards.
+3. The launcher provides persisted Touch only, Touch + mouse + keyboard, and Mouse + keyboard only modes. The chosen mode is passed to the native game Activity before Rust input starts; Mixed remains the default.
+
+The Android-only winit patch is kept in the vendored upstream `winit` 0.30.13 crate with its license and attribution files. No simulation, rendering, existing touch gesture mapping, or gameplay rules were changed.
+
+For b16, the optimized ARM64 Cargo `fast` profile passed in 5m30s on the first Android target build. Gradle unit tests and APK packaging passed in 3m18s; 23 JVM tests and 2 focused Rust input-mode tests passed. APK versionCode is 220. Signature v2, package/version metadata, ARM64 library inclusion, 16 KB APK ZIP alignment, and ELF LOAD `p_align=0x4000` checks passed; the APK contains no game installation files. See `out/logs/android-b16-report.md` and the full build/verification logs in `out/logs/`. No Android device was attached, so mouse buttons, wheel, physical keyboard filtering, launcher mode persistence across process restart, and touch/HUD behavior remain unverified on hardware.
+
 Build b2 compiled the ARM64 Rust library using the optimized `fast` profile and packaged a debug APK. Build b3 uses the optimized `shipping` Rust profile and produces independently branded Iron Harbor Mobile debug and release APKs (`org.ironharbor.mobile`). Build b4 adds full retained-log ZIP export and increments version code to 208. Eight Android JVM tests pass, including archive-completeness and cache-path checks. APK v2 signatures, 16 KB ZIP alignment, and `0x4000` ELF LOAD alignment pass. The package is ARM64-only and targets Android API 36. The export UI and Android content-provider handoff have not been exercised on hardware. See [the b4 log-export report](android-log-export-b4.md); detailed build logs remain local under `out/logs/`.
 
 ADB currently sees no device. The launcher has not been installed or run on a POCO/Android 16 device, so its rendered appearance, SAF provider behavior, Vulkan initialization, audio, game launch/resume, touch response, floating HUD, and match behavior remain unverified on hardware. Continue/resume save detection, writable graphics/audio settings, a mod manager, live Vulkan information, frame telemetry, touch sensitivity, external-only control filtering, and Android text-entry remain unavailable or incomplete. No benchmark or FPS improvement is claimed.

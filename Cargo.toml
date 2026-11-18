@@ -130,7 +130,7 @@ wgpu = "30.0.1"
 # metadata, but omits drawn title text when the compositor needs client-side
 # decorations. It avoids ab_glyph's unmaintained ttf-parser; X11/server-side
 # decorations and the macOS/Windows title bars keep their normal text.
-winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita-notitle"] }
+winit = { path = "tools/vendor/winit-0.30.13", version = "0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita-notitle"] }
 # raw-window-handle + windows-sys let us clip the OS cursor to the game window
 # with the Win32 ClipCursor API . That is reliable on frameless
 # windows. winit's CursorGrabMode::Confined instead clips a *hidden* cursor to a
@@ -234,7 +234,7 @@ libc = "0.2"
 # Android backend, which carries text input) replaces this feature if P6 picks
 # GameActivity over NativeActivity.
 [target.'cfg(target_os = "android")'.dependencies]
-winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "android-native-activity"] }
+winit = { path = "tools/vendor/winit-0.30.13", version = "0.30.13", default-features = false, features = ["rwh_06", "android-native-activity"] }
 
 # --- macOS application icon and game folder chooser ---
 # macOS has no per-window icon; the Dock shows NSApplication's icon image, which

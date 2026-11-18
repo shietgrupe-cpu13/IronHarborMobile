@@ -689,6 +689,11 @@ impl ApplicationHandler for App {
         // the parked touch cursor, not the hardware pointer.
         let from_touch = self.dispatching_touch;
 
+        #[cfg(target_os = "android")]
+        if !crate::app::input::android_control_mode::current().allows(&event, from_touch) {
+            return;
+        }
+
         // Touchscreens have no OS cursor, so each contact is re-issued as the
         // mouse events its gesture means; `input::touch` owns that mapping and
         // carries the per-platform gate. Capture sessions stay input-sealed:
