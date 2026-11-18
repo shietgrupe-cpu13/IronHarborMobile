@@ -70,11 +70,19 @@ for `CARGO_PROFILE_SHIPPING_STRIP`, and
 
 ## Android fork branding and launcher
 
-This Android fork packages only the VERA icon from `src/app/vera_icon.png`. The upstream retail icon and scene splash are not included. Both launcher aliases retained for the engine's existing icon preference show the VERA icon. `android/tools/make_launcher_icons.py` generates only that icon's density and adaptive resources. Android 12+ splash screens use the VERA icon on a neutral dark background.
+The fork is branded **Iron Harbor Mobile**, with application ID `org.ironharbor.mobile`. The Android package uses an original shield-and-monogram vector icon and neutral dark splash; it does not package the upstream VERA icon, retail emblem, or scene splash. Both launcher aliases retained for the engine's icon preference show the Iron Harbor icon. `android/tools/make_launcher_icons.py` generates the adaptive icon resources. The engine namespace remains `org.vera20k` for its existing JNI entry points.
 
 The Kotlin `LauncherActivity` uses platform Android Views and a landscape-first dark command-center layout. The launcher and existing NativeActivity run in separate Android processes; only the game process owns the winit event loop. Pressing Play starts the existing `VeraActivity` after checking for `ra2.mix` and `ra2md.mix` in the configured game directory. Import uses the system Storage Access Framework folder picker, copies to app-private staging storage, and publishes the new config only after a complete copy. It does not request all-files storage permission.
 
 See [android-launcher.md](android-launcher.md) for launcher sections, supported controls, current limitations, and baseline verification.
+
+## Release signing and ARM64 build b3
+
+The b3 fork uses the independent product name **Iron Harbor Mobile** and application ID `org.ironharbor.mobile`; `org.vera20k` remains the JNI namespace for the existing native entry points. Its release signing key is machine-specific and must never be committed. Create `android/.android/android-release.jks` and supply `ANDROID_RELEASE_STORE_FILE`, `ANDROID_RELEASE_STORE_PASSWORD`, `ANDROID_RELEASE_KEY_ALIAS`, and `ANDROID_RELEASE_KEY_PASSWORD` to Gradle from a secure local secret store. The checkout ignores `android/.android/`.
+
+For an ARM64 shipping build, set `CARGO_PROFILE_SHIPPING_STRIP=symbols`, build with `cargo ndk -t arm64-v8a --platform 26 -o android/app/src/main/jniLibs build --locked --profile shipping -p vera20k-android --no-default-features`, then run `android/gradlew.bat -p android :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease`. Use JDK 17+, Android SDK 36/build-tools 36.1.0, NDK 28.2.13676358, and Gradle 8.13. The app declares only `arm64-v8a`, matching the native library produced by this recipe.
+
+Build b3 verified six Android JVM tests, a shipping-profile ARM64 Rust build, signed debug and release APKs, the release application ID/SDK levels, 16 KB APK native-entry alignment, and 16 KB ELF LOAD alignment. The package contains no Yuri's Revenge installation files. No device was attached during this build; Android 16 POCO gameplay remains unverified. Build logs and hashes are in `out/logs/release-b3-android-report.md`.
 ## LAN play on Android
 
 LAN play between devices needs all of the following, and a missing one looks

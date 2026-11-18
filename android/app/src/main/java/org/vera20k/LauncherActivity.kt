@@ -120,17 +120,17 @@ class LauncherActivity : Activity() {
             setPadding(dp(4), dp(2), dp(4), dp(8))
         }
         val logo = ImageView(this).apply {
-            setImageResource(R.mipmap.ic_launcher_vera)
+            setImageResource(R.mipmap.ic_launcher_ironharbor)
             scaleType = ImageView.ScaleType.FIT_CENTER
-            contentDescription = "VERA20K independent fork icon"
+            contentDescription = "Iron Harbor Mobile app icon"
         }
         header.addView(logo, LinearLayout.LayoutParams(dp(52), dp(52)))
         val brand = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), 0, dp(8), 0)
         }
-        brand.addView(text("VERA COMMAND", 18, R.color.launcher_text, bold = true, tracking = 0.08f))
-        brand.addView(text("UNOFFICIAL ANDROID FORK  ·  ${appVersion()}", 10, R.color.launcher_muted, tracking = 0.06f))
+        brand.addView(text("IRON HARBOR", 18, R.color.launcher_text, bold = true, tracking = 0.08f))
+        brand.addView(text("MOBILE COMMAND  ·  ${appVersion()}", 10, R.color.launcher_muted, tracking = 0.06f))
         header.addView(brand, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         header.addView(text("GPLv3", 11, R.color.launcher_accent, bold = true, tracking = 0.08f))
         root.addView(header)
@@ -209,7 +209,7 @@ class LauncherActivity : Activity() {
         pageBody.addView(kicker("ANDROID COMMAND CENTER  /  ${appVersion()}"))
         pageBody.addView(text("Command the next\nfrontier.", 34, R.color.launcher_text, bold = true))
         pageBody.addView(text(
-            "An independent mobile client for VERA20K. Your game files stay private to this device and are never included in this app.",
+            "An independent mobile client based on YuriPlanet's VERA20K engine. Your game files stay private to this device and are never included in this app.",
             15,
             R.color.launcher_muted,
         ), margin(bottom = 18))
@@ -231,7 +231,7 @@ class LauncherActivity : Activity() {
         ), margin(top = 5))
         pageBody.addView(stateCard, margin(bottom = 12))
 
-        playButton = actionButton("PLAY VERA20K", primary = true) {
+        playButton = actionButton("START GAME", primary = true) {
             if (installation.ready) launchGame() else {
                 importNote = "Import your game folder before launching."
                 page = Page.FILES
@@ -247,7 +247,7 @@ class LauncherActivity : Activity() {
 
         val engine = card()
         engine.addView(kicker("ENGINE STATUS"))
-        infoRow(engine, "Build", "VERA20K ${appVersion()}")
+        infoRow(engine, "Engine", "VERA20K ${appVersion()}")
         infoRow(engine, "Renderer", "Vulkan required by this build")
         infoRow(engine, "Attribution", "YuriPlanet / VERA20K · GPLv3")
         pageBody.addView(engine)
@@ -311,7 +311,7 @@ class LauncherActivity : Activity() {
         guide.addView(kicker("WHAT THE CHECKER USES"))
         infoRow(guide, "Required", "ra2.mix and ra2md.mix")
         infoRow(guide, "Storage", "App-private copy; no all-files permission")
-        infoRow(guide, "Game data", "Not bundled with VERA20K")
+        infoRow(guide, "Game data", "Not bundled with this app")
         pageBody.addView(guide)
     }
 
@@ -354,7 +354,7 @@ class LauncherActivity : Activity() {
         pageBody.addView(text("Mods", 30, R.color.launcher_text, bold = true))
         val card = card()
         card.addView(kicker("NOT AVAILABLE IN THIS BUILD", R.color.launcher_warning))
-        card.addView(text("VERA20K's Android client does not currently expose a mod profile manager.", 16, R.color.launcher_text, bold = true))
+        card.addView(text("This build does not currently expose a mod profile manager.", 16, R.color.launcher_text, bold = true))
         card.addView(text("No compatibility or launch profile is implied here. The engine uses the selected Yuri's Revenge installation and its supported rules.", 13, R.color.launcher_muted), margin(top = 8))
         pageBody.addView(card)
     }
@@ -382,7 +382,7 @@ class LauncherActivity : Activity() {
 
     private fun shareDiagnostics(memory: ActivityManager.MemoryInfo) {
         val report = buildString {
-            appendLine("VERA20K unofficial Android fork diagnostics")
+            appendLine("Iron Harbor Mobile diagnostics (based on YuriPlanet VERA20K)")
             appendLine("Version: ${appVersion()}")
             appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL}")
             appendLine("Android: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
@@ -396,7 +396,7 @@ class LauncherActivity : Activity() {
         }
         val send = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
-            putExtra(Intent.EXTRA_SUBJECT, "VERA20K Android diagnostics")
+            putExtra(Intent.EXTRA_SUBJECT, "Iron Harbor Mobile diagnostics")
             putExtra(Intent.EXTRA_TEXT, report)
         }
         startActivity(Intent.createChooser(send, "Share diagnostic summary"))
@@ -530,7 +530,7 @@ class LauncherActivity : Activity() {
         try {
             startActivity(Intent(this, VeraActivity::class.java))
         } catch (error: Exception) {
-            Toast.makeText(this, "Could not start VERA20K: ${error.message}", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Could not start the game: ${error.message}", Toast.LENGTH_LONG).show()
         }
     }
 

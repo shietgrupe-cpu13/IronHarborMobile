@@ -1,12 +1,12 @@
 # Android launcher baseline
 
-VERA20K Android is an unofficial fork of [YuriPlanet/vera20k](https://github.com/YuriPlanet/vera20k). It retains upstream GPLv3 notices and attribution. It is not an official release and is not affiliated with Electronic Arts. Game installation files are supplied by the user and are not packaged with the application.
+Iron Harbor Mobile is an unofficial fork based on [YuriPlanet/vera20k](https://github.com/YuriPlanet/vera20k). It retains upstream GPLv3 notices and attribution, uses its own product name and application ID (`org.ironharbor.mobile`), and is not an official release. It is not affiliated with Electronic Arts. Game installation files are supplied by the user and are not packaged with the application.
 
 ## Launcher flow
 
 `LauncherActivity` is a platform Android Views activity, built without introducing a second UI framework. It uses a landscape-first, dark command-center layout with green accents and touch-sized controls. Its six sections are:
 
-- **Home:** VERA fork identification, build and engine status, installation readiness, configured game path, and Play.
+- **Home:** Iron Harbor Mobile branding, upstream engine attribution, build status, installation readiness, configured game path, and Play.
 - **Game Files:** Android Storage Access Framework folder selection, required archive checks, import progress, cancellation, and safe replacement.
 - **Game Settings:** reports landscape handling, Vulkan, surface-based resolution, engine audio defaults, and which controls are not yet wired.
 - **Touch Controls:** describes the gesture mapping; sensitivity and overlay editing are unavailable.
@@ -21,11 +21,11 @@ Play starts the existing `VeraActivity` NativeActivity, which loads `libvera20k_
 
 The read-only visual/functional reference was `E:\RA2YRPORT\private-main-5bb0f38`, particularly `android/app/src/main/java/org/ra2/engine/SetupActivity.java`, touch settings/layout classes, and the import/diagnostics screens. Its dark card design, large Play action, readiness presentation, and grouped tools informed this launcher. The reference project itself was not modified.
 
-The Android package includes only the VERA icon for its launcher aliases and uses a neutral splash background. It excludes the upstream retail emblem and `splash_hero` bitmap. `android/tools/make_launcher_icons.py` generates the VERA icon only.
+The Android package uses only the original Iron Harbor vector mark and a neutral splash background. It excludes the upstream VERA icon, retail emblem, and `splash_hero` bitmap. `android/tools/make_launcher_icons.py` generates the Iron Harbor adaptive-icon XML only.
 
 ## Verification and limitations
 
-Build b2 compiles the ARM64 Rust library using the optimized `fast` profile and packages a debug APK. The Android JVM suite reports six passing tests. APK v2/v3 signatures, 16 KB ZIP alignment, and `0x4000` ELF LOAD alignment pass. The package is ARM64-only and targets Android API 36. See `out/logs/android-launcher-baseline-report.md` and the associated build logs for the artifact hash and detailed checks.
+Build b2 compiled the ARM64 Rust library using the optimized `fast` profile and packaged a debug APK. Build b3 uses the optimized `shipping` Rust profile and produces independently branded Iron Harbor Mobile debug and release APKs (`org.ironharbor.mobile`). The Android JVM suite reports six passing tests. APK v2 signatures, 16 KB ZIP alignment, and `0x4000` ELF LOAD alignment pass. The package is ARM64-only and targets Android API 36. See `out/logs/release-b3-android-report.md` and the associated build logs for artifact hashes and detailed checks.
 
 ADB currently sees no device. The launcher has not been installed or run on a POCO/Android 16 device, so its rendered appearance, SAF provider behavior, Vulkan initialization, audio, game launch/resume, touch response, and match behavior remain unverified on hardware. Continue/resume save detection, writable graphics/audio settings, a mod manager, live Vulkan information, frame telemetry, touch sensitivity, and overlay editing are unavailable in this baseline. No benchmark or FPS improvement is claimed.
 

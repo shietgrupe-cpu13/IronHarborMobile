@@ -1,22 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Android 12+ splash is branded with VERA's original icon. -->
-    <style name="Theme.Vera20k" parent="android:Theme.Black.NoTitleBar.Fullscreen">
+    <!-- Original Iron Harbor icon on a neutral dark background. -->
+    <style name="Theme.IronHarbor.Game" parent="android:Theme.Black.NoTitleBar.Fullscreen">
         <item name="android:windowBackground">@drawable/splash_background</item>
-        <item name="android:windowSplashScreenBackground">@color/splash_background</item>
-        <item name="android:windowSplashScreenAnimatedIcon">@mipmap/ic_launcher_vera_foreground</item>
+        <item name="android:windowSplashScreenBackground">@color/launcher_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher_ironharbor_foreground</item>
         <item name="android:windowSplashScreenAnimationDuration">0</item>
     </style>
 
-    <style name="Theme.Vera20k.RetailSplash" parent="Theme.Vera20k.Launcher">
+    <style name="Theme.IronHarbor.PrimarySplash" parent="Theme.IronHarbor.Launcher">
         <item name="android:windowSplashScreenBackground">@color/launcher_background</item>
-        <item name="android:windowSplashScreenAnimatedIcon">@mipmap/ic_launcher_vera_foreground</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher_ironharbor_foreground</item>
         <item name="android:windowSplashScreenAnimationDuration">0</item>
     </style>
 
-    <style name="Theme.Vera20k.VeraSplash" parent="Theme.Vera20k.Launcher">
+    <style name="Theme.IronHarbor.SecondarySplash" parent="Theme.IronHarbor.Launcher">
         <item name="android:windowSplashScreenBackground">@color/launcher_background</item>
-        <item name="android:windowSplashScreenAnimatedIcon">@mipmap/ic_launcher_vera_foreground</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher_ironharbor_foreground</item>
         <item name="android:windowSplashScreenAnimationDuration">0</item>
     </style>
 </resources>

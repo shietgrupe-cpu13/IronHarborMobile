@@ -6,7 +6,8 @@ import android.app.NativeActivity
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.BitmapFactory
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -43,8 +44,8 @@ class VeraActivity : NativeActivity() {
         val REQUIRED_ARCHIVES = listOf("ra2md.mix", "ra2.mix")
 
         /** The two launcher entries; exactly one is enabled at a time. */
-        const val LAUNCHER_RETAIL = "org.vera20k.LauncherRetail"
-        const val LAUNCHER_VERA = "org.vera20k.LauncherVera"
+        const val LAUNCHER_PRIMARY = "org.vera20k.LauncherPrimary"
+        const val LAUNCHER_SECONDARY = "org.vera20k.LauncherSecondary"
     }
 
     /**
@@ -123,8 +124,8 @@ class VeraActivity : NativeActivity() {
     }
 
     private fun applyAppIconOnUi(veraIcon: Boolean) {
-        val wanted = if (veraIcon) LAUNCHER_VERA else LAUNCHER_RETAIL
-        val other = if (veraIcon) LAUNCHER_RETAIL else LAUNCHER_VERA
+        val wanted = if (veraIcon) LAUNCHER_SECONDARY else LAUNCHER_PRIMARY
+        val other = if (veraIcon) LAUNCHER_PRIMARY else LAUNCHER_SECONDARY
         val wantedName = ComponentName(this, wanted)
         val otherName = ComponentName(this, other)
         val enabled = PackageManager.COMPONENT_ENABLED_STATE_ENABLED
@@ -134,7 +135,7 @@ class VeraActivity : NativeActivity() {
         if (packageManager.getComponentEnabledSetting(wantedName) == enabled &&
             packageManager.getComponentEnabledSetting(otherName) == disabled
         ) {
-            updateTaskDescription(veraIcon)
+            updateTaskDescription()
             return
         }
         packageManager.setComponentEnabledSetting(wantedName, enabled, PackageManager.DONT_KILL_APP)
@@ -153,13 +154,12 @@ class VeraActivity : NativeActivity() {
     }
 
     /** The app switcher's picture and label for the chosen icon. */
-    private fun updateTaskDescription(veraIcon: Boolean) {
-        // The adaptive icon is an XML drawable, which decodes to no bitmap; the
-        // foreground PNG is the same artwork the launcher composites.
-        val icon = BitmapFactory.decodeResource(
-            resources,
-            R.mipmap.ic_launcher_vera_foreground,
-        ) ?: return
+    private fun updateTaskDescription() {
+        val iconSize = (48 * resources.displayMetrics.density).toInt().coerceAtLeast(1)
+        val icon = Bitmap.createBitmap(iconSize, iconSize, Bitmap.Config.ARGB_8888)
+        val drawable = resources.getDrawable(R.drawable.ic_launcher_ironharbor_foreground, theme)
+        drawable.setBounds(0, 0, iconSize, iconSize)
+        drawable.draw(Canvas(icon))
         setTaskDescription(
             TaskDescription(applicationInfo.loadLabel(packageManager).toString(), icon),
         )

@@ -1,8 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- The hero image's own edge colour, so the launch window, the system
-         splash and the art itself never flash three different shades. -->
-    <color name="splash_background">#FF201E3F</color>
     <color name="launcher_background">#09131B</color>
     <color name="launcher_surface">#12212A</color>
     <color name="launcher_surface_alt">#192B35</color>

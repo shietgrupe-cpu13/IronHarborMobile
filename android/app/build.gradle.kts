@@ -24,6 +24,29 @@ val veraVersionName: String = rootProject.file("../Cargo.toml")
     .substringAfter('"')
     .substringBefore('"')
 val veraVersionCode = 207
+val releaseStoreFile = System.getenv("ANDROID_RELEASE_STORE_FILE")
+val releaseStorePassword = System.getenv("ANDROID_RELEASE_STORE_PASSWORD")
+val releaseKeyAlias = System.getenv("ANDROID_RELEASE_KEY_ALIAS")
+val releaseKeyPassword = System.getenv("ANDROID_RELEASE_KEY_PASSWORD")
+val releaseSigningConfigured = listOf(
+    releaseStoreFile,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+).all { !it.isNullOrBlank() }
+
+gradle.taskGraph.whenReady {
+    val releaseRequested = allTasks.any { task ->
+        task.project == project && task.name.contains("Release")
+    }
+    if (releaseRequested && !releaseSigningConfigured) {
+        throw GradleException(
+            "Release signing requires ANDROID_RELEASE_STORE_FILE, " +
+                "ANDROID_RELEASE_STORE_PASSWORD, ANDROID_RELEASE_KEY_ALIAS, " +
+                "and ANDROID_RELEASE_KEY_PASSWORD."
+        )
+    }
+}
 
 android {
     namespace = "org.vera20k"
@@ -37,18 +60,17 @@ android {
     ndkVersion = "28.2.13676358"
 
     defaultConfig {
-        applicationId = "org.vera20k"
+        applicationId = "org.ironharbor.mobile"
         // cpal 0.17's Android backend is AAudio, which needs API 26.
         minSdk = 26
         targetSdk = 36
         versionCode = veraVersionCode
         versionName = veraVersionName
 
-        // arm64 is the Play requirement and the only ABI worth a real device
-        // build; x86_64 exists for the emulator. armeabi-v7a is deliberately
-        // absent — 32-bit address space cannot hold a 20k-unit game.
+        // This build packages the shipping ARM64 Rust library. Do not advertise
+        // x86_64 unless its native library is built and packaged as well.
         ndk {
-            abiFilters += listOf("arm64-v8a", "x86_64")
+            abiFilters += listOf("arm64-v8a")
         }
     }
 
@@ -60,6 +82,14 @@ android {
         getByName("debug") {
             storeFile = rootProject.file(".android/debug.keystore")
         }
+        create("release") {
+            storeFile = rootProject.file(
+                releaseStoreFile ?: ".android/android-release.jks"
+            )
+            storePassword = releaseStorePassword ?: ""
+            keyAlias = releaseKeyAlias ?: ""
+            keyPassword = releaseKeyPassword ?: ""
+        }
     }
 
     buildTypes {
@@ -70,6 +100,7 @@ android {
             // Keep JVM entry points named for the native JNI callbacks.
             // The shipping Cargo command strips native symbols separately.
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 
