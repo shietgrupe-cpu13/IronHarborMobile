@@ -472,6 +472,8 @@ class LauncherActivity : Activity() {
         root.addView(text("Choose visible controls, assign them to Always / Set 1 / Set 2, then switch sets from the in-game HUD. Drag, resize, and transfer your setup when needed.", 13, R.color.launcher_muted), margin(bottom = 8))
         val checkboxes = mutableListOf<Pair<String, CheckBox>>()
         val controlSets = TouchHudSettings.parseControlSets(prefs.getString(TouchHudSettings.HUD_CONTROL_SETS, null)).toMutableMap()
+        val sizes = TouchHudSettings.parseSizes(prefs.getString(TouchHudSettings.HUD_SIZES, null)).toMutableMap()
+        val sizeOptions = listOf(70, 85, 100, 115, 130, 150)
         choices.forEach { action ->
             val check = CheckBox(this).apply {
                 val bound = prefs.contains("key_${action.id}") || action.defaultKeyCode != KeyEvent.KEYCODE_UNKNOWN
@@ -497,6 +499,18 @@ class LauncherActivity : Activity() {
                 }
                 row.addView(setSpinner, LinearLayout.LayoutParams(dp(112), ViewGroup.LayoutParams.WRAP_CONTENT))
             }
+            val sizeSpinner = Spinner(this).apply {
+                adapter = ArrayAdapter(this@LauncherActivity, android.R.layout.simple_spinner_dropdown_item, sizeOptions.map { "$it%" })
+                val currentSize = sizes[action.id] ?: 100
+                setSelection(sizeOptions.indexOf(currentSize).takeIf { it >= 0 } ?: 2)
+            }
+            sizeSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                    sizes[action.id] = sizeOptions[position]
+                }
+                override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+            }
+            row.addView(sizeSpinner, LinearLayout.LayoutParams(dp(78), ViewGroup.LayoutParams.WRAP_CONTENT))
             root.addView(row)
             checkboxes += action.id to check
         }
@@ -527,6 +541,12 @@ class LauncherActivity : Activity() {
             setSelection(prefs.getInt(TouchHudSettings.HUD_LAYOUT, TouchHudSettings.LAYOUT_FREE).coerceIn(0, layoutNames.lastIndex))
         }
         root.addView(layout)
+        root.addView(text("Button dock", 13, R.color.launcher_text), margin(top = 5))
+        val dock = Spinner(this).apply {
+            adapter = ArrayAdapter(this@LauncherActivity, android.R.layout.simple_spinner_dropdown_item, listOf("Bottom left", "Left edge", "Bottom right"))
+            setSelection(prefs.getInt(TouchHudSettings.HUD_DOCK, 0).coerceIn(0, 2))
+        }
+        root.addView(dock)
         root.addView(text("A preset resets button positions to its starting arrangement. You can drag buttons during a match afterward.", 12, R.color.launcher_muted), margin(top = 3, bottom = 5))
         val backupButtons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val export = Button(this).apply { text = "EXPORT HUD" }
@@ -559,14 +579,19 @@ class LauncherActivity : Activity() {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val selected = checkboxes.filter { it.second.isChecked }.mapTo(linkedSetOf()) { it.first }
                 val previousLayout = prefs.getInt(TouchHudSettings.HUD_LAYOUT, TouchHudSettings.LAYOUT_FREE)
+                val previousDock = prefs.getInt(TouchHudSettings.HUD_DOCK, 0)
                 val edit = prefs.edit()
                     .putString(TouchHudSettings.HUD_VISIBLE, TouchHudSettings.encodeVisible(selected))
                     .putString(TouchHudSettings.HUD_CONTROL_SETS, TouchHudSettings.encodeControlSets(controlSets))
+                    .putString(TouchHudSettings.HUD_SIZES, TouchHudSettings.encodeSizes(sizes))
                     .putInt(TouchHudSettings.HUD_SCALE, TouchHudSettings.clampScale(scale.progress + 70))
                     .putInt(TouchHudSettings.HUD_OPACITY, TouchHudSettings.clampOpacity(opacity.progress + 30))
                     .putInt(TouchHudSettings.HUD_LAYOUT, layout.selectedItemPosition)
+                    .putInt(TouchHudSettings.HUD_DOCK, dock.selectedItemPosition)
                     .putBoolean(TouchHudSettings.HUD_ENABLED, true)
-                if (previousLayout != layout.selectedItemPosition) edit.putString(TouchHudSettings.HUD_POSITIONS, "")
+                if (previousLayout != layout.selectedItemPosition || previousDock != dock.selectedItemPosition) {
+                    edit.putString(TouchHudSettings.HUD_POSITIONS, "")
+                }
                 edit.apply()
                 dialog.dismiss()
                 Toast.makeText(this, "HUD settings saved. They apply the next time you start a match.", Toast.LENGTH_LONG).show()
@@ -597,6 +622,7 @@ class LauncherActivity : Activity() {
                 if (prefs.contains("key_${action.id}")) action.id to prefs.getInt("key_${action.id}", 0) else null
             }.toMap(),
             TouchHudSettings.parseControlSets(prefs.getString(TouchHudSettings.HUD_CONTROL_SETS, null)),
+            prefs.getInt(TouchHudSettings.HUD_DOCK, 0),
         )
         runCatching { (contentResolver.openOutputStream(uri, "wt") ?: error("Selected document could not be opened")).bufferedWriter().use { it.write(payload) } }
             .onSuccess { Toast.makeText(this, "HUD layout exported.", Toast.LENGTH_SHORT).show() }
@@ -634,6 +660,7 @@ class LauncherActivity : Activity() {
             .putInt(TouchHudSettings.HUD_SCALE, imported.scale)
             .putInt(TouchHudSettings.HUD_OPACITY, imported.opacity)
             .putInt(TouchHudSettings.HUD_LAYOUT, imported.layout)
+            .putInt(TouchHudSettings.HUD_DOCK, imported.dock)
             .putBoolean(TouchHudSettings.HUD_COLLAPSED, false)
             .putBoolean(TouchHudSettings.HUD_ENABLED, true)
         TouchHudSettings.remappableActions.forEach { edit.remove("key_${it.id}") }

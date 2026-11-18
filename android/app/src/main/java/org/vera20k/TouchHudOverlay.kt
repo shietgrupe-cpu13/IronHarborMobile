@@ -67,6 +67,7 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
         val opacity = TouchHudSettings.clampOpacity(prefs.getInt(TouchHudSettings.HUD_OPACITY, 88)) / 100f
         val layout = prefs.getInt(TouchHudSettings.HUD_LAYOUT, TouchHudSettings.LAYOUT_FREE)
             .coerceIn(TouchHudSettings.LAYOUT_FREE, TouchHudSettings.LAYOUT_YURI)
+        val dock = prefs.getInt(TouchHudSettings.HUD_DOCK, 0).coerceIn(0, 2)
         val controlSets = TouchHudSettings.parseControlSets(prefs.getString(TouchHudSettings.HUD_CONTROL_SETS, null))
         val activeSet = prefs.getInt(TouchHudSettings.HUD_ACTIVE_SET, 1).coerceIn(1, 2)
         val collapsed = prefs.getBoolean(TouchHudSettings.HUD_COLLAPSED, false) && !editMode
@@ -109,7 +110,7 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
                 setOnTouchListener(dragListener(this, action.id, positions))
             }
             buttons[action.id] = view
-            val point = positions[action.id] ?: TouchHudSettings.defaultPosition(action.id, layout)
+            val point = positions[action.id] ?: TouchHudSettings.defaultPosition(action.id, layout, dock)
             addPanel(manager, view, point)
         }
 
@@ -160,12 +161,16 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
             background = buttonBackground(0.94f)
             contentDescription = if (collapsed) "Show floating controls" else "Hide floating controls"
             setOnClickListener {
+                if (editMode) return@setOnClickListener
                 prefs.edit().putBoolean(TouchHudSettings.HUD_COLLAPSED, !collapsed).apply()
                 populate()
             }
+            setOnTouchListener(dragListener(this, TouchHudSettings.HUD_TOGGLE, positions))
         }
         foldButton = fold
-        addPanel(manager, fold, 0.82f to 0.15f)
+        val togglePosition = positions[TouchHudSettings.HUD_TOGGLE]
+            ?: TouchHudSettings.defaultPosition(TouchHudSettings.HUD_TOGGLE, layout, dock)
+        addPanel(manager, fold, togglePosition)
     }
 
     private fun addPanel(manager: WindowManager, view: View, point: Pair<Float, Float>) {
@@ -242,7 +247,10 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
     private fun positionsForViews(): MutableMap<String, Pair<Float, Float>> =
         TouchHudSettings.parsePositions(prefs.getString(TouchHudSettings.HUD_POSITIONS, null))
             .toMutableMap()
-            .apply { buttons.forEach { (id, view) -> put(id, normalizedPosition(view)) } }
+            .apply {
+                buttons.forEach { (id, view) -> put(id, normalizedPosition(view)) }
+                foldButton?.let { put(TouchHudSettings.HUD_TOGGLE, normalizedPosition(it)) }
+            }
 
     private fun savePositions(positions: Map<String, Pair<Float, Float>>) {
         prefs.edit().putString(TouchHudSettings.HUD_POSITIONS, TouchHudSettings.encodePositions(positions)).apply()

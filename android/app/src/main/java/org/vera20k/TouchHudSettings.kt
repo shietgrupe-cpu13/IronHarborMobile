@@ -14,6 +14,8 @@ internal object TouchHudSettings {
     const val HUD_COLLAPSED = "hud_collapsed"
     const val HUD_CONTROL_SETS = "hud_control_sets"
     const val HUD_ACTIVE_SET = "hud_active_set"
+    const val HUD_DOCK = "hud_dock"
+    const val HUD_TOGGLE = "HUD_TOGGLE"
 
     const val LAYOUT_FREE = 0
     const val LAYOUT_TWO_THUMB = 1
@@ -65,9 +67,24 @@ internal object TouchHudSettings {
     fun clampOpacity(value: Int): Int = value.coerceIn(30, 100)
     fun clampButtonSize(value: Int): Int = value.coerceIn(70, 150)
 
-    fun defaultPosition(id: String, layout: Int = LAYOUT_FREE): Pair<Float, Float> {
+    fun defaultPosition(id: String, layout: Int = LAYOUT_FREE, dock: Int = 0): Pair<Float, Float> {
+        if (id == HUD_TOGGLE) return when (dock.coerceIn(0, 2)) {
+            0 -> 0.03f to 0.90f
+            1 -> 0.03f to 0.50f
+            else -> 0.90f to 0.90f
+        }
         val button = buttons.firstOrNull { it.id == id } ?: return 0.85f to 0.85f
         val actionIndex = commandButtons.indexOfFirst { it.id == id }
+        if (dock == 1) {
+            if (button.groupNumber != null) return 0.03f to (0.06f + (button.groupNumber - 1) * 0.085f).coerceAtMost(0.88f)
+            val slot = actionIndex.coerceAtLeast(0)
+            return (0.15f + (slot % 2) * 0.12f) to (0.06f + (slot / 2) * 0.085f).coerceAtMost(0.88f)
+        }
+        if (dock == 2) {
+            if (button.groupNumber != null) return 0.92f to (0.06f + (button.groupNumber - 1) * 0.085f).coerceAtMost(0.88f)
+            val slot = actionIndex.coerceAtLeast(0)
+            return (0.48f + (slot % 4) * 0.12f) to (0.82f - (slot / 4) * 0.12f).coerceAtLeast(0.06f)
+        }
         if (layout == LAYOUT_TWO_THUMB) {
             if (button.groupNumber != null) return 0.03f to (0.10f + ((button.groupNumber - 1) % 5) * 0.15f)
             if (actionIndex >= 4) {
@@ -105,7 +122,7 @@ internal object TouchHudSettings {
     }
 
     fun parsePositions(encoded: String?): Map<String, Pair<Float, Float>> {
-        val valid = buttons.mapTo(hashSetOf()) { it.id }
+        val valid = buttons.mapTo(hashSetOf()) { it.id }.apply { add(HUD_TOGGLE) }
         val result = linkedMapOf<String, Pair<Float, Float>>()
         encoded.orEmpty().split(';').forEach { entry ->
             val pair = entry.split(':', limit = 2)
@@ -120,8 +137,8 @@ internal object TouchHudSettings {
         return result
     }
 
-    fun encodePositions(positions: Map<String, Pair<Float, Float>>): String = buttons.asSequence()
-        .mapNotNull { button -> positions[button.id]?.let { button.id to it } }
+    fun encodePositions(positions: Map<String, Pair<Float, Float>>): String = (buttons.map { it.id } + HUD_TOGGLE).asSequence()
+        .mapNotNull { id -> positions[id]?.let { id to it } }
         .joinToString(";") { (id, point) -> "$id:${point.first.coerceIn(0f, 1f)},${point.second.coerceIn(0f, 1f)}" }
 
     fun parseSizes(encoded: String?): Map<String, Int> {
@@ -148,14 +165,16 @@ internal object TouchHudSettings {
         layout: Int,
         keyBindings: Map<String, Int> = emptyMap(),
         controlSets: Map<String, Int> = emptyMap(),
+        dock: Int = 0,
     ): String = listOf(
         "format=iron-harbor-hud",
-        "version=2",
+        "version=3",
         "visible=${encodeVisible(visible)}",
         "positions=${encodePositions(positions)}",
         "sizes=${encodeSizes(sizes)}",
         "keybindings=${encodeKeyBindings(keyBindings)}",
         "controlsets=${encodeControlSets(controlSets)}",
+        "dock=${dock.coerceIn(0, 2)}",
         "scale=${clampScale(scale)}",
         "opacity=${clampOpacity(opacity)}",
         "layout=${layout.coerceIn(LAYOUT_FREE, LAYOUT_YURI)}",
@@ -171,6 +190,7 @@ internal object TouchHudSettings {
         val layout: Int,
         val keyBindings: Map<String, Int>,
         val controlSets: Map<String, Int>,
+        val dock: Int,
     )
 
     fun decodeLayoutBackup(source: String): LayoutBackup? {
@@ -179,12 +199,13 @@ internal object TouchHudSettings {
             if (separator <= 0) null else line.substring(0, separator) to line.substring(separator + 1)
         }.toMap()
         val version = fields["version"]?.toIntOrNull()
-        if (fields["format"] != "iron-harbor-hud" || version !in 1..2) return null
+        if (fields["format"] != "iron-harbor-hud" || version == null || version !in 1..3) return null
         val visible = parseVisible(fields["visible"], true)
         val scale = fields["scale"]?.toIntOrNull() ?: return null
         val opacity = fields["opacity"]?.toIntOrNull() ?: return null
         val layout = fields["layout"]?.toIntOrNull() ?: return null
-        if (visible.isEmpty() || scale !in 70..150 || opacity !in 30..100 || layout !in LAYOUT_FREE..LAYOUT_YURI) return null
+        val dock = if (version >= 3) fields["dock"]?.toIntOrNull() ?: return null else 0
+        if (visible.isEmpty() || scale !in 70..150 || opacity !in 30..100 || layout !in LAYOUT_FREE..LAYOUT_YURI || dock !in 0..2) return null
         return LayoutBackup(
             visible,
             parsePositions(fields["positions"]),
@@ -193,7 +214,8 @@ internal object TouchHudSettings {
             opacity,
             layout,
             parseKeyBindings(fields["keybindings"]),
-            if (version == 2) parseControlSets(fields["controlsets"]) else emptyMap(),
+            if (version >= 2) parseControlSets(fields["controlsets"]) else emptyMap(),
+            dock,
         )
     }
 

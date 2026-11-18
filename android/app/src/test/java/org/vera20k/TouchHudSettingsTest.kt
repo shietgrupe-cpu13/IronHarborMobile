@@ -57,6 +57,14 @@ class TouchHudSettingsTest {
                 assertTrue("${button.id} y=$y", y in 0f..1f)
             }
         }
+        for (dock in 0..2) {
+            TouchHudSettings.buttons.forEach { button ->
+                val (x, y) = TouchHudSettings.defaultPosition(button.id, TouchHudSettings.LAYOUT_FREE, dock)
+                assertTrue("${button.id} dock $dock x=$x", x in 0f..1f)
+                assertTrue("${button.id} dock $dock y=$y", y in 0f..1f)
+            }
+        }
+        assertEquals(0.90f to 0.90f, TouchHudSettings.defaultPosition(TouchHudSettings.HUD_TOGGLE, dock = 2))
         assertTrue(TouchHudSettings.defaultPosition("C1", TouchHudSettings.LAYOUT_TWO_THUMB).first <
             TouchHudSettings.defaultPosition("C1", TouchHudSettings.LAYOUT_YURI).first)
     }
@@ -64,13 +72,14 @@ class TouchHudSettingsTest {
     @Test fun hudLayoutBackupRoundTripsAndRejectsUnsupportedOrMalformedData() {
         val encoded = TouchHudSettings.encodeLayoutBackup(
             setOf("STOP", "C3"),
-            mapOf("STOP" to (0.2f to 0.7f), "C3" to (0.8f to 0.4f)),
+            mapOf("STOP" to (0.2f to 0.7f), "C3" to (0.8f to 0.4f), TouchHudSettings.HUD_TOGGLE to (0.03f to 0.9f)),
             mapOf("C3" to 125),
             120,
             70,
             TouchHudSettings.LAYOUT_YURI,
             mapOf("FIRE" to 32, "PATROL" to 1030, "UNKNOWN" to 44),
             mapOf("FIRE" to 1, "PATROL" to 2, "STOP" to 9, "MOVE" to 0),
+            2,
         )
         val decoded = TouchHudSettings.decodeLayoutBackup(encoded)
         assertEquals(setOf("STOP", "C3"), decoded?.visible)
@@ -80,12 +89,18 @@ class TouchHudSettingsTest {
         assertEquals(TouchHudSettings.LAYOUT_YURI, decoded?.layout)
         assertEquals(mapOf("FIRE" to 32), decoded?.keyBindings)
         assertEquals(mapOf("FIRE" to 1, "MOVE" to 0, "PATROL" to 2), decoded?.controlSets)
-        assertEquals(null, TouchHudSettings.decodeLayoutBackup(encoded.replace("version=2", "version=88")))
+        assertEquals(2, decoded?.dock)
+        assertEquals(0.9f, decoded?.positions?.get(TouchHudSettings.HUD_TOGGLE)?.second ?: Float.NaN, 0.0001f)
+        assertEquals(null, TouchHudSettings.decodeLayoutBackup(encoded.replace("version=3", "version=88")))
         assertEquals(null, TouchHudSettings.decodeLayoutBackup(encoded.replace("scale=120", "scale=999")))
         assertEquals(mapOf("GUARD" to 29), TouchHudSettings.parseKeyBindings("GUARD:29;STOP:0;FIRE:nope;OTHER:41"))
         assertEquals(mapOf("MOVE" to 2), TouchHudSettings.parseControlSets("MOVE:2;STOP:9;C1:1;BAD:nope"))
-        val legacy = encoded.replace("version=2", "version=1").lineSequence()
-            .filterNot { it.startsWith("controlsets=") }.joinToString("\n")
+        val b14 = encoded.replace("version=3", "version=2").lineSequence()
+            .filterNot { it.startsWith("dock=") }.joinToString("\n")
+        assertEquals(mapOf("FIRE" to 1, "MOVE" to 0, "PATROL" to 2), TouchHudSettings.decodeLayoutBackup(b14)?.controlSets)
+        val legacy = encoded.replace("version=3", "version=1").lineSequence()
+            .filterNot { it.startsWith("controlsets=") || it.startsWith("dock=") }.joinToString("\n")
         assertEquals(emptyMap<String, Int>(), TouchHudSettings.decodeLayoutBackup(legacy)?.controlSets)
+        assertEquals(0, TouchHudSettings.decodeLayoutBackup(legacy)?.dock)
     }
 }
