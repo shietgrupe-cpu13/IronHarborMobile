@@ -47,6 +47,35 @@ class TouchHudSettingsTest {
         assertEquals(7, groups.last().defaultKeyCode) // Android KEYCODE_0 / retail team 10
     }
 
+    @Test fun previewAndLiveSetsUseTheSameVisibilityRulesAndSaveSelectorPlacement() {
+        val visible = setOf("STOP", "FIRE", "MOVE", "C1", "C2")
+        val assignments = mapOf("FIRE" to 2, "MOVE" to 1)
+        assertEquals(
+            visible,
+            TouchHudSettings.visibleForSet(visible, assignments, activeSet = 0),
+        )
+        assertEquals(
+            setOf("STOP", "MOVE", "C1", "C2"),
+            TouchHudSettings.visibleForSet(visible, assignments, activeSet = 1),
+        )
+        assertEquals(
+            setOf("STOP", "FIRE", "C1", "C2"),
+            TouchHudSettings.visibleForSet(visible, assignments, activeSet = 2),
+        )
+        assertEquals(
+            mapOf(TouchHudSettings.SET_ONE to (0.2f to 0.3f), TouchHudSettings.SET_TWO to (0.7f to 0.4f)),
+            TouchHudSettings.parsePositions(
+                TouchHudSettings.encodePositions(
+                    mapOf(TouchHudSettings.SET_ONE to (0.2f to 0.3f), TouchHudSettings.SET_TWO to (0.7f to 0.4f)),
+                ),
+            ),
+        )
+        assertEquals(
+            mapOf(TouchHudSettings.SET_ONE to 120),
+            TouchHudSettings.parseSizes(TouchHudSettings.encodeSizes(mapOf(TouchHudSettings.SET_ONE to 120))),
+        )
+    }
+
     @Test fun commandButtonsUseStockAndroidPhysicalKeyCodes() {
         assertEquals(47, TouchHudSettings.buttons.first { it.id == "STOP" }.defaultKeyCode) // S
         assertEquals(29, TouchHudSettings.buttons.first { it.id == "GUARD" }.defaultKeyCode) // A

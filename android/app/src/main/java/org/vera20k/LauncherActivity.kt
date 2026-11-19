@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Debug
 import android.provider.DocumentsContract
+import android.provider.OpenableColumns
 import android.view.KeyEvent
 import android.view.Gravity
 import android.view.View
@@ -42,12 +43,13 @@ import java.util.Locale
 class LauncherActivity : Activity() {
     private enum class Page(val title: String) {
         HOME("HOME"), FILES("GAME FILES"), SETTINGS("SETTINGS"),
-        TOUCH("TOUCH"), MODS("MODS"), DIAGNOSTICS("DIAGNOSTICS"),
+        TOUCH("TOUCH"), MODS("MODS"), MAPS("MAPS"), DIAGNOSTICS("DIAGNOSTICS"),
     }
 
     private companion object {
         const val REQUEST_PICK_GAME = 0x564c
         const val REQUEST_PICK_MOD = 0x564d
+        const val REQUEST_PICK_MAPS = 0x5650
         const val REQUEST_EXPORT_HUD = 0x564e
         const val REQUEST_IMPORT_HUD = 0x564f
         const val REQUIRED_FREE_BYTES = 1700L shl 20
@@ -66,6 +68,9 @@ class LauncherActivity : Activity() {
     private var modCopiedBytes = 0L
     private var modReportedBytes = 0L
     private var modImportNote: String? = null
+    private var mapImporting = false
+    private var mapCopiedCount = 0
+    private var mapImportNote: String? = null
     private var validatingLaunch = false
     private val launchGate = GameLaunchGate()
     private var importing = false
@@ -82,6 +87,7 @@ class LauncherActivity : Activity() {
     private external fun nativeConfigForSelection(modName: String, profile: String, filesDirectory: String): String
     private external fun nativeConfigForMod(modName: String, filesDirectory: String): String
     private external fun nativeValidateCurrentSelection(filesDirectory: String): String
+    private external fun nativeMapsDirectory(filesDirectory: String): String
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -106,6 +112,22 @@ class LauncherActivity : Activity() {
     @Deprecated("The SAF tree picker returns through this activity result")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_PICK_MAPS) {
+            val uris = if (resultCode == RESULT_OK && data != null) {
+                buildList {
+                    data.clipData?.let { clip ->
+                        for (index in 0 until clip.itemCount) clip.getItemAt(index).uri?.let(::add)
+                    }
+                    if (isEmpty()) data.data?.let(::add)
+                }.distinct()
+            } else emptyList()
+            if (uris.isEmpty()) {
+                mapImportNote = "Map import cancelled. Your installed maps were not changed."
+                page = Page.MAPS
+                renderPage()
+            } else importMaps(uris)
+            return
+        }
         if (requestCode == REQUEST_PICK_MOD) {
             val tree = if (resultCode == RESULT_OK) data?.data else null
             if (tree == null) {
@@ -223,6 +245,7 @@ class LauncherActivity : Activity() {
             Page.SETTINGS -> renderSettings()
             Page.TOUCH -> renderTouch()
             Page.MODS -> renderMods()
+            Page.MAPS -> renderMaps()
             Page.DIAGNOSTICS -> renderDiagnostics()
         }
         pageBody.animate().alpha(1f).setDuration(140).start()
@@ -410,14 +433,14 @@ class LauncherActivity : Activity() {
         val hudCard = card()
         hudCard.addView(kicker("FLOATING COMMAND HUD"))
         hudCard.addView(text("RA2YRPORT-inspired floating controls", 19, R.color.launcher_text, bold = true))
-        hudCard.addView(text("Choose a two-thumb or Yuri layout, customize visible buttons and size, then drag controls in-game. C1–C10 select groups; hold one to assign the current selection. Use HIDE HUD / SHOW HUD to fold the controls while playing.", 14, R.color.launcher_muted), margin(top = 6, bottom = 8))
+        hudCard.addView(text("Choose a layout, then arrange the floating buttons here in the launcher preview. C1-C10 select groups; hold one in-game to assign the current selection. The game overlay has no edit or hide/show buttons.", 14, R.color.launcher_muted), margin(top = 6, bottom = 8))
         val enabled = CheckBox(this).apply {
             text = "Show floating HUD in touch and mixed modes"
             setTextColor(color(R.color.launcher_text))
             isChecked = controlPrefs.getBoolean(TouchHudSettings.HUD_ENABLED, true)
         }
         hudCard.addView(enabled)
-        hudCard.addView(actionButton("CUSTOMIZE BUTTONS, SIZE AND OPACITY", primary = false) {
+        hudCard.addView(actionButton("CUSTOMIZE AND ARRANGE BUTTONS", primary = true) {
             showTouchHudEditor()
         }, margin(top = 8))
         hudCard.addView(actionButton("REMAP ACTION KEYS", primary = false) {
@@ -470,14 +493,7 @@ class LauncherActivity : Activity() {
             14,
             R.color.launcher_muted,
         ), margin(top = 7))
-        layout.addView(text("Use the floating HUD editor above for independent command-button positions and sizing. The engine's Edit Layout remains for its existing game panels.", 13, R.color.launcher_muted), margin(top = 9))
-        layout.addView(actionButton("START GAME TO ARRANGE FLOATING BUTTONS", primary = true) {
-            if (installation.ready) launchGame() else {
-                importNote = "Import your game folder before opening the HUD editor."
-                page = Page.FILES
-                renderPage()
-            }
-        }, margin(top = 12))
+        layout.addView(text("Floating command buttons are arranged in the launcher preview above. This in-game editor only moves the engine's own game panels.", 13, R.color.launcher_muted), margin(top = 9))
         pageBody.addView(layout)
     }
 
@@ -496,6 +512,9 @@ class LauncherActivity : Activity() {
         val checkboxes = mutableListOf<Pair<String, CheckBox>>()
         val controlSets = TouchHudSettings.parseControlSets(prefs.getString(TouchHudSettings.HUD_CONTROL_SETS, null)).toMutableMap()
         val sizes = TouchHudSettings.parseSizes(prefs.getString(TouchHudSettings.HUD_SIZES, null)).toMutableMap()
+        val positions = TouchHudSettings.parsePositions(prefs.getString(TouchHudSettings.HUD_POSITIONS, null)).toMutableMap()
+        var positionedLayout = prefs.getInt(TouchHudSettings.HUD_LAYOUT, TouchHudSettings.LAYOUT_FREE)
+        var positionedDock = prefs.getInt(TouchHudSettings.HUD_DOCK, 0)
         val sizeOptions = listOf(70, 85, 100, 115, 130, 150)
         choices.forEach { action ->
             val check = CheckBox(this).apply {
@@ -503,6 +522,9 @@ class LauncherActivity : Activity() {
                 text = if (bound) action.label else "${action.label}  ·  assign an existing game key first"
                 setTextColor(color(R.color.launcher_text))
                 isChecked = action.id in visible
+            }
+            check.setOnCheckedChangeListener { _, checked ->
+                if (checked) visible.add(action.id) else visible.remove(action.id)
             }
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -570,7 +592,34 @@ class LauncherActivity : Activity() {
             setSelection(prefs.getInt(TouchHudSettings.HUD_DOCK, 0).coerceIn(0, 2))
         }
         root.addView(dock)
-        root.addView(text("A preset resets button positions to its starting arrangement. You can drag buttons during a match afterward.", 12, R.color.launcher_muted), margin(top = 3, bottom = 5))
+        root.addView(text("A preset resets button positions to its starting arrangement. Place them on the launcher preview before saving.", 12, R.color.launcher_muted), margin(top = 3, bottom = 5))
+        root.addView(actionButton("DRAG AND SIZE BUTTONS IN PREVIEW", primary = true) {
+            val previewVisible = visible.toMutableSet()
+            val previewPositions = positions.toMutableMap()
+            val previewSizes = sizes.toMutableMap()
+            val layoutChanged = positionedLayout != layout.selectedItemPosition || positionedDock != dock.selectedItemPosition
+            if (layoutChanged) previewPositions.clear()
+            TouchHudLayoutEditor(this).show(
+                previewVisible,
+                previewPositions,
+                previewSizes,
+                controlSets.toMap(),
+                layout.selectedItemPosition,
+                dock.selectedItemPosition,
+                scale.progress + 70,
+                opacity.progress + 30,
+            ) {
+                visible.clear()
+                visible.addAll(previewVisible)
+                positions.clear()
+                positions.putAll(previewPositions)
+                sizes.clear()
+                sizes.putAll(previewSizes)
+                positionedLayout = layout.selectedItemPosition
+                positionedDock = dock.selectedItemPosition
+                checkboxes.forEach { (id, check) -> check.isChecked = id in visible }
+            }
+        }, margin(top = 7, bottom = 6))
         val backupButtons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val export = Button(this).apply { text = "EXPORT HUD" }
         val import = Button(this).apply { text = "IMPORT HUD" }
@@ -603,18 +652,21 @@ class LauncherActivity : Activity() {
                 val selected = checkboxes.filter { it.second.isChecked }.mapTo(linkedSetOf()) { it.first }
                 val previousLayout = prefs.getInt(TouchHudSettings.HUD_LAYOUT, TouchHudSettings.LAYOUT_FREE)
                 val previousDock = prefs.getInt(TouchHudSettings.HUD_DOCK, 0)
+                if ((previousLayout != layout.selectedItemPosition || previousDock != dock.selectedItemPosition) &&
+                    (positionedLayout != layout.selectedItemPosition || positionedDock != dock.selectedItemPosition)
+                ) {
+                    positions.clear()
+                }
                 val edit = prefs.edit()
                     .putString(TouchHudSettings.HUD_VISIBLE, TouchHudSettings.encodeVisible(selected))
                     .putString(TouchHudSettings.HUD_CONTROL_SETS, TouchHudSettings.encodeControlSets(controlSets))
                     .putString(TouchHudSettings.HUD_SIZES, TouchHudSettings.encodeSizes(sizes))
+                    .putString(TouchHudSettings.HUD_POSITIONS, TouchHudSettings.encodePositions(positions))
                     .putInt(TouchHudSettings.HUD_SCALE, TouchHudSettings.clampScale(scale.progress + 70))
                     .putInt(TouchHudSettings.HUD_OPACITY, TouchHudSettings.clampOpacity(opacity.progress + 30))
                     .putInt(TouchHudSettings.HUD_LAYOUT, layout.selectedItemPosition)
                     .putInt(TouchHudSettings.HUD_DOCK, dock.selectedItemPosition)
                     .putBoolean(TouchHudSettings.HUD_ENABLED, true)
-                if (previousLayout != layout.selectedItemPosition || previousDock != dock.selectedItemPosition) {
-                    edit.putString(TouchHudSettings.HUD_POSITIONS, "")
-                }
                 edit.apply()
                 dialog.dismiss()
                 Toast.makeText(this, "HUD settings saved. They apply the next time you start a match.", Toast.LENGTH_LONG).show()
@@ -684,7 +736,6 @@ class LauncherActivity : Activity() {
             .putInt(TouchHudSettings.HUD_OPACITY, imported.opacity)
             .putInt(TouchHudSettings.HUD_LAYOUT, imported.layout)
             .putInt(TouchHudSettings.HUD_DOCK, imported.dock)
-            .putBoolean(TouchHudSettings.HUD_COLLAPSED, false)
             .putBoolean(TouchHudSettings.HUD_ENABLED, true)
         TouchHudSettings.remappableActions.forEach { edit.remove("key_${it.id}") }
         imported.keyBindings.forEach { (id, keyCode) -> edit.putInt("key_$id", keyCode) }
@@ -835,6 +886,135 @@ class LauncherActivity : Activity() {
         modImportNote?.let { note ->
             pageBody.addView(text(note, 13, R.color.launcher_muted), margin(top = 8))
         }
+    }
+
+    private fun renderMaps() {
+        pageBody.addView(kicker("CUSTOM SCENARIOS"))
+        pageBody.addView(text("Maps", 30, R.color.launcher_text, bold = true))
+        pageBody.addView(text(
+            "Add your own map files. The engine scans this folder in Choose Map after the game and active mod folders.",
+            14,
+            R.color.launcher_muted,
+        ), margin(bottom = 14))
+
+        val location = runCatching { File(nativeMapsDirectory(filesDir.absolutePath)).canonicalFile }
+        val mapDirectory = location.getOrNull()
+        val card = card()
+        card.addView(kicker("ENGINE MAP LIBRARY"))
+        card.addView(text(mapDirectory?.absolutePath ?: "Engine map folder unavailable", 12, R.color.launcher_muted))
+        if (mapDirectory == null) {
+            card.addView(text(
+                "The current config.toml could not be resolved. Fix the engine configuration before importing maps.",
+                13,
+                R.color.launcher_warning,
+            ), margin(top = 8))
+        } else {
+            val maps = mapDirectory.listFiles()?.filter { file ->
+                file.isFile && file.extension.lowercase(Locale.ROOT) in setOf("mmx", "yro", "map", "mpr", "yrm")
+            }?.sortedBy { it.name.lowercase(Locale.ROOT) }.orEmpty()
+            card.addView(text("${maps.size} map file${if (maps.size == 1) "" else "s"} available", 15, R.color.launcher_text, bold = true), margin(top = 8))
+            if (maps.isEmpty()) {
+                card.addView(text("No custom maps imported yet.", 13, R.color.launcher_muted), margin(top = 5))
+            } else {
+                maps.forEach { file ->
+                    card.addView(text(file.name, 14, R.color.launcher_text), margin(top = 7))
+                }
+            }
+        }
+        pageBody.addView(card, margin(bottom = 12))
+
+        if (mapImporting) {
+            val progress = card()
+            progress.addView(kicker("IMPORT IN PROGRESS"))
+            progress.addView(text("Imported $mapCopiedCount map file${if (mapCopiedCount == 1) "" else "s"}…", 14, R.color.launcher_text))
+            progress.addView(ProgressBar(this).apply { isIndeterminate = true }, margin(top = 9, bottom = 8))
+            progress.addView(actionButton("CANCEL MAP IMPORT", primary = false) {
+                MapImportJob.cancelActive()
+                mapImportNote = "Cancelling after the current file; completed imports will remain available."
+                renderPage()
+            })
+            pageBody.addView(progress, margin(bottom = 12))
+        } else if (mapDirectory != null) {
+            pageBody.addView(actionButton("ADD CUSTOM MAPS", primary = true) {
+                chooseMaps()
+            }, margin(bottom = 10))
+        }
+        pageBody.addView(text(
+            "Supported engine formats: .mmx, .yro, .map, .mpr, and .yrm. Existing files are never replaced; name conflicts receive a numbered filename. Game map assets are not included.",
+            12,
+            R.color.launcher_muted,
+        ))
+        mapImportNote?.let { note ->
+            pageBody.addView(text(note, 13, R.color.launcher_muted), margin(top = 10))
+        }
+    }
+
+    private fun chooseMaps() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            type = "*/*"
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+            addCategory(Intent.CATEGORY_OPENABLE)
+        }
+        startActivityForResult(intent, REQUEST_PICK_MAPS)
+    }
+
+    private fun importMaps(uris: List<Uri>) {
+        val job = MapImportJob.begin()
+        if (job == null) {
+            mapImportNote = "Another custom map import is already running."
+            renderPage()
+            return
+        }
+        page = Page.MAPS
+        mapImporting = true
+        mapCopiedCount = 0
+        mapImportNote = "Preparing selected map files…"
+        renderPage()
+        Thread({
+            var result: String
+            var completedCount = 0
+            try {
+                val sources = uris.map { uri ->
+                    val name = contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                        if (cursor.moveToFirst()) cursor.getString(0) else null
+                    }?.takeIf { it.isNotBlank() } ?: throw IOException("The selected provider did not supply a filename")
+                    MapImportJob.Source(name) { destination ->
+                        job.checkCancelled()
+                        contentResolver.openInputStream(uri)?.use { input ->
+                            destination.outputStream().use { output ->
+                                val buffer = ByteArray(64 * 1024)
+                                while (true) {
+                                    job.checkCancelled()
+                                    val count = input.read(buffer)
+                                    if (count < 0) break
+                                    output.write(buffer, 0, count)
+                                }
+                            }
+                        } ?: throw IOException("Cannot read $name")
+                    }
+                }
+                val mapsDirectory = File(nativeMapsDirectory(filesDir.absolutePath))
+                val imported = job.run(mapsDirectory, sources) { count ->
+                    completedCount = count
+                    runOnUiThread {
+                        mapCopiedCount = count
+                        if (page == Page.MAPS) renderPage()
+                    }
+                }
+                result = "Imported ${imported.size} map file${if (imported.size == 1) "" else "s"} into ${mapsDirectory.canonicalPath}."
+            } catch (_: MapImportJob.Cancelled) {
+                result = "Map import cancelled. $completedCount completed file${if (completedCount == 1) " remains" else "s remain"}; existing files were not replaced."
+            } catch (error: Throwable) {
+                result = "Map import stopped: ${error.message ?: error.javaClass.simpleName}. $completedCount completed file${if (completedCount == 1) " remains" else "s remain"}."
+            } finally {
+                job.close()
+            }
+            runOnUiThread {
+                mapImporting = false
+                mapImportNote = result
+                renderPage()
+            }
+        }, "vera20k-map-import").start()
     }
 
     private fun renderDiagnostics() {

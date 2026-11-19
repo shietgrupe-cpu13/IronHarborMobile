@@ -6,23 +6,17 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.KeyEvent
-import android.view.MotionEvent
 import android.view.View
-import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.TextView
-import kotlin.math.abs
 import kotlin.math.roundToInt
 
-/** Movable RA2YRPORT-inspired buttons in small, touch-through application panels. */
+/** Launcher-configured RA2YRPORT-inspired buttons in touch-through panels. */
 internal class TouchHudOverlay(private val activity: VeraActivity) {
     private val prefs = activity.getSharedPreferences(TouchHudSettings.PREFS, android.content.Context.MODE_PRIVATE)
     private var windowManager: WindowManager? = null
     private val buttons = linkedMapOf<String, TextView>()
-    private var editButton: TextView? = null
-    private var foldButton: TextView? = null
     private val setButtons = mutableListOf<TextView>()
-    private var editMode = false
 
     fun attach() {
         if (windowManager != null || !prefs.getBoolean(TouchHudSettings.HUD_ENABLED, true)) return
@@ -35,13 +29,9 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
         val manager = windowManager
         if (manager != null) {
             buttons.values.forEach { runCatching { manager.removeView(it) } }
-            editButton?.let { runCatching { manager.removeView(it) } }
-            foldButton?.let { runCatching { manager.removeView(it) } }
             setButtons.forEach { runCatching { manager.removeView(it) } }
         }
         buttons.clear()
-        editButton = null
-        foldButton = null
         setButtons.clear()
         windowManager = null
     }
@@ -49,12 +39,8 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
     private fun populate() {
         val manager = windowManager ?: return
         buttons.values.forEach { runCatching { manager.removeView(it) } }
-        editButton?.let { runCatching { manager.removeView(it) } }
-        foldButton?.let { runCatching { manager.removeView(it) } }
         setButtons.forEach { runCatching { manager.removeView(it) } }
         buttons.clear()
-        editButton = null
-        foldButton = null
         setButtons.clear()
 
         val visible = TouchHudSettings.parseVisible(
@@ -70,12 +56,9 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
         val dock = prefs.getInt(TouchHudSettings.HUD_DOCK, 0).coerceIn(0, 2)
         val controlSets = TouchHudSettings.parseControlSets(prefs.getString(TouchHudSettings.HUD_CONTROL_SETS, null))
         val activeSet = prefs.getInt(TouchHudSettings.HUD_ACTIVE_SET, 1).coerceIn(1, 2)
-        val collapsed = prefs.getBoolean(TouchHudSettings.HUD_COLLAPSED, false) && !editMode
+        val visibleNow = TouchHudSettings.visibleForSet(visible, controlSets, activeSet)
 
-        TouchHudSettings.buttons.filter {
-            it.id in visible && !collapsed &&
-                (it.groupNumber != null || (controlSets[it.id] ?: 0) == 0 || controlSets[it.id] == activeSet)
-        }.forEach { action ->
+        TouchHudSettings.buttons.filter { it.id in visibleNow }.forEach { action ->
             val itemScale = globalScale * (sizes[action.id] ?: 100) / 100f
             val view = TextView(activity).apply {
                 text = action.label
@@ -91,55 +74,32 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
                 isFocusable = false
                 isClickable = true
                 setOnClickListener {
-                    if (editMode) {
-                        val next = when (sizes[action.id] ?: 100) { 70 -> 100; 100 -> 130; else -> 70 }
-                        sizes[action.id] = next
-                        saveSizes(sizes)
-                        resize(this, globalScale * next / 100f)
-                        announceForAccessibility("${action.label} size $next percent")
-                    } else {
-                        sendKey(action.id, action.defaultKeyCode)
-                    }
+                    sendKey(action.id, action.defaultKeyCode)
                 }
                 setOnLongClickListener {
-                    if (!editMode && action.groupNumber != null) {
+                    if (action.groupNumber != null) {
                         sendChord(action.defaultKeyCode, create = true)
                         true
                     } else false
                 }
-                setOnTouchListener(dragListener(this, action.id, positions))
             }
             buttons[action.id] = view
             val point = positions[action.id] ?: TouchHudSettings.defaultPosition(action.id, layout, dock)
             addPanel(manager, view, point)
         }
 
-        val editor = TextView(activity).apply {
-            text = if (editMode) "SAVE" else "EDIT HUD"
-            gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
-            textSize = 11f
-            typeface = Typeface.DEFAULT_BOLD
-            setPadding(dp(12), dp(8), dp(12), dp(8))
-            background = buttonBackground(0.94f, edit = true)
-            contentDescription = if (editMode) "Save floating control layout" else "Edit floating control layout"
-            setOnClickListener {
-                editMode = !editMode
-                if (!editMode) savePositions(positionsForViews())
-                populate()
-            }
-        }
-        editButton = editor
-        addPanel(manager, editor, 0.82f to 0.06f)
-
-        (1..2).forEach { setNumber ->
+        TouchHudSettings.setSelectorButtons.forEach { selector ->
+            val setNumber = if (selector.id == TouchHudSettings.SET_ONE) 1 else 2
+            val itemScale = globalScale * (sizes[selector.id] ?: 100) / 100f
             val setButton = TextView(activity).apply {
-                text = "SET $setNumber"
+                text = selector.label
                 gravity = Gravity.CENTER
                 setTextColor(Color.WHITE)
-                textSize = 11f
+                textSize = 11f * itemScale
                 typeface = Typeface.DEFAULT_BOLD
                 setPadding(dp(10), dp(8), dp(10), dp(8))
+                minWidth = dp((58 * itemScale).roundToInt())
+                minHeight = dp((42 * itemScale).roundToInt())
                 background = buttonBackground(0.94f, edit = activeSet == setNumber)
                 contentDescription = "Show control set $setNumber"
                 setOnClickListener {
@@ -148,29 +108,10 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
                 }
             }
             setButtons += setButton
-            addPanel(manager, setButton, if (setNumber == 1) 0.48f to 0.06f else 0.64f to 0.06f)
+            val point = positions[selector.id]
+                ?: TouchHudSettings.defaultPosition(selector.id, layout, dock)
+            addPanel(manager, setButton, point)
         }
-
-        val fold = TextView(activity).apply {
-            text = if (collapsed) "SHOW HUD" else "HIDE HUD"
-            gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
-            textSize = 11f
-            typeface = Typeface.DEFAULT_BOLD
-            setPadding(dp(12), dp(8), dp(12), dp(8))
-            background = buttonBackground(0.94f)
-            contentDescription = if (collapsed) "Show floating controls" else "Hide floating controls"
-            setOnClickListener {
-                if (editMode) return@setOnClickListener
-                prefs.edit().putBoolean(TouchHudSettings.HUD_COLLAPSED, !collapsed).apply()
-                populate()
-            }
-            setOnTouchListener(dragListener(this, TouchHudSettings.HUD_TOGGLE, positions))
-        }
-        foldButton = fold
-        val togglePosition = positions[TouchHudSettings.HUD_TOGGLE]
-            ?: TouchHudSettings.defaultPosition(TouchHudSettings.HUD_TOGGLE, layout, dock)
-        addPanel(manager, fold, togglePosition)
     }
 
     private fun addPanel(manager: WindowManager, view: View, point: Pair<Float, Float>) {
@@ -196,70 +137,6 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
         title = "Iron Harbor Mobile floating control"
     }
 
-    private fun dragListener(
-        view: TextView,
-        id: String,
-        positions: MutableMap<String, Pair<Float, Float>>,
-    ) = View.OnTouchListener { _, event ->
-        if (!editMode) return@OnTouchListener false
-        val manager = windowManager ?: return@OnTouchListener true
-        when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                val params = view.layoutParams as WindowManager.LayoutParams
-                view.tag = floatArrayOf(event.rawX, event.rawY, params.x.toFloat(), params.y.toFloat(), 0f)
-                true
-            }
-            MotionEvent.ACTION_MOVE -> {
-                val state = view.tag as? FloatArray ?: return@OnTouchListener true
-                val dx = event.rawX - state[0]
-                val dy = event.rawY - state[1]
-                if (abs(dx) + abs(dy) > dp(5)) state[4] = 1f
-                if (state[4] != 0f) {
-                    val params = view.layoutParams as WindowManager.LayoutParams
-                    params.x = (state[2] + dx).roundToInt().coerceIn(0, (activity.window.decorView.width - view.width).coerceAtLeast(0))
-                    params.y = (state[3] + dy).roundToInt().coerceIn(0, (activity.window.decorView.height - view.height).coerceAtLeast(0))
-                    manager.updateViewLayout(view, params)
-                }
-                true
-            }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                val state = view.tag as? FloatArray
-                if (state != null && state[4] != 0f) {
-                    positions[id] = normalizedPosition(view)
-                    savePositions(positions)
-                } else if (event.actionMasked == MotionEvent.ACTION_UP) {
-                    view.performClick()
-                }
-                view.tag = null
-                true
-            }
-            else -> true
-        }
-    }
-
-    private fun normalizedPosition(view: View): Pair<Float, Float> {
-        val params = view.layoutParams as WindowManager.LayoutParams
-        val maxX = (activity.window.decorView.width - view.width).coerceAtLeast(1)
-        val maxY = (activity.window.decorView.height - view.height).coerceAtLeast(1)
-        return (params.x.toFloat() / maxX).coerceIn(0f, 1f) to (params.y.toFloat() / maxY).coerceIn(0f, 1f)
-    }
-
-    private fun positionsForViews(): MutableMap<String, Pair<Float, Float>> =
-        TouchHudSettings.parsePositions(prefs.getString(TouchHudSettings.HUD_POSITIONS, null))
-            .toMutableMap()
-            .apply {
-                buttons.forEach { (id, view) -> put(id, normalizedPosition(view)) }
-                foldButton?.let { put(TouchHudSettings.HUD_TOGGLE, normalizedPosition(it)) }
-            }
-
-    private fun savePositions(positions: Map<String, Pair<Float, Float>>) {
-        prefs.edit().putString(TouchHudSettings.HUD_POSITIONS, TouchHudSettings.encodePositions(positions)).apply()
-    }
-
-    private fun saveSizes(sizes: Map<String, Int>) {
-        prefs.edit().putString(TouchHudSettings.HUD_SIZES, TouchHudSettings.encodeSizes(sizes)).apply()
-    }
-
     private fun sendKey(id: String, default: Int) {
         val keyCode = prefs.getInt("key_$id", default)
         if (keyCode == KeyEvent.KEYCODE_UNKNOWN) {
@@ -276,13 +153,6 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
         activity.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
         activity.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
         activity.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_CTRL_LEFT))
-    }
-
-    private fun resize(view: TextView, scale: Float) {
-        view.textSize = 12f * scale
-        view.minWidth = dp((58 * scale).roundToInt())
-        view.minHeight = dp((42 * scale).roundToInt())
-        windowManager?.updateViewLayout(view, view.layoutParams)
     }
 
     private fun buttonBackground(opacity: Float, edit: Boolean = false) = GradientDrawable().apply {

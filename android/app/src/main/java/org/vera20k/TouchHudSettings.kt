@@ -11,11 +11,12 @@ internal object TouchHudSettings {
     const val HUD_SCALE = "hud_scale"
     const val HUD_OPACITY = "hud_opacity"
     const val HUD_LAYOUT = "hud_layout"
-    const val HUD_COLLAPSED = "hud_collapsed"
     const val HUD_CONTROL_SETS = "hud_control_sets"
     const val HUD_ACTIVE_SET = "hud_active_set"
     const val HUD_DOCK = "hud_dock"
     const val HUD_TOGGLE = "HUD_TOGGLE"
+    const val SET_ONE = "SET1"
+    const val SET_TWO = "SET2"
     const val CONTROL_MODE = "control_mode"
     const val MODE_TOUCH = "touch"
     const val MODE_MIXED = "mixed"
@@ -57,7 +58,12 @@ internal object TouchHudSettings {
         Button("C$number", "C$number", if (digit == 0) 7 else 7 + digit, number)
     }
 
+    val setSelectorButtons = listOf(
+        Button(SET_ONE, "SET 1", 0),
+        Button(SET_TWO, "SET 2", 0),
+    )
     val buttons: List<Button> = commandButtons.take(4) + groupButtons + commandButtons.drop(4)
+    val layoutButtons: List<Button> = buttons + setSelectorButtons
     val defaultVisible: Set<String> = commandButtons.take(4).mapTo(linkedSetOf()) { it.id } + groupButtons.take(5).map { it.id }
     val remappableActions: List<Button> = commandButtons
 
@@ -77,12 +83,23 @@ internal object TouchHudSettings {
     fun clampOpacity(value: Int): Int = value.coerceIn(30, 100)
     fun clampButtonSize(value: Int): Int = value.coerceIn(70, 150)
 
+    fun visibleForSet(visible: Set<String>, controlSets: Map<String, Int>, activeSet: Int): Set<String> =
+        buttons.asSequence()
+            .filter { it.id in visible }
+            .filter {
+                it.groupNumber != null || it.id == SET_ONE || it.id == SET_TWO ||
+                    activeSet == 0 || (controlSets[it.id] ?: 0) == 0 || controlSets[it.id] == activeSet
+            }
+            .mapTo(linkedSetOf()) { it.id }
+
     fun defaultPosition(id: String, layout: Int = LAYOUT_FREE, dock: Int = 0): Pair<Float, Float> {
         if (id == HUD_TOGGLE) return when (dock.coerceIn(0, 2)) {
             0 -> 0.03f to 0.90f
             1 -> 0.03f to 0.50f
             else -> 0.90f to 0.90f
         }
+        if (id == SET_ONE) return 0.48f to 0.06f
+        if (id == SET_TWO) return 0.64f to 0.06f
         val button = buttons.firstOrNull { it.id == id } ?: return 0.85f to 0.85f
         val actionIndex = commandButtons.indexOfFirst { it.id == id }
         if (dock == 1) {
@@ -132,7 +149,7 @@ internal object TouchHudSettings {
     }
 
     fun parsePositions(encoded: String?): Map<String, Pair<Float, Float>> {
-        val valid = buttons.mapTo(hashSetOf()) { it.id }.apply { add(HUD_TOGGLE) }
+        val valid = layoutButtons.mapTo(hashSetOf()) { it.id }.apply { add(HUD_TOGGLE) }
         val result = linkedMapOf<String, Pair<Float, Float>>()
         encoded.orEmpty().split(';').forEach { entry ->
             val pair = entry.split(':', limit = 2)
@@ -147,12 +164,12 @@ internal object TouchHudSettings {
         return result
     }
 
-    fun encodePositions(positions: Map<String, Pair<Float, Float>>): String = (buttons.map { it.id } + HUD_TOGGLE).asSequence()
+    fun encodePositions(positions: Map<String, Pair<Float, Float>>): String = (layoutButtons.map { it.id } + HUD_TOGGLE).asSequence()
         .mapNotNull { id -> positions[id]?.let { id to it } }
         .joinToString(";") { (id, point) -> "$id:${point.first.coerceIn(0f, 1f)},${point.second.coerceIn(0f, 1f)}" }
 
     fun parseSizes(encoded: String?): Map<String, Int> {
-        val valid = buttons.mapTo(hashSetOf()) { it.id }
+        val valid = layoutButtons.mapTo(hashSetOf()) { it.id }
         return encoded.orEmpty().split(';').mapNotNull { entry ->
             val pair = entry.split(':', limit = 2)
             if (pair.size != 2 || pair[0] !in valid) return@mapNotNull null
@@ -161,7 +178,7 @@ internal object TouchHudSettings {
         }.toMap()
     }
 
-    fun encodeSizes(sizes: Map<String, Int>): String = buttons.asSequence()
+    fun encodeSizes(sizes: Map<String, Int>): String = layoutButtons.asSequence()
         .mapNotNull { button -> sizes[button.id]?.let { button.id to clampButtonSize(it) } }
         .joinToString(";") { (id, size) -> "$id:$size" }
 

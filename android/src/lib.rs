@@ -428,6 +428,54 @@ pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeConfigForMod(
     }
 }
 
+/// Return the engine-configured downloaded-map folder used by Choose Map.
+/// The launcher process has not entered `android_main`, so seed the same
+/// Android app-private root the NativeActivity supplies before parsing config.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeMapsDirectory(
+    mut env: jni::JNIEnv,
+    _activity: JObject,
+    files_directory: JString,
+) -> jstring {
+    let result = (|| -> anyhow::Result<jstring> {
+        let files_directory: String = env.get_string(&files_directory)?.into();
+        let files_directory = std::path::PathBuf::from(files_directory);
+        vera20k::util::platform_dir::set(files_directory.clone());
+        let config_path = files_directory.join("config.toml");
+        let contents = match std::fs::read_to_string(&config_path) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                // Before game import, the engine's default profile still lives
+                // under filesDir. No user config exists to override it yet.
+                return Ok(env
+                    .new_string(files_directory.join("Maps").to_string_lossy().as_ref())?
+                    .into_raw());
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let config = vera20k::util::config::GameConfig::parse_text_at(&contents, &config_path)
+            .map_err(|error| {
+                anyhow::anyhow!("Engine config cannot resolve the map folder: {error:#}")
+            })?;
+        Ok(env
+            .new_string(
+                config
+                    .paths
+                    .downloaded_maps_dir()
+                    .to_string_lossy()
+                    .as_ref(),
+            )?
+            .into_raw())
+    })();
+    match result {
+        Ok(directory) => directory,
+        Err(error) => {
+            let _ = env.throw_new("java/io/IOException", error.to_string());
+            std::ptr::null_mut()
+        }
+    }
+}
+
 /// Revalidate the persisted selection before the launcher starts NativeActivity.
 /// This prevents an older invalid config from reaching engine startup.
 #[unsafe(no_mangle)]
