@@ -1,6 +1,7 @@
 package org.vera20k
 
 import android.content.Context
+import android.os.Environment
 import android.net.Uri
 import android.provider.DocumentsContract
 import java.io.File
@@ -52,6 +53,28 @@ internal class SharedDataStorage(private val context: Context) {
 
     fun gameSourceName(): String? = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         .getString(GAME_SOURCE_NAME, null)
+
+    /** A SAF tree can be passed to Rust only when it maps to a granted real path. */
+    fun directPathForTree(tree: Uri): File? {
+        if (!hasDirectSharedStorageAccess()) return null
+        return primaryPathForTree(tree)
+    }
+
+    fun hasDirectSharedStorageAccess(): Boolean =
+        android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R && Environment.isExternalStorageManager()
+
+    /** Resolve the selected primary-volume folder even after access is revoked, to prevent self-mirroring. */
+    fun primaryGameSourceMatches(destination: File): Boolean {
+        val tree = gameSourceTree() ?: return false
+        val direct = primaryPathForTree(tree) ?: return false
+        return runCatching { direct.canonicalFile == destination.canonicalFile }.getOrDefault(false)
+    }
+
+    private fun primaryPathForTree(tree: Uri): File? {
+        if (tree.authority != "com.android.externalstorage.documents") return null
+        val id = runCatching { DocumentsContract.getTreeDocumentId(tree) }.getOrNull() ?: return null
+        return AndroidSharedStoragePath.fromDocumentId(id, Environment.getExternalStorageDirectory())
+    }
 
     /** Mirror a SAF source into the filesystem directory consumed by Rust. */
     fun mirrorGameSource(destination: File) {

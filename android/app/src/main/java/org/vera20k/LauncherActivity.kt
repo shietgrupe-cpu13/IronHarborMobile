@@ -1431,6 +1431,42 @@ class LauncherActivity : Activity() {
     }
 
     private fun importGame(tree: Uri, retainGameSource: Boolean) {
+        val storage = SharedDataStorage(this)
+        val directGameDirectory = storage.directPathForTree(tree)
+        if (directGameDirectory != null) {
+            importing = true
+            importNote = "Checking the selected game folder in place…"
+            page = Page.FILES
+            renderPage()
+            Thread({
+                var sourceSaved = false
+                val result = try {
+                    val missing = missingRequiredArchives(tree)
+                    if (missing.isNotEmpty()) throw IOException("Selected folder is missing ${missing.joinToString()}")
+                    val contents = nativeConfigForImport(directGameDirectory.absolutePath, filesDir.absolutePath)
+                    LauncherConfigPublisher.publish(filesDir, contents)
+                    // Retain the URI as the identity of this direct folder even
+                    // when only all-files permission, not a persistable SAF
+                    // grant, authorizes the engine's filesystem access.
+                    storage.setGameSource(tree, selectedTreeName(tree))
+                    sourceSaved = true
+                    "Using ${directGameDirectory.absolutePath} directly. Game files stay in place; saves and launcher data remain under Documents/IronHarborRA2YR."
+                } catch (error: Throwable) {
+                    "Could not use the selected folder directly: ${error.message ?: error.javaClass.simpleName}"
+                } finally {
+                    if (!sourceSaved) runCatching {
+                        contentResolver.releasePersistableUriPermission(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                }
+                runOnUiThread {
+                    importing = false
+                    importNote = result
+                    refreshInstallation()
+                }
+            }, "vera20k-direct-game-selection").start()
+            return
+        }
+
         val job = AssetImportJob.begin()
         if (job == null) {
             importNote = "Another import is already running."
@@ -1602,7 +1638,13 @@ class LauncherActivity : Activity() {
         if (sourceTree != null) {
             val engineGameDirectory = installation.configuredDirectory
                 ?: throw IOException("No engine game directory is configured")
-            storage.mirrorGameSource(engineGameDirectory)
+            if (storage.primaryGameSourceMatches(engineGameDirectory)) {
+                if (!storage.hasDirectSharedStorageAccess()) {
+                    throw IOException("Android shared-storage access was revoked. Grant All Files Access again, or locate the game folder again to make a private copy.")
+                }
+            } else {
+                storage.mirrorGameSource(engineGameDirectory)
+            }
         }
         if (storage.treeUri() == null) return // Keep installations launchable if Documents access was revoked.
         storage.ensureLayout()

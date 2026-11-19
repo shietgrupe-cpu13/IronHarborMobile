@@ -175,26 +175,36 @@ fn start(
     request: &MapPictureRequest,
     mod_args: &[std::ffi::OsString],
 ) -> Result<std::process::Child> {
-    let executable = std::env::current_exe().context("find VERA20k's executable")?;
-    let mut command = std::process::Command::new(executable);
-    command
-        .args(request.args())
-        // After the run's own arguments, which it is known by
-        // (`is_invocation`); start-up takes the switch out first.
-        .args(mod_args)
-        // The developer sandbox would start a different map at start-up.
-        .env_remove("RA2_QUICKPLAY")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    #[cfg(windows)]
+    // Android's current executable is the system app_process trampoline, not
+    // this library. Spawning it with desktop CLI arguments aborts in ART
+    // (`Error changing dalvik-cache ownership`). The NativeActivity already
+    // owns the process-wide winit loop, so map previews cannot use this helper.
+    #[cfg(target_os = "android")]
+    anyhow::bail!("Android cannot spawn the desktop map-picture helper");
+
+    #[cfg(not(target_os = "android"))]
     {
-        // A console build would otherwise open a console window.
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
+        let executable = std::env::current_exe().context("find VERA20k's executable")?;
+        let mut command = std::process::Command::new(executable);
+        command
+            .args(request.args())
+            // After the run's own arguments, which it is known by
+            // (`is_invocation`); start-up takes the switch out first.
+            .args(mod_args)
+            // The developer sandbox would start a different map at start-up.
+            .env_remove("RA2_QUICKPLAY")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        #[cfg(windows)]
+        {
+            // A console build would otherwise open a console window.
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+        Ok(command.spawn()?)
     }
-    Ok(command.spawn()?)
 }
 
 /// Take a finished run and start the next. A new picture replaces the map's

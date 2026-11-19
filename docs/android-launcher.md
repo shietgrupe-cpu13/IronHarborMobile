@@ -13,7 +13,7 @@ Iron Harbor Mobile is an unofficial fork based on [YuriPlanet/vera20k](https://g
 - **Mods:** states that mod profiles are not supported in this build.
 - **Diagnostics:** device/API/ABI and memory snapshot plus an export action. It packages the complete currently retained regular files in app-private `files/logs/` (including the current and rotated engine logs) and `files/except.txt` when present into a ZIP, then shares it with a temporary read-only content URI. No broad storage permission is used. Android system logcat is separate and is not included. Vulkan details and FPS/frame-time telemetry are not queried by the launcher.
 
-Play is enabled only when the engine's configured directory contains both `ra2.mix` and `ra2md.mix`. Import validates those files before copying. It stages a complete recursive copy inside app-private storage and atomically publishes `config.toml` only on success. Cancel/failure leaves the previous configuration intact. No broad storage permission is requested. The check is a readiness check, not a full installation integrity audit.
+Play is enabled only when the engine's configured directory contains both `ra2.mix` and `ra2md.mix`. Import validates those files before changing the configuration. On Android 11+ when the user has granted the app's optional all-files access and selected a folder on primary shared storage, the launcher configures that real folder directly; it does not duplicate the game installation. SAF-only, removable-volume, and cloud-provider selections retain the existing staged private copy and mirror fallback. The check is a readiness check, not a full installation integrity audit.
 
 Play starts the existing `VeraActivity` NativeActivity, which loads `libvera20k_android.so`. The native game activity has its own `:game` process, so the default-process Kotlin launcher remains available below it without creating a second winit event loop. The launcher refreshes installation status on resume and saves its selected page across activity recreation.
 
@@ -71,3 +71,17 @@ Build b2 compiled the ARM64 Rust library using the optimized `fast` profile and 
 ADB currently sees no device. The launcher has not been installed or run on a POCO/Android 16 device, so its rendered appearance, SAF provider behavior, Vulkan initialization, audio, game launch/resume, touch response, floating HUD, and match behavior remain unverified on hardware. Continue/resume save detection, writable graphics/audio settings, a mod manager, live Vulkan information, frame telemetry, touch sensitivity, external-only control filtering, and Android text-entry remain unavailable or incomplete. No benchmark or FPS improvement is claimed.
 
 The corresponding source is in the `android-development` branch. Preserve `LICENSE-GPL`, `LEGAL.md`, and upstream attribution when distributing it.
+
+## b25 storage and Android helper crash fix
+
+b25 makes three functional fixes based on the Android launch diagnostics, plus a build-code increment:
+
+- SAF folders on primary shared storage resolve to a canonical filesystem path only when the user has granted all-files access. The resolver rejects other storage volumes, missing folders, and path traversal. Game import then validates the required archives and writes that real path to the engine config without copying the game folder.
+- Play skips the game-folder mirror when the saved source resolves to the same canonical directory already configured in the engine. Other providers and storage setups retain the existing mirror path.
+- If the user later revokes all-files access while the configured path is that shared game folder, Play stops with a recovery message instead of attempting to mirror the source onto itself.
+- Android no longer tries to spawn the desktop `--map-picture` helper using `current_exe()`. On Android that resolves to `/system/bin/app_process64`, which caused the observed dalvik-cache ownership abort. Map-picture generation is unavailable on Android; this prevents the helper crash but may leave fallback map previews.
+- Android `versionCode` increments to 229 (`0.3.6`).
+
+The optimized ARM64 Cargo `fast` build succeeded in 6m54s. Ten Rust map-picture unit tests and four focused Android JVM test classes passed; the Gradle debug APK build succeeded. The APK is ARM64-only, targets API 36, is debug-signed, passes APK signature verification and 16 KB ZIP alignment, and its native ELF `LOAD` segments have `p_align=0x4000`. No game assets are bundled. APK: `out/apks/IronHarborMobile-v0.3.6-b25-arm64-debug.apk`.
+
+No Android device was attached. Direct-path SAF behavior, launch latency on the POCO, mod startup, Vulkan/audio, and the absence of the helper abort still need hardware validation. There are no comparable before/after frame-time or launch-latency measurements, so b25 makes no performance-improvement claim. Without all-files access or for providers that do not map to primary shared storage, the game copy/mirror fallback remains and may still delay Play. Mods, Maps, and Saves are still synchronized from SAF on each Play.
