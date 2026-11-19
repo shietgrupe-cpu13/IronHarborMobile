@@ -20,6 +20,20 @@ internal enum class LauncherIniProfile(val configValue: String, val title: Strin
     }
 }
 
+/** Activation is offered only after the engine has validated an imported tree. */
+internal data class ImportedModSelection(
+    val modName: String,
+    val profile: LauncherIniProfile?,
+) {
+    companion object {
+        @JvmStatic
+        fun afterEngineValidation(modName: String): ImportedModSelection = ImportedModSelection(
+            modName,
+            if (LauncherModCatalog.requiresMoProfile(modName)) LauncherIniProfile.MO else null,
+        )
+    }
+}
+
 internal data class LauncherModCatalog(
     val installedMods: List<String>,
     val selectedMod: String?,

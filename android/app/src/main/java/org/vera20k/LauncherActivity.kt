@@ -12,8 +12,10 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Debug
+import android.os.Environment
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
+import android.provider.Settings
 import android.view.KeyEvent
 import android.view.Gravity
 import android.view.View
@@ -353,6 +355,19 @@ class LauncherActivity : Activity() {
             12,
             R.color.launcher_muted,
         ), margin(top = 5))
+        stateCard.addView(text(
+            "Play will use: ${modCatalog.selectedMod ?: "Vanilla Yuri's Revenge"} · ${modCatalog.profile.title} profile",
+            13,
+            if (modCatalog.containsSelectedMod()) R.color.launcher_accent else R.color.launcher_warning,
+            bold = true,
+        ), margin(top = 9))
+        if (!modCatalog.containsSelectedMod()) {
+            stateCard.addView(text(
+                "The selected mod folder is missing. Choose another mod before starting.",
+                12,
+                R.color.launcher_warning,
+            ), margin(top = 4))
+        }
         pageBody.addView(stateCard, margin(bottom = 12))
 
         playButton = actionButton(if (validatingLaunch) "CHECKING GAME FILES…" else "START GAME", primary = true) {
@@ -408,6 +423,24 @@ class LauncherActivity : Activity() {
             R.color.launcher_muted,
         ), margin(top = 6))
         storageCard.addView(actionButton("CHOOSE DOCUMENTS FOLDER", primary = false) { chooseStorageLocation() }, margin(top = 8))
+        val allFilesAccess = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && Environment.isExternalStorageManager()
+        storageCard.addView(text(
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) "All files access is not needed on this Android version."
+            else if (allFilesAccess) "All files access: granted. Android still protects other apps' private folders."
+            else "All files access: not granted. SAF folder selection works without it; grant this only for broader shared-storage access.",
+            12,
+            if (allFilesAccess) R.color.launcher_accent else R.color.launcher_muted,
+        ), margin(top = 9))
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !allFilesAccess) {
+            storageCard.addView(actionButton("GRANT ALL FILES ACCESS", primary = false) {
+                AlertDialog.Builder(this)
+                    .setTitle("Allow access to shared storage?")
+                    .setMessage("Android will open its special app-access screen. If granted, Iron Harbor can manage files in shared storage. You can revoke access in Settings at any time.")
+                    .setNegativeButton("NOT NOW", null)
+                    .setPositiveButton("OPEN SETTINGS") { _, _ -> openAllFilesAccessSettings() }
+                    .show()
+            }, margin(top = 7))
+        }
         storageNote?.let { storageCard.addView(text(it, 12, R.color.launcher_muted), margin(top = 8)) }
         pageBody.addView(storageCard, margin(bottom = 12))
 
@@ -1252,8 +1285,10 @@ class LauncherActivity : Activity() {
         page = Page.MODS
         renderPage()
         Thread({
+            var activation: ImportedModSelection? = null
             val result = try {
                 val name = selectedTreeName(tree)
+                val gameReady = installation.ready
                 val destination = job.run(
                     filesDir,
                     name,
@@ -1265,7 +1300,7 @@ class LauncherActivity : Activity() {
                         // Defer checks until a base game exists. Otherwise ask
                         // the engine to inspect this exact staging tree before
                         // it can appear as an installed, selectable mod.
-                        if (installation.ready) {
+                        if (gameReady) {
                             if (LauncherModCatalog.requiresMoProfile(name)) {
                                 nativeConfigForSelection(
                                     staging.name,
@@ -1279,10 +1314,11 @@ class LauncherActivity : Activity() {
                         SharedDataStorage(this).copyLocalDirectory("Mods", staging, name)
                     },
                 )
-                if (installation.ready) {
-                    "Imported and engine-validated $name (${modCopiedBytes / (1024 * 1024)} MB) to Documents/RA2IRONHARBOR/Mods/$name. It is ready to select; edits and removals are picked up before launch."
+                if (gameReady) {
+                    activation = ImportedModSelection.afterEngineValidation(name)
+                    "Imported and engine-validated $name (${modCopiedBytes / (1024 * 1024)} MB) to Documents/IronHarborRA2YR/Mods/$name. It will be selected for the next launch."
                 } else {
-                    "Imported $name (${modCopiedBytes / (1024 * 1024)} MB) to Documents/RA2IRONHARBOR/Mods/$name. Profile validation is pending until a game installation is imported."
+                    "Imported $name (${modCopiedBytes / (1024 * 1024)} MB) to Documents/IronHarborRA2YR/Mods/$name. Profile validation and selection are pending until a game installation is ready."
                 }
             } catch (_: ModImportJob.Cancelled) {
                 "Mod import cancelled. The selected mod folder was not changed."
@@ -1298,8 +1334,35 @@ class LauncherActivity : Activity() {
                 modImporting = false
                 modImportNote = result
                 refreshInstallation()
+                activation?.let { imported ->
+                    applyModSelection(imported.modName, imported.profile)
+                    modImportNote = if (modCatalog.selectedMod.equals(imported.modName, ignoreCase = true)) {
+                        "${imported.modName} is active for the next launch (${modCatalog.profile.title} profile)."
+                    } else {
+                        "${imported.modName} was imported, but could not be activated. See the selection error above."
+                    }
+                    renderPage()
+                }
             }
         }, "vera20k-mod-import").start()
+    }
+
+    private fun openAllFilesAccessSettings() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+        val appSettings = Intent(
+            Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+            Uri.parse("package:$packageName"),
+        )
+        try {
+            startActivity(appSettings)
+        } catch (_: Exception) {
+            try {
+                startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+            } catch (error: Exception) {
+                storageNote = "Android could not open All files access settings: ${error.message ?: error.javaClass.simpleName}"
+                renderPage()
+            }
+        }
     }
 
     private fun selectedTreeName(tree: Uri): String {

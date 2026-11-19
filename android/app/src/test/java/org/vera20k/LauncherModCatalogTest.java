@@ -15,6 +15,20 @@ public class LauncherModCatalogTest {
     }
 
     @Test
+    public void validatedMentalOmegaImportUsesMoProfile() {
+        ImportedModSelection selection = ImportedModSelection.afterEngineValidation("MentalOmega330Mod");
+        assertEquals("MentalOmega330Mod", selection.getModName());
+        assertEquals(LauncherIniProfile.MO, selection.getProfile());
+    }
+
+    @Test
+    public void validatedOtherModUsesEngineProfileDetection() {
+        ImportedModSelection selection = ImportedModSelection.afterEngineValidation("Other Community Mod");
+        assertEquals("Other Community Mod", selection.getModName());
+        assertNull(selection.getProfile());
+    }
+
+    @Test
     public void readsInstalledModsAndPersistedMoChoice() throws Exception {
         Path files = tempDirectory("ih-mod-catalog-");
         Files.createDirectories(files.resolve("Mods/Mental Omega"));
