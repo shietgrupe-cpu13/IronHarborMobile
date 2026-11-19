@@ -15,6 +15,8 @@ internal object TouchHudSettings {
     const val HUD_ACTIVE_SET = "hud_active_set"
     const val HUD_DOCK = "hud_dock"
     const val HUD_TOGGLE = "HUD_TOGGLE"
+    const val HUD_EDIT = "HUD_EDIT"
+    const val HUD_HIDDEN = "hud_hidden"
     const val SET_ONE = "SET1"
     const val SET_TWO = "SET2"
     const val CONTROL_MODE = "control_mode"
@@ -62,8 +64,13 @@ internal object TouchHudSettings {
         Button(SET_ONE, "SET 1", 0),
         Button(SET_TWO, "SET 2", 0),
     )
+    /** Utility controls remain visible when the command HUD is hidden. */
+    val utilityButtons = listOf(
+        Button(HUD_EDIT, "EDIT", 0),
+        Button(HUD_TOGGLE, "HIDE", 0),
+    )
     val buttons: List<Button> = commandButtons.take(4) + groupButtons + commandButtons.drop(4)
-    val layoutButtons: List<Button> = buttons + setSelectorButtons
+    val layoutButtons: List<Button> = buttons + setSelectorButtons + utilityButtons
     val defaultVisible: Set<String> = commandButtons.take(4).mapTo(linkedSetOf()) { it.id } + groupButtons.take(5).map { it.id }
     val remappableActions: List<Button> = commandButtons
 
@@ -93,6 +100,11 @@ internal object TouchHudSettings {
             .mapTo(linkedSetOf()) { it.id }
 
     fun defaultPosition(id: String, layout: Int = LAYOUT_FREE, dock: Int = 0): Pair<Float, Float> {
+        if (id == HUD_EDIT) return when (dock.coerceIn(0, 2)) {
+            0 -> 0.03f to 0.05f
+            1 -> 0.03f to 0.05f
+            else -> 0.90f to 0.05f
+        }
         if (id == HUD_TOGGLE) return when (dock.coerceIn(0, 2)) {
             0 -> 0.03f to 0.90f
             1 -> 0.03f to 0.50f
@@ -149,7 +161,7 @@ internal object TouchHudSettings {
     }
 
     fun parsePositions(encoded: String?): Map<String, Pair<Float, Float>> {
-        val valid = layoutButtons.mapTo(hashSetOf()) { it.id }.apply { add(HUD_TOGGLE) }
+        val valid = layoutButtons.mapTo(hashSetOf()) { it.id }
         val result = linkedMapOf<String, Pair<Float, Float>>()
         encoded.orEmpty().split(';').forEach { entry ->
             val pair = entry.split(':', limit = 2)
@@ -164,7 +176,8 @@ internal object TouchHudSettings {
         return result
     }
 
-    fun encodePositions(positions: Map<String, Pair<Float, Float>>): String = (layoutButtons.map { it.id } + HUD_TOGGLE).asSequence()
+    fun encodePositions(positions: Map<String, Pair<Float, Float>>): String = layoutButtons.asSequence()
+        .map { it.id }
         .mapNotNull { id -> positions[id]?.let { id to it } }
         .joinToString(";") { (id, point) -> "$id:${point.first.coerceIn(0f, 1f)},${point.second.coerceIn(0f, 1f)}" }
 

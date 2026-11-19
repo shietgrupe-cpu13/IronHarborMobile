@@ -71,9 +71,24 @@ class TouchHudSettingsTest {
             ),
         )
         assertEquals(
-            mapOf(TouchHudSettings.SET_ONE to 120),
-            TouchHudSettings.parseSizes(TouchHudSettings.encodeSizes(mapOf(TouchHudSettings.SET_ONE to 120))),
+            mapOf(TouchHudSettings.SET_ONE to 120, TouchHudSettings.HUD_TOGGLE to 115),
+            TouchHudSettings.parseSizes(TouchHudSettings.encodeSizes(mapOf(
+                TouchHudSettings.SET_ONE to 120,
+                TouchHudSettings.HUD_TOGGLE to 115,
+            ))),
         )
+    }
+
+    @Test fun inGameEditAndHideControlsArePartOfTheMovableLayout() {
+        assertEquals(listOf(TouchHudSettings.HUD_EDIT, TouchHudSettings.HUD_TOGGLE),
+            TouchHudSettings.utilityButtons.map { it.id })
+        assertTrue(TouchHudSettings.layoutButtons.any { it.id == TouchHudSettings.HUD_EDIT })
+        assertTrue(TouchHudSettings.layoutButtons.any { it.id == TouchHudSettings.HUD_TOGGLE })
+        val points = mapOf(
+            TouchHudSettings.HUD_EDIT to (0.31f to 0.12f),
+            TouchHudSettings.HUD_TOGGLE to (0.73f to 0.88f),
+        )
+        assertEquals(points, TouchHudSettings.parsePositions(TouchHudSettings.encodePositions(points)))
     }
 
     @Test fun commandButtonsUseStockAndroidPhysicalKeyCodes() {
@@ -108,8 +123,9 @@ class TouchHudSettingsTest {
     @Test fun hudLayoutBackupRoundTripsAndRejectsUnsupportedOrMalformedData() {
         val encoded = TouchHudSettings.encodeLayoutBackup(
             setOf("STOP", "C3"),
-            mapOf("STOP" to (0.2f to 0.7f), "C3" to (0.8f to 0.4f), TouchHudSettings.HUD_TOGGLE to (0.03f to 0.9f)),
-            mapOf("C3" to 125),
+            mapOf("STOP" to (0.2f to 0.7f), "C3" to (0.8f to 0.4f),
+                TouchHudSettings.HUD_EDIT to (0.03f to 0.1f), TouchHudSettings.HUD_TOGGLE to (0.03f to 0.9f)),
+            mapOf("C3" to 125, TouchHudSettings.HUD_TOGGLE to 110),
             120,
             70,
             TouchHudSettings.LAYOUT_YURI,
@@ -127,6 +143,8 @@ class TouchHudSettingsTest {
         assertEquals(mapOf("FIRE" to 1, "MOVE" to 0, "PATROL" to 2), decoded?.controlSets)
         assertEquals(2, decoded?.dock)
         assertEquals(0.9f, decoded?.positions?.get(TouchHudSettings.HUD_TOGGLE)?.second ?: Float.NaN, 0.0001f)
+        assertEquals(0.03f, decoded?.positions?.get(TouchHudSettings.HUD_EDIT)?.first ?: Float.NaN, 0.0001f)
+        assertEquals(110, decoded?.sizes?.get(TouchHudSettings.HUD_TOGGLE))
         assertEquals(null, TouchHudSettings.decodeLayoutBackup(encoded.replace("version=3", "version=88")))
         assertEquals(null, TouchHudSettings.decodeLayoutBackup(encoded.replace("scale=120", "scale=999")))
         assertEquals(mapOf("GUARD" to 29), TouchHudSettings.parseKeyBindings("GUARD:29;STOP:0;FIRE:nope;OTHER:41"))

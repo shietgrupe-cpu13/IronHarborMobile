@@ -238,7 +238,8 @@ private class TouchHudLayoutPreview(
         }
         hitBoxes.clear()
         val active = TouchHudSettings.visibleForSet(visible, controlSets, previewSet)
-        val items = TouchHudSettings.buttons.filter { it.id in active } + TouchHudSettings.setSelectorButtons
+        val items = TouchHudSettings.buttons.filter { it.id in active } +
+            TouchHudSettings.setSelectorButtons + TouchHudSettings.utilityButtons
         val maxButtonWidth = (width * 0.30f).coerceAtLeast(dp(64).toFloat())
         items.forEach { button ->
             val itemScale = globalScale / 100f * (sizes[button.id] ?: 100) / 100f
@@ -330,7 +331,7 @@ private class TouchHudLayoutPreview(
 
     fun hideSelected() {
         val id = selectedId ?: return
-        if (id in TouchHudSettings.setSelectorButtons.map { it.id }) return
+        if (id !in TouchHudSettings.buttons.map { it.id }) return
         visible.remove(id)
         selectFirstVisible()
         invalidate()

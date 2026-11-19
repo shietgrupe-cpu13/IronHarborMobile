@@ -433,7 +433,7 @@ class LauncherActivity : Activity() {
         val hudCard = card()
         hudCard.addView(kicker("FLOATING COMMAND HUD"))
         hudCard.addView(text("RA2YRPORT-inspired floating controls", 19, R.color.launcher_text, bold = true))
-        hudCard.addView(text("Choose a layout, then arrange the floating buttons here in the launcher preview. C1-C10 select groups; hold one in-game to assign the current selection. The game overlay has no edit or hide/show buttons.", 14, R.color.launcher_muted), margin(top = 6, bottom = 8))
+        hudCard.addView(text("Customize from the in-game EDIT button or arrange controls in this preview. EDIT and HIDE/SHOW can also be moved. C1-C10 select groups; hold one in a match to assign the current selection.", 14, R.color.launcher_muted), margin(top = 6, bottom = 8))
         val enabled = CheckBox(this).apply {
             text = "Show floating HUD in touch and mixed modes"
             setTextColor(color(R.color.launcher_text))
@@ -493,7 +493,7 @@ class LauncherActivity : Activity() {
             14,
             R.color.launcher_muted,
         ), margin(top = 7))
-        layout.addView(text("Floating command buttons are arranged in the launcher preview above. This in-game editor only moves the engine's own game panels.", 13, R.color.launcher_muted), margin(top = 9))
+        layout.addView(text("The floating command HUD has its own in-game EDIT button; drag every HUD control, including EDIT and HIDE/SHOW, there or use the preview above.", 13, R.color.launcher_muted), margin(top = 9))
         pageBody.addView(layout)
     }
 
