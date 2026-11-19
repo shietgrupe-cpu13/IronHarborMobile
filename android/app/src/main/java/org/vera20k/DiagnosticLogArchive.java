@@ -23,6 +23,11 @@ final class DiagnosticLogArchive {
     private DiagnosticLogArchive() {}
 
     static ExportBundle create(File filesDir, File cacheDir, String report) throws IOException {
+        return create(filesDir, cacheDir, report, "Android logcat was not captured.");
+    }
+
+    static ExportBundle create(File filesDir, File cacheDir, String report, String androidLogcat)
+            throws IOException {
         File exportDirectory = new File(cacheDir, EXPORT_DIRECTORY).getCanonicalFile();
         if (!exportDirectory.isDirectory() && !exportDirectory.mkdirs()) {
             throw new IOException("Could not create diagnostic export directory");
@@ -42,6 +47,7 @@ final class DiagnosticLogArchive {
                 new BufferedOutputStream(new FileOutputStream(partial)))) {
             putText(zip, "diagnostics.txt", report);
             putText(zip, "contents.txt", contentsReport(logs, panicReport));
+            putText(zip, "android-logcat.txt", androidLogcat);
             for (File log : logs) {
                 putFile(zip, "logs/" + log.getName(), log);
             }
@@ -109,7 +115,9 @@ final class DiagnosticLogArchive {
     }
 
     private static String contentsReport(List<File> logs, File panicReport) {
-        StringBuilder contents = new StringBuilder("Included app-private diagnostic files:\n");
+        StringBuilder contents = new StringBuilder(
+                "Included app-private diagnostic files and best-effort Android logs:\n"
+                        + "android-logcat.txt (filtered to this app UID; capture may be unavailable)\n");
         if (logs.isEmpty() && panicReport == null) {
             contents.append("No saved engine logs or panic report were present.\n");
         }

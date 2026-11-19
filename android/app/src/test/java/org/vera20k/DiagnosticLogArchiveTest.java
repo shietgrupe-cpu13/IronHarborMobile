@@ -28,7 +28,7 @@ public class DiagnosticLogArchiveTest {
         Files.write(new File(files, "config.toml").toPath(), "private config".getBytes());
 
         DiagnosticLogArchive.ExportBundle bundle = DiagnosticLogArchive.create(
-                files, temporary.newFolder("cache"), "device summary");
+                files, temporary.newFolder("cache"), "device summary", "app-uid logcat");
         assertEquals(2, bundle.logFileCount);
         assertTrue(bundle.crashReportIncluded);
 
@@ -37,6 +37,7 @@ public class DiagnosticLogArchiveTest {
             assertEquals("previous-session", new String(readEntry(zip, "logs/ra2.log.1")));
             assertEquals("panic backtrace", new String(readEntry(zip, "crash/except.txt")));
             assertEquals("device summary", new String(readEntry(zip, "diagnostics.txt")));
+            assertEquals("app-uid logcat", new String(readEntry(zip, "android-logcat.txt")));
             assertNotNull(zip.getEntry("contents.txt"));
             Enumeration<? extends ZipEntry> entries = zip.entries();
             while (entries.hasMoreElements()) {

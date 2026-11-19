@@ -1430,6 +1430,11 @@ impl App {
                 }
 
                 crate::app::mods::finish_start(&mut state, external_launch);
+                log::info!(
+                    "Application initialization complete: main_menu_active={}, process_rules_loaded={}",
+                    state.frontend.screen == crate::ui::game_screen::GameScreen::MainMenu,
+                    state.process_assets.has_native_rules(),
+                );
                 Ok(InitializationStep::Ready(Box::new(state), Vec::new()))
             })
         })

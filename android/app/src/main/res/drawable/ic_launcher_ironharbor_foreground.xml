@@ -1,4 +1,44 @@
-<?xml version="1.0" encoding="utf-8"?>
-<bitmap xmlns:android="http://schemas.android.com/apk/res/android"
-    android:src="@drawable/ironharbor_icon_art"
-    android:gravity="center" />
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#102C28"
+        android:strokeColor="#C9A96A"
+        android:strokeWidth="2.6"
+        android:strokeLineJoin="round"
+        android:pathData="M54,13 L82,23 L81,51 C81,70 69,83 54,93 C39,83 27,70 27,51 L26,23 Z" />
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#547267"
+        android:strokeWidth="1.4"
+        android:pathData="M54,20 L74,27 L73,51 C73,65 65,76 54,84 C43,76 35,65 35,51 L34,27 Z" />
+    <path
+        android:fillColor="#BD9660"
+        android:pathData="M39,42 L69,42 L64,36 L44,36 Z" />
+    <path
+        android:fillColor="#D9E0D5"
+        android:pathData="M44,43 L64,43 L67,68 L41,68 Z" />
+    <path
+        android:fillColor="#24453D"
+        android:pathData="M50,52 L58,52 L58,68 L50,68 Z" />
+    <path
+        android:fillColor="#C9A96A"
+        android:pathData="M48,30 L60,30 L63,36 L45,36 Z" />
+    <path
+        android:fillColor="#A6F26B"
+        android:pathData="M51,24 A3,3 0,1 0 57,24 A3,3 0,1 0 51,24" />
+    <path
+        android:fillColor="#A6F26B"
+        android:pathData="M53,28 L55,28 L55,31 L53,31 Z" />
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#A6F26B"
+        android:strokeWidth="2.2"
+        android:strokeLineCap="round"
+        android:pathData="M37,75 Q45,69 53,75 Q61,81 69,75 M40,81 Q47,76 54,81 Q61,86 68,81" />
+    <path
+        android:fillColor="#C9A96A"
+        android:pathData="M36,70 L72,70 L69,73 L39,73 Z" />
+</vector>

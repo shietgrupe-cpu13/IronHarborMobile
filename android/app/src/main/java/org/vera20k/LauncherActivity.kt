@@ -67,6 +67,7 @@ class LauncherActivity : Activity() {
     private var modReportedBytes = 0L
     private var modImportNote: String? = null
     private var validatingLaunch = false
+    private val launchGate = GameLaunchGate()
     private var importing = false
     private var copiedBytes = 0L
     private var reportedBytes = 0L
@@ -98,6 +99,7 @@ class LauncherActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        launchGate.returnedToLauncher()
         if (::pageBody.isInitialized) refreshInstallation()
     }
 
@@ -308,7 +310,7 @@ class LauncherActivity : Activity() {
                 renderPage()
             }
         }
-        playButton.isEnabled = installation.ready && !importing && !validatingLaunch
+        playButton.isEnabled = installation.ready && !importing && !validatingLaunch && !launchGate.isPending
         pageBody.addView(playButton, margin(bottom = 10))
         pageBody.addView(actionButton("GAME FILES  ·  IMPORT OR CHANGE", primary = false) {
             page = Page.FILES
@@ -873,8 +875,8 @@ class LauncherActivity : Activity() {
             appendLine("Native heap: ${Debug.getNativeHeapAllocatedSize() / (1024 * 1024)} MB")
             appendLine("Installation configured: ${installation.configuredDirectory?.absolutePath ?: "no"}")
             appendLine("Engine logs: ${File(filesDir, "logs").absolutePath}")
-            appendLine("The attached ZIP includes every retained regular file in the engine logs directory and except.txt when present.")
-            appendLine("Android system logcat is separate and is not included.")
+            appendLine("The attached ZIP includes retained engine logs, except.txt when present, and a bounded best-effort Android logcat capture filtered to this app UID.")
+            appendLine("The logcat capture cannot include system-wide logs or guarantee that entries remain available.")
             appendLine("No game assets are included in this report.")
         }
         exportingDiagnostics = true
@@ -882,7 +884,8 @@ class LauncherActivity : Activity() {
         Toast.makeText(this, "Preparing the full diagnostics ZIP…", Toast.LENGTH_SHORT).show()
         Thread({
             try {
-                val bundle = DiagnosticLogArchive.create(filesDir, cacheDir, report)
+                val logcat = AndroidLogcatCapture.capture(android.os.Process.myUid(), cacheDir)
+                val bundle = DiagnosticLogArchive.create(filesDir, cacheDir, report, logcat)
                 val uri = Uri.Builder()
                     .scheme("content")
                     .authority("$packageName.diagnostics")
@@ -1194,23 +1197,29 @@ class LauncherActivity : Activity() {
     }
 
     private fun launchGame() {
-        if (validatingLaunch) return
+        if (validatingLaunch || !launchGate.begin()) return
         validatingLaunch = true
         renderPage()
         Thread({
             val validation = runCatching { nativeValidateCurrentSelection(filesDir.absolutePath) }
             runOnUiThread {
                 validatingLaunch = false
-                if (isFinishing || isDestroyed) return@runOnUiThread
+                if (isFinishing || isDestroyed) {
+                    launchGate.completedWithoutLaunch()
+                    return@runOnUiThread
+                }
                 validation.fold(
                     onSuccess = {
                         try {
                             startActivity(Intent(this, VeraActivity::class.java))
                         } catch (error: Exception) {
+                            launchGate.completedWithoutLaunch()
                             Toast.makeText(this, "Could not start the game: ${error.message}", Toast.LENGTH_LONG).show()
+                            renderPage()
                         }
                     },
                     onFailure = { error ->
+                        launchGate.completedWithoutLaunch()
                         modSelectionNote = "Cannot launch this game/mod selection: ${error.message ?: error.javaClass.simpleName}. Choose a profile whose required roots are available."
                         modCatalog = LauncherModCatalog.read(filesDir)
                         page = Page.MODS
