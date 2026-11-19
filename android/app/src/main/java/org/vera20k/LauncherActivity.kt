@@ -189,15 +189,18 @@ class LauncherActivity : Activity() {
             renderPage()
             return
         }
-        try {
+        val retainGameSource = try {
             contentResolver.takePersistableUriPermission(
                 tree,
                 Intent.FLAG_GRANT_READ_URI_PERMISSION,
             )
+            true
         } catch (_: SecurityException) {
-            // The current picker grant still permits this foreground import.
+            // A one-time provider grant still permits this copy, but cannot be
+            // reused to synchronize the selected source on later launches.
+            false
         }
-        importGame(tree)
+        importGame(tree, retainGameSource)
     }
 
     private fun buildShell() {
@@ -384,17 +387,23 @@ class LauncherActivity : Activity() {
         pageBody.addView(kicker("GAME LIBRARY"))
         pageBody.addView(text("Game files", 30, R.color.launcher_text, bold = true))
         pageBody.addView(text(
-            "Choose the folder from your own Yuri's Revenge installation. The imported copy is kept in Documents/RA2IRONHARBOR/Game so you can edit or remove it.",
+            "Locate your own Yuri's Revenge folder. Iron Harbor leaves that source in place and keeps saves, maps, mods and logs under Documents/IronHarborRA2YR.",
             14,
             R.color.launcher_muted,
         ), margin(bottom = 15))
 
         val storageCard = card()
         storageCard.addView(kicker("USER-MANAGED STORAGE"))
-        storageCard.addView(text("Documents/RA2IRONHARBOR", 16, R.color.launcher_text, bold = true))
+        val sharedStorage = SharedDataStorage(this)
+        val storageLocation = if (sharedStorage.treeUri() == null) {
+            "Documents/IronHarborRA2YR"
+        } else {
+            sharedStorage.displayLocation()
+        }
+        storageCard.addView(text(storageLocation, 16, R.color.launcher_text, bold = true))
         storageCard.addView(text(
-            if (SharedDataStorage(this).treeUri() == null) "Choose Documents in the folder picker; Iron Harbor creates RA2IRONHARBOR and its Game/Mods/Maps/Saves/Logs folders."
-            else "Game, Mods, Maps, Saves and Logs are managed under Documents/RA2IRONHARBOR.",
+            if (sharedStorage.treeUri() == null) "Choose Documents in the folder picker; Iron Harbor creates IronHarborRA2YR and its Mods/Maps/Saves/Logs folders."
+            else "Mods, Maps, Saves and Logs are managed under $storageLocation.",
             13,
             R.color.launcher_muted,
         ), margin(top = 6))
@@ -411,8 +420,11 @@ class LauncherActivity : Activity() {
             R.color.launcher_text,
             bold = true,
         ))
-        val sharedGame = SharedDataStorage(this).activeGameFolder()
-        val location = sharedGame?.let { "Documents/RA2IRONHARBOR/Game/$it (engine mirror)" }
+        val shared = SharedDataStorage(this)
+        val gameSource = shared.gameSourceName()
+        val sharedGame = shared.activeGameFolder()
+        val location = gameSource?.let { "Selected source: $it (kept in place; engine cache is private)" }
+            ?: sharedGame?.let { "Documents/IronHarborRA2YR/Game/$it (legacy source)" }
             ?: installation.configuredDirectory?.absolutePath
             ?: "No configured game folder"
         status.addView(text(location, 12, R.color.launcher_muted), margin(top = 6))
@@ -428,15 +440,15 @@ class LauncherActivity : Activity() {
 
         if (importing) {
             val progressCard = card()
-            progressCard.addView(kicker("IMPORT IN PROGRESS"))
+            progressCard.addView(kicker("PREPARING GAME FILES"))
             progressCard.addView(text(importNote ?: "Copying game files…", 15, R.color.launcher_text))
             progressCard.addView(ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
                 isIndeterminate = true
             }, margin(top = 10, bottom = 8))
-            progressCard.addView(actionButton("CANCEL IMPORT", primary = false) { AssetImportJob.cancelActive() })
+            progressCard.addView(actionButton("CANCEL PREPARATION", primary = false) { AssetImportJob.cancelActive() })
             pageBody.addView(progressCard, margin(bottom = 12))
         } else {
-            importButton = actionButton(if (ready) "CHANGE GAME FOLDER" else "IMPORT GAME FILES", primary = true) {
+            importButton = actionButton(if (ready) "LOCATE / CHANGE GAME FOLDER" else "LOCATE GAME FILES", primary = true) {
                 chooseGameFolder()
             }
             pageBody.addView(importButton, margin(bottom = 12))
@@ -448,7 +460,7 @@ class LauncherActivity : Activity() {
         val guide = card()
         guide.addView(kicker("WHAT THE CHECKER USES"))
         infoRow(guide, "Required", "ra2.mix and ra2md.mix")
-        infoRow(guide, "Storage", "Documents files mirrored for the native engine; no all-files permission")
+        infoRow(guide, "Storage", "Original game folder stays in place; one private engine-readable copy is maintained")
         infoRow(guide, "Game data", "Not bundled with this app")
         pageBody.addView(guide)
     }
@@ -1203,7 +1215,7 @@ class LauncherActivity : Activity() {
 
     private fun ensureSharedStorage(): Boolean {
         if (SharedDataStorage(this).treeUri() != null) return true
-        storageNote = "First choose Documents. The launcher will create RA2IRONHARBOR and its Game/Mods/Maps/Saves/Logs folders."
+        storageNote = "First choose Documents. The launcher will create IronHarborRA2YR and its Mods/Maps/Saves/Logs folders."
         page = Page.FILES
         renderPage()
         chooseStorageLocation()
@@ -1355,7 +1367,7 @@ class LauncherActivity : Activity() {
         return copiedFiles
     }
 
-    private fun importGame(tree: Uri) {
+    private fun importGame(tree: Uri, retainGameSource: Boolean) {
         val job = AssetImportJob.begin()
         if (job == null) {
             importNote = "Another import is already running."
@@ -1365,10 +1377,11 @@ class LauncherActivity : Activity() {
         importing = true
         copiedBytes = 0
         reportedBytes = 0
-        importNote = "Checking the selected folder…"
+        importNote = "Preparing the private engine copy…"
         page = Page.FILES
         renderPage()
         Thread({
+            var sourceSaved = false
             val result = try {
                 val free = filesDir.usableSpace
                 if (free < REQUIRED_FREE_BYTES) {
@@ -1379,24 +1392,31 @@ class LauncherActivity : Activity() {
                     throw IOException("Selected folder is missing ${missing.joinToString()}")
                 }
                 val sharedGameName = selectedTreeName(tree)
-                val installed = job.run(
+                job.run(
                     filesDir,
                     { staging -> copyTree(tree, staging, job) },
                     { staging ->
-                        val config = nativeConfigForImport(staging.absolutePath, filesDir.absolutePath)
-                        SharedDataStorage(this).copyLocalDirectory("Game", staging, sharedGameName)
-                        config
+                        nativeConfigForImport(staging.absolutePath, filesDir.absolutePath)
                     },
                 )
-                SharedDataStorage(this).setActiveGameFolder(sharedGameName)
-                "Game files imported to Documents/RA2IRONHARBOR/Game/$sharedGameName. The engine will use its private mirror."
+                if (retainGameSource) {
+                    SharedDataStorage(this).setGameSource(tree, sharedGameName)
+                } else {
+                    SharedDataStorage(this).clearGameSource()
+                }
+                sourceSaved = true
+                if (retainGameSource) {
+                    "Using $sharedGameName as the source. The original stays in place; one private engine copy is synchronized before play. Saves and logs use Documents/IronHarborRA2YR."
+                } else {
+                    "Prepared $sharedGameName as a private engine copy. This folder provider did not allow persistent access, so later source edits will not sync. Saves and logs use Documents/IronHarborRA2YR."
+                }
             } catch (_: AssetImportJob.Cancelled) {
                 "Import cancelled. The previous installation remains active."
             } catch (error: Throwable) {
                 "Import failed: ${error.message ?: error.javaClass.simpleName}"
             } finally {
                 job.close()
-                runCatching {
+                if (!sourceSaved) runCatching {
                     contentResolver.releasePersistableUriPermission(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
             }
@@ -1515,13 +1535,21 @@ class LauncherActivity : Activity() {
     /** SAF documents are mirrored to app-private paths because Rust consumes filesystem paths. */
     private fun syncUserManagedData() {
         val storage = SharedDataStorage(this)
-        if (storage.treeUri() == null) return // Keep installations from older builds launchable.
-        storage.ensureLayout()
-        val gameFolder = storage.activeGameFolder()
-        if (gameFolder != null) {
+        val sourceTree = storage.gameSourceTree()
+        if (sourceTree != null) {
             val engineGameDirectory = installation.configuredDirectory
                 ?: throw IOException("No engine game directory is configured")
-            storage.mirrorChildFolder("Game", gameFolder, engineGameDirectory)
+            storage.mirrorGameSource(engineGameDirectory)
+        }
+        if (storage.treeUri() == null) return // Keep installations launchable if Documents access was revoked.
+        storage.ensureLayout()
+        if (sourceTree == null) {
+            val gameFolder = storage.activeGameFolder()
+            if (gameFolder != null) {
+                val engineGameDirectory = installation.configuredDirectory
+                    ?: throw IOException("No engine game directory is configured")
+                storage.mirrorChildFolder("Game", gameFolder, engineGameDirectory)
+            }
         }
         storage.mirrorFolder("Mods", File(filesDir, "Mods"))
         val mapsDirectory = File(nativeMapsDirectory(filesDir.absolutePath))
@@ -1551,14 +1579,6 @@ class LauncherActivity : Activity() {
         Thread({
             val storage = SharedDataStorage(this)
             val notes = mutableListOf<String>()
-            val oldGame = installation.configuredDirectory
-            if (storage.activeGameFolder() == null && oldGame?.isDirectory == true) {
-                runCatching {
-                    storage.copyLocalDirectory("Game", oldGame, oldGame.name)
-                    storage.setActiveGameFolder(oldGame.name)
-                }.onSuccess { notes += "existing game copied" }
-                    .onFailure { notes += "game copy skipped (${it.message})" }
-            }
             File(filesDir, "Mods").listFiles()?.filter { it.isDirectory && !it.name.startsWith(".") }?.forEach { mod ->
                 runCatching { storage.copyLocalDirectory("Mods", mod, mod.name) }
                     .onFailure { notes += "${mod.name} left in private storage (${it.message})" }
@@ -1575,7 +1595,7 @@ class LauncherActivity : Activity() {
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
                 storageNote = if (notes.isEmpty()) {
-                    "Documents storage is ready. New imports and game changes are kept there; game-file edits are read before launch."
+                    "${storage.displayLocation()} is ready. Game files remain in their selected folder; runtime data is kept in Documents."
                 } else {
                     "Documents storage is ready. ${notes.joinToString("; ")}. Existing files were not overwritten."
                 }

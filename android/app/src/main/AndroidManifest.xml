@@ -50,9 +50,8 @@
             android:name="org.vera20k.LauncherActivity"
             android:exported="false"
             android:launchMode="singleTop"
-            android:screenOrientation="sensorLandscape"
             android:resizeableActivity="true"
-            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|density|uiMode|fontScale|locale|layoutDirection"
+            android:configChanges="keyboard|keyboardHidden|navigation|uiMode|fontScale|locale|layoutDirection"
             android:theme="@style/Theme.IronHarbor.Launcher" />
 
         <!-- The engine toggles two aliases for its icon preference; both use

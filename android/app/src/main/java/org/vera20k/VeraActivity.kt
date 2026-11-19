@@ -186,9 +186,16 @@ class VeraActivity : NativeActivity() {
 
     /** The app switcher's picture and label for the chosen icon. */
     private fun updateTaskDescription() {
+        val drawable = try {
+            resources.getDrawable(R.drawable.ic_launcher_ironharbor_foreground, theme)
+        } catch (error: RuntimeException) {
+            // A bad or device-incompatible icon resource must not crash the
+            // NativeActivity during startup; Android keeps its default task icon.
+            android.util.Log.e("IronHarborIcon", "Could not load task icon; keeping the system icon", error)
+            return
+        }
         val iconSize = (48 * resources.displayMetrics.density).toInt().coerceAtLeast(1)
         val icon = Bitmap.createBitmap(iconSize, iconSize, Bitmap.Config.ARGB_8888)
-        val drawable = resources.getDrawable(R.drawable.ic_launcher_ironharbor_foreground, theme)
         drawable.setBounds(0, 0, iconSize, iconSize)
         drawable.draw(Canvas(icon))
         setTaskDescription(

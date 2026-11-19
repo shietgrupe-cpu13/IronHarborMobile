@@ -8,7 +8,7 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.util.UUID
 
-/** User-owned Documents/RA2IRONHARBOR tree plus the filesystem mirror used by Rust. */
+/** User-owned Documents/IronHarborRA2YR tree plus the filesystem mirror used by Rust. */
 internal class SharedDataStorage(private val context: Context) {
     private val resolver = context.contentResolver
 
@@ -16,21 +16,58 @@ internal class SharedDataStorage(private val context: Context) {
         .getString(TREE_URI, null)?.let(Uri::parse)
 
     fun rootUri(): Uri {
-        val tree = treeUri() ?: throw IOException("Choose Documents/RA2IRONHARBOR storage first")
+        val tree = treeUri() ?: throw IOException("Choose the Documents folder first")
         val rootId = DocumentsContract.getTreeDocumentId(tree)
         val selected = DocumentsContract.buildDocumentUriUsingTree(tree, rootId)
         val selectedName = displayName(tree, rootId)
         val root = if (selectedName.equals(ROOT_NAME, ignoreCase = true)) {
             selected
         } else {
-            findChild(tree, rootId, ROOT_NAME) ?: createDirectory(tree, selected, ROOT_NAME)
+            findChild(tree, rootId, ROOT_NAME)
+                ?: migrateLegacyRoot(tree, rootId, selected)
+                ?: createDirectory(tree, selected, ROOT_NAME)
         }
         return root
     }
 
+    /** Store the chosen original game tree; the engine gets a private path mirror. */
+    fun setGameSource(tree: Uri, displayName: String) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString(GAME_SOURCE_URI, tree.toString())
+            .putString(GAME_SOURCE_NAME, safeName(displayName))
+            .remove(ACTIVE_GAME)
+            .apply()
+    }
+
+    fun clearGameSource() {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .remove(GAME_SOURCE_URI)
+            .remove(GAME_SOURCE_NAME)
+            .remove(ACTIVE_GAME)
+            .apply()
+    }
+
+    fun gameSourceTree(): Uri? = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        .getString(GAME_SOURCE_URI, null)?.let(Uri::parse)
+
+    fun gameSourceName(): String? = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        .getString(GAME_SOURCE_NAME, null)
+
+    /** Mirror a SAF source into the filesystem directory consumed by Rust. */
+    fun mirrorGameSource(destination: File) {
+        val tree = gameSourceTree() ?: throw IOException("Locate your game folder again")
+        try {
+            val rootId = DocumentsContract.getTreeDocumentId(tree)
+            val document = DocumentsContract.buildDocumentUriUsingTree(tree, rootId)
+            mirrorDocumentDirectory(document, destination, tree)
+        } catch (error: SecurityException) {
+            throw IOException("Game-folder access was revoked. Locate the folder again.", error)
+        }
+    }
+
     fun ensureLayout() {
         val root = rootUri()
-        listOf("Game", "Mods", "Maps", "Saves", "Logs").forEach { ensureChild(root, it) }
+        listOf("Mods", "Maps", "Saves", "Logs").forEach { ensureChild(root, it) }
     }
 
     fun setActiveGameFolder(name: String) {
@@ -41,10 +78,10 @@ internal class SharedDataStorage(private val context: Context) {
     fun activeGameFolder(): String? = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         .getString(ACTIVE_GAME, null)
 
-    fun displayLocation(): String = if (treeUri() == null) {
-        "Not selected"
-    } else {
-        "Documents/$ROOT_NAME"
+    fun displayLocation(): String {
+        val tree = treeUri() ?: return "Not selected"
+        val selectedId = DocumentsContract.getDocumentId(rootUri())
+        return "Documents/${displayName(tree, selectedId)}"
     }
 
     fun copyLocalDirectory(area: String, source: File, childName: String? = null) {
@@ -101,7 +138,7 @@ internal class SharedDataStorage(private val context: Context) {
     /** Refreshes an engine-readable folder from its editable Documents copy. */
     fun mirrorFolder(area: String, destination: File) {
         val parent = ensureChild(rootUri(), area)
-        mirrorDocumentDirectory(parent, destination)
+        mirrorDocumentDirectory(parent, destination, treeUri()!!)
     }
 
     fun mirrorChildFolder(area: String, childName: String, destination: File) {
@@ -109,17 +146,16 @@ internal class SharedDataStorage(private val context: Context) {
         val tree = treeUri()!!
         val child = findChild(tree, DocumentsContract.getDocumentId(parent), childName)
             ?: throw IOException("Documents/$ROOT_NAME/$area/$childName is missing")
-        mirrorDocumentDirectory(child, destination)
+        mirrorDocumentDirectory(child, destination, tree)
     }
 
     fun mirrorMods(destination: File) {
         val parent = ensureChild(rootUri(), "Mods")
-        mirrorDocumentDirectory(parent, destination)
+        mirrorDocumentDirectory(parent, destination, treeUri()!!)
     }
 
-    private fun mirrorDocumentDirectory(document: Uri, target: File) {
+    private fun mirrorDocumentDirectory(document: Uri, target: File, tree: Uri) {
         if (!target.isDirectory && !target.mkdirs()) throw IOException("Cannot create engine mirror ${target.absolutePath}")
-        val tree = treeUri() ?: throw IOException("Choose Documents/RA2IRONHARBOR storage first")
         val entries = children(tree, DocumentsContract.getDocumentId(document))
         val present = HashSet<String>()
         for (entry in entries) {
@@ -130,7 +166,7 @@ internal class SharedDataStorage(private val context: Context) {
             val childUri = DocumentsContract.buildDocumentUriUsingTree(tree, id)
             if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
                 if (destination.exists() && !destination.isDirectory) destination.delete()
-                mirrorDocumentDirectory(childUri, destination)
+                mirrorDocumentDirectory(childUri, destination, tree)
                 continue
             }
             if (destination.isDirectory) AssetImportJob.deleteStagingTree(destination.toPath())
@@ -181,7 +217,7 @@ internal class SharedDataStorage(private val context: Context) {
     }
 
     private fun publishDirectory(source: File, target: Uri) {
-        val tree = treeUri() ?: throw IOException("Choose Documents/RA2IRONHARBOR storage first")
+        val tree = treeUri() ?: throw IOException("Choose the Documents folder first")
         val files = source.listFiles() ?: return
         for (file in files) {
             safeName(file.name)
@@ -214,7 +250,7 @@ internal class SharedDataStorage(private val context: Context) {
     }
 
     private fun ensureChild(parent: Uri, name: String): Uri {
-        val tree = treeUri() ?: throw IOException("Choose Documents/RA2IRONHARBOR storage first")
+        val tree = treeUri() ?: throw IOException("Choose the Documents folder first")
         val id = DocumentsContract.getDocumentId(parent)
         return findChild(tree, id, name) ?: createDirectory(tree, parent, name)
     }
@@ -227,6 +263,14 @@ internal class SharedDataStorage(private val context: Context) {
     private fun createDirectory(tree: Uri, parent: Uri, name: String): Uri =
         DocumentsContract.createDocument(resolver, parent, DocumentsContract.Document.MIME_TYPE_DIR, safeName(name))
             ?: throw IOException("Cannot create Documents folder $name")
+
+    /** Rename the old app-owned root in place; retain it unchanged if unsupported. */
+    private fun migrateLegacyRoot(tree: Uri, parentId: String, parent: Uri): Uri? {
+        val legacy = findChild(tree, parentId, LEGACY_ROOT_NAME) ?: return null
+        return runCatching { DocumentsContract.renameDocument(resolver, legacy, ROOT_NAME) }
+            .getOrNull()
+            ?: legacy
+    }
 
     private fun deleteChildren(folder: Uri) {
         val tree = treeUri()!!
@@ -287,7 +331,10 @@ internal class SharedDataStorage(private val context: Context) {
         private const val PREFS = "ironharbor_user_storage"
         private const val TREE_URI = "documents_tree_uri"
         private const val ACTIVE_GAME = "active_game_folder"
-        private const val ROOT_NAME = "RA2IRONHARBOR"
+        private const val GAME_SOURCE_URI = "game_source_tree_uri"
+        private const val GAME_SOURCE_NAME = "game_source_name"
+        private const val ROOT_NAME = "IronHarborRA2YR"
+        private const val LEGACY_ROOT_NAME = "RA2IRONHARBOR"
 
         fun setTree(context: Context, tree: Uri) {
             val preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)

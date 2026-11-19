@@ -1,5 +1,14 @@
 # Android build
 
+**Current incremental build: b23.** The launcher now leaves the selected game
+folder in place and keeps only the private filesystem mirror required by the
+Rust engine; saves, maps, mods and logs use `Documents/IronHarborRA2YR`. The
+launcher can rotate into portrait and landscape, while the NativeActivity stays
+landscape-first. JVM tests and ARM64 debug APK packaging passed. See the
+[b23 storage and portrait report](android-storage-portrait-b23.md). Android
+installation of b23 is pending because the device still has a b22 import in
+progress; device-side SAF behavior and portrait rendering are not yet verified.
+
 **Status: Android launcher baseline.** The contributor reported a debug APK playing
 the intro movie, reaching the main menu, and importing a retail installation on an
 Android 16 arm64 tablet (OnePlus Pad 2 Pro). Launcher baseline b2 builds and passes
