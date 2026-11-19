@@ -596,6 +596,10 @@ fn process_native_rules_cold_start_inner(
 ) -> Result<(NativeTypeConstructionTrace, [usize; 5]), RulesError> {
     let _ares_way = crate::rules::ares_switch::read_ares_way(registry_state.reads_ares_way);
     let mut processor = RulesPassProcessor::with_registry_state(registry_state);
+    // Cold startup reads TechnoType bodies without entering Process's
+    // ReadTypeData hook. Ares' BeforeTypeData hook still loads the selected
+    // root's [ArmorTypes] before the first Armor= binding.
+    processor.read_ares_armor_catalog(selected_rules_root);
     // Load_Game_Rules52D0FF calls Colors66D3A0 on the selected root before
     // ColorAdd52D111 and AudioVisual52D132, even without LANGRULE.INI.
     // Executed prefix: tools/rules_oracle/cold_colors.{py,json,meta.json}.
@@ -7755,6 +7759,16 @@ impl RulesPassProcessor {
         Some((native_stored_id, raw, member.body.clone()))
     }
 
+    /// Apply the Ares armor catalog at the cold-start boundary. The regular
+    /// Process path invokes this from `process_type_data`; cold startup reads
+    /// TechnoType bodies directly, so it must call the same retained catalog
+    /// before binding Armor= names.
+    fn read_ares_armor_catalog(&mut self, pass: &IniFile) {
+        if let Some(armors) = self.ares_armors.as_mut() {
+            armors.read_pass(pass);
+        }
+    }
+
     fn process_type_data(
         &mut self,
         pass: &IniFile,
@@ -7796,9 +7810,7 @@ impl RulesPassProcessor {
         // Installed BeforeTypeData679A15 reads ArmorTypes/defaults before
         // any ordinary ObjectType/Warhead body in this Process pass. Only
         // Rules read the Ares way have the catalog.
-        if let Some(armors) = self.ares_armors.as_mut() {
-            armors.read_pass(pass);
-        }
+        self.read_ares_armor_catalog(pass);
         // 1002AEF0 reads [MouseCursors] after ArmorTypes, before any Type
         // body of this pass names a cursor.
         if crate::rules::ares_switch::ares_way() {

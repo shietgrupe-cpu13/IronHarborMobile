@@ -55,7 +55,7 @@ rustup target add aarch64-linux-android
 #    "ld.lld: error: unable to find library -laaudio".
 $env:CARGO_PROFILE_SHIPPING_STRIP = "symbols"
 cargo ndk -t arm64-v8a --platform 26 -o android\app\src\main\jniLibs build `
-  --profile shipping -p vera20k-android --no-default-features
+  --profile shipping -p vera20k-android --no-default-features --features phobos
 
 # 2. Package. Point android\local.properties at the SDK first:
 #    sdk.dir=D\:\\Programming\\android-sdk
@@ -80,7 +80,7 @@ See [android-launcher.md](android-launcher.md) for launcher sections, supported 
 
 The b3 fork uses the independent product name **Iron Harbor Mobile** and application ID `org.ironharbor.mobile`; `org.vera20k` remains the JNI namespace for the existing native entry points. Its release signing key is machine-specific and must never be committed. Create `android/.android/android-release.jks` and supply `ANDROID_RELEASE_STORE_FILE`, `ANDROID_RELEASE_STORE_PASSWORD`, `ANDROID_RELEASE_KEY_ALIAS`, and `ANDROID_RELEASE_KEY_PASSWORD` to Gradle from a secure local secret store. The checkout ignores `android/.android/`.
 
-For an ARM64 shipping build, set `CARGO_PROFILE_SHIPPING_STRIP=symbols`, build with `cargo ndk -t arm64-v8a --platform 26 -o android/app/src/main/jniLibs build --locked --profile shipping -p vera20k-android --no-default-features`, then run `android/gradlew.bat -p android :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease`. Use JDK 17+, Android SDK 36/build-tools 36.1.0, NDK 28.2.13676358, and Gradle 8.13. The app declares only `arm64-v8a`, matching the native library produced by this recipe.
+For an ARM64 shipping build, set `CARGO_PROFILE_SHIPPING_STRIP=symbols`, build with `cargo ndk -t arm64-v8a --platform 26 -o android/app/src/main/jniLibs build --locked --profile shipping -p vera20k-android --no-default-features --features phobos`, then run `android/gradlew.bat -p android :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease`. The explicit `phobos` feature is required for MO/Phobos mod behavior; vanilla YR stays governed by its data and runtime settings. Use JDK 17+, Android SDK 36/build-tools 36.1.0, NDK 28.2.13676358, and Gradle 8.13. The app declares only `arm64-v8a`, matching the native library produced by this recipe.
 
 Build b3 verified six Android JVM tests, a shipping-profile ARM64 Rust build, signed debug and release APKs, the release application ID/SDK levels, 16 KB APK native-entry alignment, and 16 KB ELF LOAD alignment. The package contains no Yuri's Revenge installation files. No device was attached during this build; Android 16 POCO gameplay remains unverified. See [the b3 report](android-release-b3.md); detailed build logs are retained in the local `out/logs/` directory.
 
@@ -230,6 +230,26 @@ They have not been independently reproduced for the current code.
   not writable: Gradle otherwise fails with
   `Could not initialize native services … Failed to load native library
   'native-platform.dll'`.
+
+## B22 Mental Omega compatibility work
+
+B22 selectively adapts three findings from the `928274/vera20k-MO` branch while
+keeping this fork's existing launcher and vanilla engine. Its Android ARM64
+recipe enables the existing opt-in `phobos` feature. The cold-start rules path
+now reads the selected root `[ArmorTypes]` catalog before binding
+`TechnoType`/`Armor=` values, matching the Ares initialization order. Screen
+presentation also keeps a cloak-capable enemy as the sensor ghost during MO's
+single-stage state-zero frames; forced sensor and map-editor queries retain
+their existing behavior.
+
+Regression checks passed for custom armor cold-start binding, the MO sensor
+ghost state-zero case, and the existing vanilla cloak transition. B22 was built
+for Android ARM64 with the optimized `fast` profile and Phobos enabled; package
+metadata is app ID `org.ironharbor.mobile`, version 0.3.6 / code 226, min API 26,
+target API 36. The current device run remains unverified: no Android device was
+attached. These changes do not establish full Mental Omega compatibility;
+mod-specific DLL behavior, rosters, effects, archives, and match scenarios still
+require tests with the user's own files on an Android device.
 
 ## TODO
 

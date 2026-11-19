@@ -215,6 +215,7 @@ pub(crate) fn visual_character(
     cloaking_stages: i32,
     invisible: bool,
     is_building: bool,
+    cloak_present: bool,
     owned_by_current_house: bool,
     owner_present: bool,
     query: VisualCharacterQuery,
@@ -224,6 +225,18 @@ pub(crate) fn visual_character(
     }
     if invisible && !query.map_editor {
         return 5;
+    }
+    // With MO's single cloak stage, Ares can park a cloak-capable unit in
+    // state zero between cloaked frames. A screen observer with sensor vision
+    // still sees the steady half-transparent ghost. Keep this screen-only:
+    // forced sensor queries used by simulation remain native-exact.
+    if cloak_present
+        && !query.force_sensor
+        && !query.map_editor
+        && !is_building
+        && query.observer_senses_cell
+    {
+        return 3;
     }
     if state == 0 || query.map_editor || is_building {
         return 0;
@@ -535,6 +548,7 @@ impl CloakRuntime {
                     facts.cloaking_stages,
                     facts.invisible,
                     facts.is_building,
+                    true,
                     facts.owned_by_current_house,
                     true,
                     VisualCharacterQuery::sensor(false, false, false),
@@ -579,6 +593,7 @@ impl CloakRuntime {
                 facts.cloaking_stages,
                 facts.invisible,
                 facts.is_building,
+                true,
                 facts.owned_by_current_house,
                 true,
                 VisualCharacterQuery::sensor(false, false, false),

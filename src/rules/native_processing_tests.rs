@@ -3,6 +3,34 @@
 use super::*;
 use crate::util::save_codec;
 
+/// Mental Omega provides custom `[ArmorTypes]` entries which must exist before
+/// cold-start TechnoType bodies bind `Armor=`. This path skips Process's normal
+/// type-data hook, so the root catalog has to be read explicitly.
+#[test]
+fn cold_start_binds_custom_ares_armor_types_before_techno_bodies() {
+    let _ares = crate::rules::ares_switch::read_ares_way(true);
+    let root = IniFile::from_str(
+        "[ArmorTypes]\nfact=wood\nsuper2=concrete_b\ntarget=0%\n\
+         [BuildingTypes]\n0=GAWEAP\n[GAWEAP]\nStrength=1000\nArmor=fact\n",
+    );
+    let trace = process_native_rules_cold_start(
+        NativeRulesRegistryState::new(true),
+        &root,
+        &IniFile::empty(),
+        None,
+        &EvaRegistry::default(),
+        &crate::rules::sound_ini::SoundRegistry::default(),
+    )
+    .unwrap();
+    let state = trace.registry_state();
+    let catalog = state.ares_armors.as_ref().expect("Ares armor catalog");
+    let fact = catalog.find("fact").expect("custom armor is allocated");
+    assert!(catalog.find("super2").is_some());
+    assert!(catalog.find("target").is_some());
+    assert!(fact.index() >= crate::rules::armor::RETAIL_ARMOR_NAMES.len());
+    assert_eq!(state.families[&RulesTypeFamily::Building][0].armor_id, fact);
+}
+
 #[test]
 fn weapon_types_register_before_animation_reads_each_rules_layer() {
     let _ares = crate::rules::ares_switch::read_ares_way(true);
