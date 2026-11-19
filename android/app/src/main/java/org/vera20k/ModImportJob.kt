@@ -21,6 +21,11 @@ internal class ModImportJob private constructor() : AutoCloseable {
         fun into(directory: File)
     }
 
+    fun interface Validate {
+        @Throws(IOException::class)
+        fun beforePublish(directory: File)
+    }
+
     @Synchronized
     fun cancel(): Boolean {
         if (published) return false
@@ -34,7 +39,7 @@ internal class ModImportJob private constructor() : AutoCloseable {
     }
 
     @Throws(IOException::class)
-    fun run(filesDirectory: File, folderName: String, copy: Copy): File {
+    fun run(filesDirectory: File, folderName: String, copy: Copy, validate: Validate): File {
         checkCancelled()
         val modsDirectory = File(filesDirectory, "Mods")
         if (!modsDirectory.isDirectory && !modsDirectory.mkdirs()) {
@@ -44,9 +49,13 @@ internal class ModImportJob private constructor() : AutoCloseable {
         if (Files.exists(destination.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
             throw IOException("A mod named '$folderName' is already installed; existing files were left untouched")
         }
-        val staging = Files.createTempDirectory(filesDirectory.toPath(), ".mod-import-").toFile()
+        // Keep staging under Mods so the engine's profile validator can inspect
+        // the same tree that will be published, including its MIX archives.
+        val staging = Files.createTempDirectory(modsDirectory.toPath(), ".mod-import-").toFile()
         try {
             copy.into(staging)
+            checkCancelled()
+            validate.beforePublish(staging)
             synchronized(this) {
                 checkCancelled()
                 if (Files.exists(destination.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)) {

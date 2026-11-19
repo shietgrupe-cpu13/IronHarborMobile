@@ -20,7 +20,7 @@ public class ModImportJobTest {
                 Path nested = staging.toPath().resolve("art/nested");
                 Files.createDirectories(nested);
                 Files.write(nested.resolve("rules.ini"), "[General]".getBytes(StandardCharsets.UTF_8));
-            });
+            }, staging -> assertEquals("Mods", staging.getParentFile().getName()));
             assertEquals("Sample Mod", result.getName());
             assertTrue(Files.isRegularFile(files.resolve("Mods/Sample Mod/art/nested/rules.ini")));
             assertFalse(hasStagingDirectory(files));
@@ -40,7 +40,7 @@ public class ModImportJobTest {
         try {
             assertThrows(IOException.class, () -> job.run(files.toFile(), "Sample Mod", staging -> {
                 Files.write(staging.toPath().resolve("mod.ini"), "replace".getBytes(StandardCharsets.UTF_8));
-            }));
+            }, staging -> fail("collision should be rejected before validation")));
             assertEquals("keep", new String(Files.readAllBytes(existing), StandardCharsets.UTF_8));
             assertFalse(hasStagingDirectory(files));
         } finally {
@@ -57,7 +57,7 @@ public class ModImportJobTest {
             assertThrows(IOException.class, () -> failed.run(files.toFile(), "Partial", staging -> {
                 Files.write(staging.toPath().resolve("partial.bin"), new byte[] {1, 2, 3});
                 throw new IOException("provider failed");
-            }));
+            }, staging -> fail("failed copy should not be validated")));
             assertFalse(Files.exists(files.resolve("Mods/Partial")));
             assertFalse(hasStagingDirectory(files));
         } finally {
@@ -69,7 +69,8 @@ public class ModImportJobTest {
         try {
             assertTrue(cancelled.cancel());
             assertThrows(ModImportJob.Cancelled.class,
-                    () -> cancelled.run(files.toFile(), "Cancelled", staging -> fail("copy must not start")));
+                    () -> cancelled.run(files.toFile(), "Cancelled", staging -> fail("copy must not start"),
+                            staging -> fail("cancelled import must not be validated")));
             assertFalse(Files.exists(files.resolve("Mods/Cancelled")));
             assertFalse(hasStagingDirectory(files));
         } finally {
@@ -77,8 +78,28 @@ public class ModImportJobTest {
         }
     }
 
+    @Test
+    public void validationFailureDoesNotPublishAnIncompleteMod() throws Exception {
+        Path files = tempDirectory("ih-mod-validation-");
+        ModImportJob job = ModImportJob.begin();
+        assertNotNull(job);
+        try {
+            assertThrows(IOException.class, () -> job.run(files.toFile(), "Mental Omega", staging -> {
+                Files.write(staging.toPath().resolve("expandmo99.mix"), new byte[] {1, 2, 3});
+            }, staging -> {
+                assertEquals("Mods", staging.getParentFile().getName());
+                throw new IOException("MO profile roots are incomplete: rulesmo.ini, artmo.ini");
+            }));
+            assertFalse(Files.exists(files.resolve("Mods/Mental Omega")));
+            assertFalse(hasStagingDirectory(files.resolve("Mods")));
+        } finally {
+            job.close();
+        }
+    }
+
     private static boolean hasStagingDirectory(Path files) throws IOException {
-        try (var children = Files.list(files)) {
+        Path parent = Files.exists(files.resolve("Mods")) ? files.resolve("Mods") : files;
+        try (var children = Files.list(parent)) {
             return children.anyMatch(path -> path.getFileName().toString().startsWith(".mod-import-"));
         }
     }
