@@ -163,28 +163,35 @@ fn launcher_mod_directory(
         return Ok(None);
     };
     let path = std::path::Path::new(name);
-    let mut components = path.components();
+    let components: Vec<_> = path.components().collect();
     anyhow::ensure!(
-        matches!(components.next(), Some(std::path::Component::Normal(_)))
-            && components.next().is_none(),
-        "The selected mod must be one folder name"
+        !name.contains('\\')
+            && !components.is_empty()
+            && components.len() <= 4
+            && components
+                .iter()
+                .all(|part| matches!(part, std::path::Component::Normal(_))),
+        "The selected mod must be a folder path within Mods (up to four levels)"
     );
     let root = config.paths.mods_dir();
-    let folder = root.join(path);
-    let metadata = std::fs::symlink_metadata(&folder).map_err(|error| {
-        anyhow::anyhow!(
-            "The selected mod folder is unavailable at {}: {error}",
-            folder.display()
-        )
-    })?;
-    anyhow::ensure!(
-        metadata.file_type().is_dir() && !metadata.file_type().is_symlink(),
-        "The selected mod is not a regular folder"
-    );
+    let mut checked = root.clone();
+    for component in &components {
+        checked.push(component.as_os_str());
+        let metadata = std::fs::symlink_metadata(&checked).map_err(|error| {
+            anyhow::anyhow!(
+                "The selected mod folder is unavailable at {}: {error}",
+                checked.display()
+            )
+        })?;
+        anyhow::ensure!(
+            metadata.file_type().is_dir() && !metadata.file_type().is_symlink(),
+            "The selected mod path contains a non-folder or symbolic link"
+        );
+    }
     let root = std::fs::canonicalize(&root)?;
-    let folder = std::fs::canonicalize(folder)?;
+    let folder = std::fs::canonicalize(checked)?;
     anyhow::ensure!(
-        folder.parent() == Some(root.as_path()),
+        folder != root && folder.starts_with(&root),
         "The selected mod folder resolves outside the managed Mods directory"
     );
     Ok(Some(folder))
@@ -192,9 +199,10 @@ fn launcher_mod_directory(
 
 fn validate_launcher_selection(config: &vera20k::util::config::GameConfig) -> anyhow::Result<()> {
     let mod_dir = launcher_mod_directory(config)?;
-    let roots = vera20k::assets::asset_manager::AssetManager::inspect_launch_ini_roots(
+    let roots = vera20k::assets::asset_manager::AssetManager::inspect_launch_ini_roots_with_ares_support(
         &config.paths.ra2_dir,
         mod_dir.as_deref(),
+        Some(&config.paths.settings_dir().join("AresSupport")),
         vera20k::assets::asset_manager::MediaArchiveMode::STOCK_DIGITAL,
         vera20k::util::ares_launch::AresSetting::Auto,
         &config.ini,
@@ -207,6 +215,87 @@ fn validate_launcher_selection(config: &vera20k::util::config::GameConfig) -> an
     })?;
     log::info!("Launcher validated engine INI roots: {:?}", roots);
     Ok(())
+}
+
+fn launcher_settings_directory(
+    files_directory: &std::path::Path,
+) -> anyhow::Result<std::path::PathBuf> {
+    vera20k::util::platform_dir::set(files_directory.to_path_buf());
+    let (config_path, contents) = read_launcher_config(files_directory)?;
+    let config = vera20k::util::config::GameConfig::parse_text_at(&contents, &config_path)?;
+    Ok(config.paths.settings_dir().to_path_buf())
+}
+
+fn write_launcher_ares_setting(
+    settings_directory: &std::path::Path,
+    setting: vera20k::util::ares_launch::AresSetting,
+) -> anyhow::Result<()> {
+    use std::io::Write;
+    std::fs::create_dir_all(settings_directory)?;
+    let target = vera20k::util::case_insensitive_path::find(settings_directory, "VERA.INI")
+        .unwrap_or_else(|| settings_directory.join("VERA.INI"));
+    let previous = match std::fs::read(&target) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => return Err(error.into()),
+    };
+    let updated = vera20k::util::ini_writer::set_ini_values(
+        &previous,
+        "VERA",
+        &[("Ares", setting.ini_value())],
+    );
+    let temporary = target.with_file_name(format!(
+        ".VERA.INI.{}.{}.tmp",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos()
+    ));
+    let result = (|| -> anyhow::Result<()> {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.write_all(&updated)?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, &target)?;
+        if let Ok(directory) = std::fs::File::open(settings_directory) {
+            let _ = directory.sync_all();
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(temporary);
+    }
+    result
+}
+
+fn read_launcher_ares_setting(
+    settings_directory: &std::path::Path,
+) -> anyhow::Result<vera20k::util::ares_launch::AresSetting> {
+    let Some(path) = vera20k::util::case_insensitive_path::find(settings_directory, "VERA.INI")
+    else {
+        return Ok(vera20k::util::ares_launch::AresSetting::Auto);
+    };
+    let bytes = std::fs::read(path)?;
+    let ini = vera20k::rules::ini_parser::IniFile::from_bytes(&bytes)
+        .map_err(|error| anyhow::anyhow!("VERA.INI is invalid: {error}"))?;
+    let section = ini
+        .section_names()
+        .into_iter()
+        .find(|name| name.eq_ignore_ascii_case("VERA"));
+    let value = section
+        .and_then(|name| ini.section(name))
+        .and_then(|section| {
+            section
+                .raw_entries()
+                .find(|(key, _)| key.eq_ignore_ascii_case("Ares"))
+        })
+        .map(|(_, value)| value)
+        .unwrap_or("Auto");
+    Ok(vera20k::util::ares_launch::AresSetting::from_ini_text(
+        value,
+    ))
 }
 
 fn profile_from_launcher_value(
@@ -351,6 +440,130 @@ pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeConfigForImport(
     }
 }
 
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeGetCameraZoomLimits(
+    mut env: jni::JNIEnv,
+    _activity: JObject,
+    files_directory: JString,
+) -> jstring {
+    let result = (|| -> anyhow::Result<jstring> {
+        let files_directory: String = env.get_string(&files_directory)?.into();
+        let config_path = std::path::Path::new(&files_directory).join("config.toml");
+        let contents = match std::fs::read_to_string(config_path) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(error) => return Err(error.into()),
+        };
+        let (minimum, maximum) = vera20k::util::config::camera_zoom_limits_from_text(&contents)?;
+        Ok(env
+            .new_string(format!("{minimum:.3},{maximum:.3}"))?
+            .into_raw())
+    })();
+    match result {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = env.throw_new("java/io/IOException", error.to_string());
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeConfigForCameraZoomLimits(
+    mut env: jni::JNIEnv,
+    _activity: JObject,
+    minimum: jni::sys::jfloat,
+    maximum: jni::sys::jfloat,
+    files_directory: JString,
+) -> jstring {
+    let result = (|| -> anyhow::Result<jstring> {
+        let files_directory: String = env.get_string(&files_directory)?.into();
+        let config_path = std::path::Path::new(&files_directory).join("config.toml");
+        let previous = match std::fs::read_to_string(config_path) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(error) => return Err(error.into()),
+        };
+        let contents = vera20k::util::config::set_camera_zoom_limits(&previous, minimum, maximum)?;
+        Ok(env.new_string(contents)?.into_raw())
+    })();
+    match result {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = env.throw_new("java/io/IOException", error.to_string());
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeGetRenderOptions(
+    mut env: jni::JNIEnv,
+    _activity: JObject,
+    files_directory: JString,
+) -> jstring {
+    let result = (|| -> anyhow::Result<jstring> {
+        let files_directory: String = env.get_string(&files_directory)?.into();
+        let config_path = std::path::Path::new(&files_directory).join("config.toml");
+        let contents = match std::fs::read_to_string(config_path) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(error) => return Err(error.into()),
+        };
+        let (percent, fps) = vera20k::util::config::render_options_from_text(&contents)?;
+        Ok(env.new_string(format!("{percent},{fps}"))?.into_raw())
+    })();
+    match result {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = env.throw_new("java/io/IOException", error.to_string());
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeConfigForRenderOptions(
+    mut env: jni::JNIEnv,
+    _activity: JObject,
+    percent: jni::sys::jint,
+    fps: jni::sys::jint,
+    files_directory: JString,
+) -> jstring {
+    let result = (|| -> anyhow::Result<jstring> {
+        let files_directory: String = env.get_string(&files_directory)?.into();
+        let config_path = std::path::Path::new(&files_directory).join("config.toml");
+        let previous = match std::fs::read_to_string(config_path) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(error) => return Err(error.into()),
+        };
+        let percent = u8::try_from(percent).map_err(|_| anyhow::anyhow!("invalid render scale"))?;
+        let fps = u16::try_from(fps).map_err(|_| anyhow::anyhow!("invalid FPS limit"))?;
+        let contents = vera20k::util::config::set_render_options(&previous, percent, fps)?;
+        Ok(env.new_string(contents)?.into_raw())
+    })();
+    match result {
+        Ok(contents) => contents,
+        Err(error) => {
+            let _ = env.throw_new("java/io/IOException", error.to_string());
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_vera20k_CameraZoomSettingsService_nativeApplyCameraZoomLimits(
+    _env: jni::JNIEnv,
+    _service: JObject,
+    minimum: jni::sys::jfloat,
+    maximum: jni::sys::jfloat,
+) -> jni::sys::jboolean {
+    u8::from(vera20k::app::android_input::camera_zoom_limits(
+        minimum, maximum,
+    ))
+}
+
 /// Build the next-launch mod/profile config with the engine's own config
 /// writers. Kotlin publishes the returned text atomically after the selection
 /// succeeds; the running NativeActivity keeps its current resource set.
@@ -374,6 +587,52 @@ pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeConfigForSelectio
     })();
     match result {
         Ok(contents) => contents,
+        Err(error) => {
+            let _ = env.throw_new("java/io/IOException", error.to_string());
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeGetAresSetting(
+    mut env: jni::JNIEnv,
+    _activity: JObject,
+    files_directory: JString,
+) -> jstring {
+    let result = (|| -> anyhow::Result<jstring> {
+        let files_directory: String = env.get_string(&files_directory)?.into();
+        let settings = launcher_settings_directory(std::path::Path::new(&files_directory))?;
+        let setting = read_launcher_ares_setting(&settings)?;
+        Ok(env.new_string(setting.ini_value())?.into_raw())
+    })();
+    match result {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = env.throw_new("java/io/IOException", error.to_string());
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeSetAresSetting(
+    mut env: jni::JNIEnv,
+    _activity: JObject,
+    value: JString,
+    files_directory: JString,
+) -> jstring {
+    let result = (|| -> anyhow::Result<jstring> {
+        let value: String = env.get_string(&value)?.into();
+        let files_directory: String = env.get_string(&files_directory)?.into();
+        let setting = vera20k::util::ares_launch::AresSetting::parse(&value)
+            .ok_or_else(|| anyhow::anyhow!("Unsupported Ares setting: {value}"))?;
+        let settings = launcher_settings_directory(std::path::Path::new(&files_directory))?;
+        write_launcher_ares_setting(&settings, setting)?;
+        Ok(env.new_string(setting.ini_value())?.into_raw())
+    })();
+    match result {
+        Ok(value) => value,
         Err(error) => {
             let _ = env.throw_new("java/io/IOException", error.to_string());
             std::ptr::null_mut()
@@ -523,6 +782,50 @@ pub extern "system" fn Java_org_vera20k_VeraActivity_nativeOnLanNetworkChanged(
     vera20k::util::lan_network::note_changed();
 }
 
+/// Queue a Kotlin HUD key into the one existing winit input loop.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_vera20k_VeraActivity_nativeHudKey(
+    _env: jni::JNIEnv,
+    _activity: JObject,
+    android_key_code: jni::sys::jint,
+    pressed: jni::sys::jboolean,
+) -> jni::sys::jboolean {
+    u8::from(vera20k::app::android_input::key_event(
+        android_key_code,
+        pressed != 0,
+    ))
+}
+
+/// Queue a touch-HUD C1..C10 tap/hold as a dedicated engine input action.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_vera20k_VeraActivity_nativeHudControlGroup(
+    _env: jni::JNIEnv,
+    _activity: JObject,
+    group_number: jni::sys::jint,
+    held: jni::sys::jboolean,
+) -> jni::sys::jboolean {
+    u8::from(vera20k::app::android_input::control_group_event(
+        group_number,
+        held != 0,
+    ))
+}
+
+/// Queue committed text for the game's current input-method target.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_vera20k_VeraActivity_nativeSubmitGameText(
+    mut env: jni::JNIEnv,
+    _activity: JObject,
+    text: JString,
+) -> jni::sys::jboolean {
+    let Ok(text) = env.get_string(&text) else {
+        let _ = env.exception_clear();
+        return 0;
+    };
+    u8::from(vera20k::app::android_input::text_input(
+        text.to_string_lossy().into_owned(),
+    ))
+}
+
 /// Bind `nativeOnFolderPicked` to this activity's class.
 ///
 /// Registered from `android_main`, not `JNI_OnLoad`: `FindClass` on the loading
@@ -567,6 +870,22 @@ fn register_folder_picker_native() -> bool {
                 sig: "()V".into(),
                 fn_ptr: Java_org_vera20k_VeraActivity_nativeOnLanNetworkChanged
                     as *mut std::ffi::c_void,
+            },
+            jni::NativeMethod {
+                name: "nativeHudKey".into(),
+                sig: "(IZ)Z".into(),
+                fn_ptr: Java_org_vera20k_VeraActivity_nativeHudKey as *mut std::ffi::c_void,
+            },
+            jni::NativeMethod {
+                name: "nativeHudControlGroup".into(),
+                sig: "(IZ)Z".into(),
+                fn_ptr: Java_org_vera20k_VeraActivity_nativeHudControlGroup
+                    as *mut std::ffi::c_void,
+            },
+            jni::NativeMethod {
+                name: "nativeSubmitGameText".into(),
+                sig: "(Ljava/lang/String;)Z".into(),
+                fn_ptr: Java_org_vera20k_VeraActivity_nativeSubmitGameText as *mut std::ffi::c_void,
             },
         ];
         let registered = env.register_native_methods(class, &methods).is_ok();

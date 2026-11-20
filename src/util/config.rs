@@ -197,11 +197,16 @@ fn resolved_directory(path: &Path) -> PathBuf {
     }
 }
 
+/// Camera controls may range only within the engine's established zoom scale.
+pub const CAMERA_ZOOM_SUPPORTED_MIN: f32 = 0.25;
+pub const CAMERA_ZOOM_SUPPORTED_MAX: f32 = 4.0;
+
 /// Graphics settings.
 ///
 /// Every field has a sensible default so `[graphics]` can be omitted entirely.
-/// Full screen, zoom and the original 4:3 shape are player choices on the
-/// Options page, saved in VERA.INI, not here. So is VSync
+/// Whole-frame zoom and the original 4:3 shape are player choices on the
+/// Options page, saved in VERA.INI, not here. Tactical camera zoom limits are
+/// presentation bounds stored here. So is VSync
 /// (`[VERA] VSync=`), so an old config's `vsync` line is ignored.
 #[derive(Debug)]
 pub struct GraphicsConfig {
@@ -213,6 +218,14 @@ pub struct GraphicsConfig {
     /// VERA presentation option: show terrain through translucent fog while
     /// concealing unseen enemy objects. Off by default for the retail look.
     pub translucent_fog: bool,
+    /// Presentation-only tactical camera bounds, persisted in config.toml.
+    pub camera_zoom_min: f32,
+    pub camera_zoom_max: f32,
+    /// Percentage of the physical surface used for the world-only render target.
+    /// Screen-space UI continues to use the full surface resolution.
+    pub render_scale_percent: u8,
+    /// Local presentation cap; zero leaves the renderer's existing pacing in place.
+    pub fps_limit: u16,
 }
 
 impl Default for GraphicsConfig {
@@ -220,6 +233,10 @@ impl Default for GraphicsConfig {
         Self {
             extra_animations: true,
             translucent_fog: false,
+            camera_zoom_min: 0.75,
+            camera_zoom_max: 2.0,
+            render_scale_percent: 100,
+            fps_limit: 0,
         }
     }
 }
@@ -445,6 +462,28 @@ impl GameConfig {
                 ("graphics", "translucent_fog") => {
                     parse_bool(value).map(|on| graphics.translucent_fog = on)
                 }
+                ("graphics", "camera_zoom_min") => {
+                    parse_f32(value).map(|zoom| graphics.camera_zoom_min = zoom)
+                }
+                ("graphics", "camera_zoom_max") => {
+                    parse_f32(value).map(|zoom| graphics.camera_zoom_max = zoom)
+                }
+                ("graphics", "render_scale_percent") => parse_u32(value).and_then(|percent| {
+                    ensure!(
+                        (50..=100).contains(&percent) && percent % 5 == 0,
+                        "render_scale_percent must be 50..=100 in 5% steps"
+                    );
+                    graphics.render_scale_percent = percent as u8;
+                    Ok(())
+                }),
+                ("graphics", "fps_limit") => parse_u32(value).and_then(|fps| {
+                    ensure!(
+                        [0, 30, 60, 120].contains(&fps),
+                        "fps_limit must be 0 (engine default), 30, 60, or 120"
+                    );
+                    graphics.fps_limit = fps as u16;
+                    Ok(())
+                }),
                 ("gameplay", "input_delay_ticks") => {
                     parse_u32(value).map(|ticks| gameplay.input_delay_ticks = ticks)
                 }
@@ -469,6 +508,25 @@ impl GameConfig {
             read.with_context(|| format!("line {line_number}: [{section}] {key}"))?;
         }
         let ra2_dir = ra2_dir.context("missing `ra2_dir` in [paths]")?;
+        ensure!(
+            graphics.camera_zoom_min.is_finite()
+                && graphics.camera_zoom_max.is_finite()
+                && (CAMERA_ZOOM_SUPPORTED_MIN..=CAMERA_ZOOM_SUPPORTED_MAX)
+                    .contains(&graphics.camera_zoom_min)
+                && (CAMERA_ZOOM_SUPPORTED_MIN..=CAMERA_ZOOM_SUPPORTED_MAX)
+                    .contains(&graphics.camera_zoom_max)
+                && graphics.camera_zoom_min <= graphics.camera_zoom_max,
+            "[graphics] camera zoom limits must be finite, within 0.25..=4.0, and minimum must not exceed maximum"
+        );
+        ensure!(
+            (50..=100).contains(&graphics.render_scale_percent)
+                && graphics.render_scale_percent % 5 == 0,
+            "[graphics] render_scale_percent must be 50..=100 in 5% steps"
+        );
+        ensure!(
+            [0, 30, 60, 120].contains(&u32::from(graphics.fps_limit)),
+            "[graphics] fps_limit must be 0 (engine default), 30, 60, or 120"
+        );
         ini.validate().map_err(anyhow::Error::msg)?;
         Ok(Self {
             ini,
@@ -516,6 +574,140 @@ pub fn set_paths_key(contents: &str, key: &str, value: &str) -> String {
     set_config_string_key(contents, "paths", key, value)
 }
 
+/// Set the engine's persisted tactical camera bounds without dropping other settings.
+pub fn set_camera_zoom_limits(contents: &str, minimum: f32, maximum: f32) -> Result<String> {
+    ensure!(
+        minimum.is_finite() && maximum.is_finite(),
+        "camera zoom limits must be finite"
+    );
+    ensure!(
+        (CAMERA_ZOOM_SUPPORTED_MIN..=CAMERA_ZOOM_SUPPORTED_MAX).contains(&minimum)
+            && (CAMERA_ZOOM_SUPPORTED_MIN..=CAMERA_ZOOM_SUPPORTED_MAX).contains(&maximum)
+            && minimum <= maximum,
+        "camera zoom limits must be within 0.25..=4.0 and minimum must not exceed maximum"
+    );
+    let contents = set_config_value_key(
+        contents,
+        "graphics",
+        "camera_zoom_min",
+        &format!("{minimum:.3}"),
+    );
+    Ok(set_config_value_key(
+        &contents,
+        "graphics",
+        "camera_zoom_max",
+        &format!("{maximum:.3}"),
+    ))
+}
+
+/// Set the world render scale and local presentation FPS limit.
+pub fn set_render_options(contents: &str, percent: u8, fps_limit: u16) -> Result<String> {
+    ensure!(
+        (50..=100).contains(&percent) && percent % 5 == 0,
+        "render scale must be 50..=100 in 5% steps"
+    );
+    ensure!(
+        [0, 30, 60, 120].contains(&fps_limit),
+        "FPS limit must be engine default, 30, 60, or 120"
+    );
+    let contents = set_config_value_key(
+        contents,
+        "graphics",
+        "render_scale_percent",
+        &percent.to_string(),
+    );
+    Ok(set_config_value_key(
+        &contents,
+        "graphics",
+        "fps_limit",
+        &fps_limit.to_string(),
+    ))
+}
+
+/// Read launcher render options without requiring an installation path.
+pub fn render_options_from_text(contents: &str) -> Result<(u8, u16)> {
+    let mut percent = 100_u32;
+    let mut fps_limit = 0_u32;
+    let mut section = "";
+    for (index, raw) in contents
+        .strip_prefix('\u{feff}')
+        .unwrap_or(contents)
+        .lines()
+        .enumerate()
+    {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with('[') {
+            section = section_name(line)
+                .with_context(|| format!("line {}: invalid section", index + 1))?;
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if section == "graphics" {
+            match key.trim() {
+                "render_scale_percent" => percent = parse_u32(value.trim())?,
+                "fps_limit" => fps_limit = parse_u32(value.trim())?,
+                _ => {}
+            }
+        }
+    }
+    ensure!(
+        (50..=100).contains(&percent) && percent % 5 == 0,
+        "render scale must be 50..=100 in 5% steps"
+    );
+    ensure!(
+        [0, 30, 60, 120].contains(&fps_limit),
+        "FPS limit must be engine default, 30, 60, or 120"
+    );
+    Ok((percent as u8, fps_limit as u16))
+}
+
+/// Read the launcher-owned camera range without requiring a game folder to be
+/// configured yet. Missing values use the same defaults as `GraphicsConfig`.
+pub fn camera_zoom_limits_from_text(contents: &str) -> Result<(f32, f32)> {
+    let mut minimum = GraphicsConfig::default().camera_zoom_min;
+    let mut maximum = GraphicsConfig::default().camera_zoom_max;
+    let mut section = "";
+    for (index, raw) in contents
+        .strip_prefix('\u{feff}')
+        .unwrap_or(contents)
+        .lines()
+        .enumerate()
+    {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with('[') {
+            section = section_name(line)
+                .with_context(|| format!("line {}: invalid section", index + 1))?;
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if section == "graphics" {
+            match key.trim() {
+                "camera_zoom_min" => minimum = parse_f32(value.trim())?,
+                "camera_zoom_max" => maximum = parse_f32(value.trim())?,
+                _ => {}
+            }
+        }
+    }
+    ensure!(
+        minimum.is_finite()
+            && maximum.is_finite()
+            && (CAMERA_ZOOM_SUPPORTED_MIN..=CAMERA_ZOOM_SUPPORTED_MAX).contains(&minimum)
+            && (CAMERA_ZOOM_SUPPORTED_MIN..=CAMERA_ZOOM_SUPPORTED_MAX).contains(&maximum)
+            && minimum <= maximum,
+        "camera zoom limits must be finite, within 0.25..=4.0, and minimum must not exceed maximum"
+    );
+    Ok((minimum, maximum))
+}
 /// Set the INI root profile without discarding any existing custom roots or
 /// unrelated configuration. The engine reads this on its next initialization.
 pub fn set_ini_profile(contents: &str, profile: crate::util::ini_roots::IniProfile) -> String {
@@ -562,6 +754,15 @@ pub fn set_ini_profile(contents: &str, profile: crate::util::ini_roots::IniProfi
 
 /// Set one string in a config section while keeping the other lines intact.
 fn set_config_string_key(contents: &str, target_section: &str, key: &str, value: &str) -> String {
+    set_config_value_key(contents, target_section, key, &basic_string(value))
+}
+
+fn set_config_value_key(
+    contents: &str,
+    target_section: &str,
+    key: &str,
+    serialized_value: &str,
+) -> String {
     let contents = contents.strip_prefix('\u{feff}').unwrap_or(contents);
     let newline = if contents.contains("\r\n") {
         "\r\n"
@@ -594,7 +795,7 @@ fn set_config_string_key(contents: &str, target_section: &str, key: &str, value:
             None => {}
         }
     }
-    let assignment = format!("{key} = {}", basic_string(value));
+    let assignment = format!("{key} = {serialized_value}");
     match (assigned.or(example), header) {
         (Some(index), _) => lines[index] = assignment,
         (None, Some(index)) => lines.insert(index + 1, assignment),
@@ -697,6 +898,17 @@ fn parse_u32(value: &str) -> Result<u32> {
             u32::MAX
         )
     })
+}
+fn parse_f32(value: &str) -> Result<f32> {
+    let number = bare_value(value);
+    let parsed: f32 = number
+        .parse()
+        .with_context(|| format!("expected a floating-point number, found `{number}`"))?;
+    ensure!(
+        parsed.is_finite(),
+        "expected a finite floating-point number"
+    );
+    Ok(parsed)
 }
 
 /// An unquoted value: everything before a `#` comment.
@@ -1033,6 +1245,45 @@ mod tests {
         let config = GameConfig::parse(&text).unwrap();
         assert_eq!(config.paths.ra2_dir, Path::new("/Games/RA2\u{1}"));
         assert_eq!(config.profile.player_name(), Some("p"));
+    }
+
+    #[test]
+    fn camera_zoom_limits_default_parse_and_preserve_other_config() {
+        assert_eq!(camera_zoom_limits_from_text("").unwrap(), (0.75, 2.0));
+        let original = "[paths]\nra2_dir = \"/game\"\n[graphics]\nextra_animations = false\n";
+        let updated = set_camera_zoom_limits(original, 0.5, 2.5).unwrap();
+        assert!(updated.contains("extra_animations = false"));
+        assert_eq!(camera_zoom_limits_from_text(&updated).unwrap(), (0.5, 2.5));
+        GameConfig::validate_config_text(&updated).unwrap();
+    }
+
+    #[test]
+    fn camera_zoom_limits_reject_invalid_ranges_and_values() {
+        for (minimum, maximum) in [(0.2, 2.0), (0.75, 4.1), (2.1, 2.0), (f32::NAN, 2.0)] {
+            assert!(set_camera_zoom_limits("", minimum, maximum).is_err());
+        }
+        for text in [
+            "[graphics]\ncamera_zoom_min = 2.1\ncamera_zoom_max = 2.0\n",
+            "[graphics]\ncamera_zoom_min = nan\n",
+            "[graphics]\ncamera_zoom_max = 4.1\n",
+        ] {
+            assert!(camera_zoom_limits_from_text(text).is_err());
+        }
+    }
+
+    #[test]
+    fn render_options_default_round_trip_and_validation() {
+        assert_eq!(render_options_from_text("").unwrap(), (100, 0));
+        let source = "[paths]\nra2_dir = '/game'\n[graphics]\ncamera_zoom_min = 0.5\n";
+        let updated = set_render_options(source, 75, 60).unwrap();
+        assert!(updated.contains("camera_zoom_min = 0.5"));
+        assert_eq!(render_options_from_text(&updated).unwrap(), (75, 60));
+        let parsed = GameConfig::parse(&format!("{updated}\n")).unwrap();
+        assert_eq!(parsed.graphics.render_scale_percent, 75);
+        assert_eq!(parsed.graphics.fps_limit, 60);
+        for (percent, fps) in [(49, 60), (52, 60), (100, 45), (75, 31)] {
+            assert!(set_render_options("", percent, fps).is_err());
+        }
     }
 
     #[test]

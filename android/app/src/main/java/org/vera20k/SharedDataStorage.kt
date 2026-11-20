@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Environment
 import android.net.Uri
 import android.provider.DocumentsContract
+import android.provider.OpenableColumns
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -90,7 +91,7 @@ internal class SharedDataStorage(private val context: Context) {
 
     fun ensureLayout() {
         val root = rootUri()
-        listOf("Mods", "Maps", "Saves", "Logs").forEach { ensureChild(root, it) }
+        listOf("Mods", "Maps", "Saves", "Logs", "AresSupport").forEach { ensureChild(root, it) }
     }
 
     fun setActiveGameFolder(name: String) {
@@ -152,6 +153,34 @@ internal class SharedDataStorage(private val context: Context) {
         }
     }
 
+    /** Store one user-selected support archive without touching any mod folder. */
+    fun copyDocumentFile(area: String, source: Uri): String {
+        val name = resolver.query(source, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0) else null
+        } ?: throw IOException("Cannot read the selected file name")
+        val safe = safeName(name)
+        if (area.equals("AresSupport", ignoreCase = true) && !safe.equals("ares.mix", ignoreCase = true)) {
+            throw IOException("Choose the file named ares.mix")
+        }
+        val parent = ensureChild(rootUri(), area)
+        val tree = treeUri()!!
+        if (findChildFile(tree, DocumentsContract.getDocumentId(parent), safe) != null) {
+            throw IOException("Documents/$ROOT_NAME/$area/$safe already exists; remove it first if you want to replace it")
+        }
+        val target = DocumentsContract.createDocument(resolver, parent, "application/octet-stream", safe)
+            ?: throw IOException("Cannot create Documents file $safe")
+        try {
+            resolver.openInputStream(source)?.use { input ->
+                resolver.openOutputStream(target, "w")?.use { output -> input.copyTo(output, 1 shl 16) }
+                    ?: throw IOException("Cannot write Documents file $safe")
+            } ?: throw IOException("Cannot read the selected file")
+        } catch (error: Throwable) {
+            runCatching { DocumentsContract.deleteDocument(resolver, target) }
+            throw error
+        }
+        return safe
+    }
+
     /** Publishes new or locally newer files without deleting user-managed documents. */
     fun publishLocalFolder(area: String, source: File) {
         val destination = ensureChild(rootUri(), area)
@@ -164,6 +193,56 @@ internal class SharedDataStorage(private val context: Context) {
         mirrorDocumentDirectory(parent, destination, treeUri()!!)
     }
 
+    /** Lists real mod roots in the user-managed SAF folder without copying their contents. */
+    fun listModFolders(maxDepth: Int = 4): List<String> {
+        if (maxDepth < 1 || treeUri() == null) return emptyList()
+        val tree = treeUri()!!
+        val mods = ensureChild(rootUri(), "Mods")
+        val result = linkedSetOf<String>()
+        fun visit(document: Uri, relative: String, depth: Int) {
+            if (depth > maxDepth) return
+            val entries = children(tree, DocumentsContract.getDocumentId(document))
+            val files = entries.filter { it.mime != DocumentsContract.Document.MIME_TYPE_DIR }
+            if (relative.isNotEmpty() && (files.isNotEmpty() || entries.isEmpty())) result += relative
+            if (depth == maxDepth) return
+            entries.asSequence()
+                .filter { it.mime == DocumentsContract.Document.MIME_TYPE_DIR && !it.name.startsWith(".") }
+                .forEach { entry ->
+                    val name = safeName(entry.name)
+                    val child = DocumentsContract.buildDocumentUriUsingTree(tree, entry.id)
+                    val path = if (relative.isEmpty()) name else "$relative/$name"
+                    visit(child, path, depth + 1)
+                }
+        }
+        visit(mods, "", 0)
+        return result.sortedBy { it.lowercase(java.util.Locale.ROOT) }
+    }
+
+    /** Mirrors one selected nested SAF folder into its engine path, never the whole Mods tree. */
+    fun mirrorRelativeFolder(area: String, relativePath: String, destination: File) {
+        val segments = relativePath.split('/')
+        if (segments.isEmpty() || segments.size > 4 || segments.any { safeName(it) != it }) {
+            throw IOException("Unsafe folder path")
+        }
+        val base = ensureChild(rootUri(), safeName(area))
+        val tree = treeUri()!!
+        var current = base
+        for (segment in segments) {
+            current = findChild(tree, DocumentsContract.getDocumentId(current), segment)
+                ?: throw IOException("Documents/$ROOT_NAME/$area/$relativePath is missing")
+        }
+        val engineRoot = File(context.filesDir, safeName(area)).canonicalFile.toPath()
+        val engineDestination = destination.canonicalFile
+        if (!engineDestination.toPath().startsWith(engineRoot) || engineDestination.toPath() == engineRoot) {
+            throw IOException("Engine mirror path is outside the managed $area folder")
+        }
+        var path = engineDestination.toPath()
+        while (path != engineRoot && path.startsWith(engineRoot)) {
+            if (java.nio.file.Files.isSymbolicLink(path)) throw IOException("Symbolic link in engine mirror path")
+            path = path.parent ?: break
+        }
+        mirrorDocumentDirectory(current, engineDestination, tree)
+    }
     fun mirrorChildFolder(area: String, childName: String, destination: File) {
         val parent = ensureChild(rootUri(), area)
         val tree = treeUri()!!
@@ -281,6 +360,11 @@ internal class SharedDataStorage(private val context: Context) {
     private fun findChild(tree: Uri, parentId: String, name: String): Uri? =
         children(tree, parentId).firstOrNull { (id, childName, mime) ->
             mime == DocumentsContract.Document.MIME_TYPE_DIR && childName.equals(name, ignoreCase = true)
+        }?.let { (id, _, _) -> DocumentsContract.buildDocumentUriUsingTree(tree, id) }
+
+    private fun findChildFile(tree: Uri, parentId: String, name: String): Uri? =
+        children(tree, parentId).firstOrNull { (_, childName, mime) ->
+            mime != DocumentsContract.Document.MIME_TYPE_DIR && childName.equals(name, ignoreCase = true)
         }?.let { (id, _, _) -> DocumentsContract.buildDocumentUriUsingTree(tree, id) }
 
     private fun createDirectory(tree: Uri, parent: Uri, name: String): Uri =

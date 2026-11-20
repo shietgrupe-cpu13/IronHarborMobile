@@ -527,6 +527,57 @@ impl ApplicationHandler for App {
         }
     }
 
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ()) {
+        #[cfg(target_os = "android")]
+        {
+            use winit::event::{DeviceId, Ime, WindowEvent};
+            for input in super::android_input::drain() {
+                let input = match input {
+                    super::android_input::Input::ControlGroup { slot, held } => {
+                        if let Some(state) = self.state.as_mut() {
+                            super::input::dispatch::handle_android_hud_control_group(
+                                state, slot, held,
+                            );
+                            state.platform.window.request_redraw();
+                        }
+                        continue;
+                    }
+                    super::android_input::Input::CameraZoomLimits { minimum, maximum } => {
+                        if let Some(state) = self.state.as_mut() {
+                            if let Some(config) = state.platform.game_config.as_mut() {
+                                config.graphics.camera_zoom_min = minimum;
+                                config.graphics.camera_zoom_max = maximum;
+                            }
+                            super::input::camera::apply_camera_zoom_limits(state, minimum, maximum);
+                            state.platform.window.request_redraw();
+                        }
+                        continue;
+                    }
+                    input => input,
+                };
+                let Some(window_id) = self.state.as_ref().map(|state| state.platform.window.id())
+                else {
+                    continue;
+                };
+                let event = match input {
+                    super::android_input::Input::Key {
+                        physical,
+                        logical,
+                        state,
+                    } => WindowEvent::KeyboardInput {
+                        device_id: DeviceId::dummy(),
+                        event: winit::event::KeyEvent::synthetic_android(physical, logical, state),
+                        is_synthetic: false,
+                    },
+                    super::android_input::Input::Text(text) => WindowEvent::Ime(Ime::Commit(text)),
+                    super::android_input::Input::ControlGroup { .. }
+                    | super::android_input::Input::CameraZoomLimits { .. } => continue,
+                };
+                self.window_event(_event_loop, window_id, event);
+            }
+        }
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.pending_initialization.is_some() {
             return;

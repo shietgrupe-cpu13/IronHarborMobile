@@ -70,9 +70,6 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
                     addControl(manager, button, positions, sizes, globalScale, opacity, layout, dock)
                 }
             }
-            TouchHudSettings.setSelectorButtons.forEach { selector ->
-                addControl(manager, selector, positions, sizes, globalScale, opacity, layout, dock, activeSet)
-            }
         }
         TouchHudSettings.utilityButtons.forEach { utility ->
             addControl(manager, utility, positions, sizes, globalScale, opacity, layout, dock, activeSet, hidden)
@@ -92,7 +89,8 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
         hidden: Boolean = false,
     ) {
         val itemScale = globalScale * (sizes[action.id] ?: 100) / 100f
-        val isUtility = action.id == TouchHudSettings.HUD_EDIT || action.id == TouchHudSettings.HUD_TOGGLE
+        val isUtility = action.id == TouchHudSettings.HUD_EDIT ||
+            action.id == TouchHudSettings.HUD_TOGGLE || action.id == TouchHudSettings.HUD_TEXT
         val label = when (action.id) {
             TouchHudSettings.HUD_EDIT -> if (editing) "DONE" else "EDIT"
             TouchHudSettings.HUD_TOGGLE -> if (hidden) "SHOW" else "HIDE"
@@ -111,7 +109,8 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
             contentDescription = when (action.id) {
                 TouchHudSettings.HUD_EDIT -> if (editing) "Finish moving game controls" else "Edit floating game controls"
                 TouchHudSettings.HUD_TOGGLE -> if (hidden) "Show floating game controls" else "Hide floating game controls"
-                else -> if (action.groupNumber == null) "${action.label} command" else "${action.label} select control group; long press to assign"
+                TouchHudSettings.HUD_TEXT -> "Open text entry for the focused game field"
+                else -> if (action.groupNumber == null) "${action.label} command" else "${action.label} control group; tap to assign empty/select set, hold to add or clear"
             }
             isFocusable = false
             isClickable = true
@@ -127,14 +126,19 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
                         prefs.edit().putBoolean(TouchHudSettings.HUD_HIDDEN, !hidden).apply()
                         populate()
                     }
+                    TouchHudSettings.HUD_TEXT -> activity.showGameTextInput()
                     TouchHudSettings.SET_ONE -> selectSet(1)
                     TouchHudSettings.SET_TWO -> selectSet(2)
-                    else -> sendKey(action.id, action.defaultKeyCode)
+                    else -> if (action.groupNumber != null) {
+                        activity.sendHudControlGroup(action.groupNumber, held = false)
+                    } else {
+                        sendKey(action.id, action.defaultKeyCode)
+                    }
                 }
             }
             setOnLongClickListener {
                 if (!editing && action.groupNumber != null) {
-                    sendChord(action.defaultKeyCode)
+                    activity.sendHudControlGroup(action.groupNumber, held = true)
                     true
                 } else false
             }
@@ -284,15 +288,8 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
             android.util.Log.w("IronHarborHUD", "No game key is bound for $id; bind its existing engine key in the launcher")
             return
         }
-        activity.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
-        activity.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
-    }
-
-    private fun sendChord(keyCode: Int) {
-        activity.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_CTRL_LEFT))
-        activity.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
-        activity.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
-        activity.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_CTRL_LEFT))
+        activity.sendHudKey(keyCode, true)
+        activity.sendHudKey(keyCode, false)
     }
 
     private val dragSlop: Float get() = ViewConfiguration.get(activity).scaledTouchSlop.toFloat()

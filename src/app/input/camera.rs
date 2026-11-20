@@ -1717,7 +1717,8 @@ const ZOOM_SNAP: f32 = 0.002;
 pub(crate) fn apply_zoom(state: &mut AppState, delta_lines: f32) {
     let old_target = state.match_state.input.zoom_target;
     let factor = ZOOM_STEP.powf(delta_lines);
-    let new_target = (old_target * factor).clamp(MIN_ZOOM, MAX_ZOOM);
+    let (minimum, maximum) = state.camera_zoom_limits();
+    let new_target = (old_target * factor).clamp(minimum, maximum);
     if (new_target - old_target).abs() < 1e-6 {
         return;
     }
@@ -1741,9 +1742,10 @@ pub(crate) fn apply_touch_zoom(state: &mut AppState, factor: f32, anchor: [f32; 
     if !factor.is_finite() || factor <= 0.0 {
         return;
     }
+    let (minimum, maximum) = state.camera_zoom_limits();
     let input = &mut state.match_state.input;
     let old = input.zoom_target;
-    let target = (old * factor).clamp(MIN_ZOOM, MAX_ZOOM);
+    let target = (old * factor).clamp(minimum, maximum);
     if (target - old).abs() < 1e-6 {
         return;
     }
@@ -1851,12 +1853,18 @@ pub(crate) fn reset_view_distance(state: &mut AppState) {
 pub(crate) fn middle_press_resets_view_distance(state: &mut AppState) -> bool {
     let battlefield = tactical_viewport_px(state);
     let centring = tactical_centring_size(state);
-    middle_press_view_reset(
+    let reset = middle_press_view_reset(
         &mut state.match_state.input,
         battlefield,
         centring,
         state.persistence.options_profile.mouse_wheel_zoom,
-    )
+    );
+    if reset {
+        let (minimum, maximum) = state.camera_zoom_limits();
+        state.match_state.input.zoom_target =
+            state.match_state.input.zoom_target.clamp(minimum, maximum);
+    }
+    reset
 }
 
 /// [`middle_press_resets_view_distance`] for a battlefield at `battlefield`
@@ -1878,6 +1886,34 @@ fn middle_press_view_reset(
 fn set_view_distance(state: &mut AppState, tier: ViewDistanceTier) {
     let viewport = tactical_centring_size(state);
     set_view_distance_in(&mut state.match_state.input, viewport, tier);
+    let (minimum, maximum) = state.camera_zoom_limits();
+    state.match_state.input.zoom_target =
+        state.match_state.input.zoom_target.clamp(minimum, maximum);
+}
+
+/// Apply a launcher update while retaining the world point at the tactical
+/// viewport centre. This is presentation state only and does not touch simulation.
+pub(crate) fn apply_camera_zoom_limits(state: &mut AppState, minimum: f32, maximum: f32) {
+    if !minimum.is_finite()
+        || !maximum.is_finite()
+        || !(MIN_ZOOM..=MAX_ZOOM).contains(&minimum)
+        || !(MIN_ZOOM..=MAX_ZOOM).contains(&maximum)
+        || minimum > maximum
+    {
+        return;
+    }
+    let viewport = tactical_centring_size(state);
+    let (width, height) = (viewport.0 as f32, viewport.1 as f32);
+    let input = &mut state.match_state.input;
+    let previous_zoom = input.zoom_level.max(MIN_ZOOM);
+    let anchor = [width * 0.5, height * 0.5];
+    input.zoom_anchor_world = [
+        input.camera_x + anchor[0] / previous_zoom,
+        input.camera_y + anchor[1] / previous_zoom,
+    ];
+    input.zoom_anchor_screen = anchor;
+    input.zoom_level = input.zoom_level.clamp(minimum, maximum);
+    input.zoom_target = input.zoom_target.clamp(minimum, maximum);
 }
 
 /// Ease to `tier` around the centre of a tactical view whose centring size
@@ -2330,13 +2366,16 @@ fn constrain_zoom_to_texture(state: &mut AppState, sw: f32, sh: f32) {
     // VERA-only zoom: the complete logical view must fit the one A source.
     // A truncated texture would make its missing edge appear fully revealed.
     // Native1x is unaffected: the render target itself already fits this limit.
+    let configured = state.camera_zoom_limits();
     let minimum_zoom = minimum_view_zoom(
         [sw, sh],
         state.renderer.gpu.device.limits().max_texture_dimension_2d,
-    );
+    )
+    .max(configured.0)
+    .min(configured.1);
     let input = &mut state.match_state.input;
-    input.zoom_level = input.zoom_level.clamp(minimum_zoom, MAX_ZOOM);
-    input.zoom_target = input.zoom_target.clamp(minimum_zoom, MAX_ZOOM);
+    input.zoom_level = input.zoom_level.clamp(minimum_zoom, configured.1);
+    input.zoom_target = input.zoom_target.clamp(minimum_zoom, configured.1);
 }
 
 fn minimum_view_zoom(extent: [f32; 2], texture_limit: u32) -> f32 {

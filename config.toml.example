@@ -33,7 +33,14 @@ profile = "yr" # yr | mo | auto | custom
 [graphics]
 extra_animations = true   # cosmetic effects: water/ore sparkles (future: laser pulses, particle trails)
 translucent_fog = false   # show terrain through fog; unseen enemy objects remain concealed
-# Full screen, zoom and the original 4:3 shape are on the Options page (saved in VERA.INI).
+# Tactical camera zoom bounds (supported scale 0.25–4.0; defaults 0.75–2.0).
+camera_zoom_min = 0.75
+camera_zoom_max = 2.0
+# Battlefield world target scale (50..100 by 5); HUD and menus remain full resolution.
+render_scale_percent = 100
+# Presentation-only frame cap: 0 uses engine default; supported values are 30, 60, 120.
+fps_limit = 0
+# Whole-frame zoom and the original 4:3 shape are on the Options page (saved in VERA.INI).
 
 [gameplay]
 input_delay_ticks = 15

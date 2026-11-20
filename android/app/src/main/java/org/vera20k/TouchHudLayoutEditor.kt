@@ -238,8 +238,7 @@ private class TouchHudLayoutPreview(
         }
         hitBoxes.clear()
         val active = TouchHudSettings.visibleForSet(visible, controlSets, previewSet)
-        val items = TouchHudSettings.buttons.filter { it.id in active } +
-            TouchHudSettings.setSelectorButtons + TouchHudSettings.utilityButtons
+        val items = TouchHudSettings.buttons.filter { it.id in active } + TouchHudSettings.utilityButtons
         val maxButtonWidth = (width * 0.30f).coerceAtLeast(dp(64).toFloat())
         items.forEach { button ->
             val itemScale = globalScale / 100f * (sizes[button.id] ?: 100) / 100f

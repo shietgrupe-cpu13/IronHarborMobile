@@ -9,6 +9,16 @@ landscape-first. JVM tests and ARM64 debug APK packaging passed. See the
 installation of b23 is pending because the device still has a b22 import in
 progress; device-side SAF behavior and portrait rendering are not yet verified.
 
+**B27 HUD and MO review:** C1–C10 now use dedicated Android control-group
+events: tap assigns/recalls and long-press merges or clears according to the
+selection state, without synthesizing desktop Ctrl+digit input. Set 1 and Set 2
+selector buttons are included in the visibility editor, so either can be hidden
+and restored. See the [Mental Omega compatibility notes](android-mo-compatibility.md)
+for the actual dynamic roster, faction label, and loading-screen paths and the
+limits of validation. A follow-up Android 16 MO skirmish reached `InGame` with
+the MO Rules profile, and exposed missing mode INIs, effects, overlays, smudges,
+and an AI team reference; see the captured findings in `out/logs`.
+
 **Status: Android launcher baseline.** The contributor reported a debug APK playing
 the intro movie, reaching the main menu, and importing a retail installation on an
 Android 16 arm64 tablet (OnePlus Pad 2 Pro). Launcher baseline b2 builds and passes
@@ -264,3 +274,15 @@ require tests with the user's own files on an Android device.
 
 Save/Map files import/export, touch sensitivity/overlay configuration, audio
 focus, LAN locks, CI.
+
+## B27 — shared game storage, nested mod discovery, and preflight diagnostics
+
+The game folder picker no longer forces creation of the separate Documents data folder. The selected retail game directory remains the game source; `Documents/IronHarborRA2YR` is for user-managed Mods, Maps, Saves and Logs. SAF-only game sources still require a private filesystem mirror because the Rust engine consumes filesystem paths.
+
+The launcher scans the selected Documents Mods tree on a background thread, finds nested mod folders up to four levels deep, and presents them by relative path. It mirrors and validates only the selected mod for the engine instead of synchronizing the entire Mods tree on every Play. Existing private-only mod folders remain supported. User-managed originals in Documents are not deleted by this process.
+
+Play now records durations for game-source sync, selected-mod sync, Ares, Maps, Saves, and engine selection validation in `launcher-preflight-latest.txt`; the full diagnostics export includes that trace. This diagnoses launch/file delays. Live FPS, frame-time, CPU/GPU phase, and input-latency measurements still require equivalent in-game profiling captures; this build makes no FPS improvement claim.
+
+Launcher Settings now exposes Camera & Zoom minimum and maximum bounds, defaulting to `0.75` and `2.0` within the engine's existing `0.25`–`4.0` camera scale. The values use `[graphics] camera_zoom_min` and `camera_zoom_max` in the engine's `config.toml` parser/writer. Pinch, replay wheel zoom, and the optional in-match wheel view-distance steps obey the configured bounds; an Android service forwards updates into the existing `:game` event loop while it is alive. Otherwise the saved range is read at next launch. Windows uses the same engine configuration and clamp paths; the launcher sliders are Android UI. There is no standalone camera zoom keyboard binding in the current engine, so no new shortcut was added.
+
+Launcher Settings also exposes a 50–100% world render scale in 5% steps and a local gameplay presentation cap (30, 60, 120 FPS, or engine default). The `render_scale_percent` and `fps_limit` keys live in the existing `[graphics]` section. A non-native world target is used for battlefield rendering and upscaled into the existing full-size frame; screen-space UI remains at the surface resolution. The chosen scale takes effect on the next game launch. The FPS cap gates presentation only; simulation and multiplayer pacing are unchanged. The engine's default/display pacing can limit actual output below 120 FPS. Adaptive resolution is not implemented. Lowering scale may reduce GPU pixel work, but does not reduce CPU-side world-instance preparation; Android device benchmarking is required before claiming a performance gain.

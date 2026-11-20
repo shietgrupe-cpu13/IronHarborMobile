@@ -75,6 +75,12 @@ impl AppState {
             .is_some_and(|config| config.graphics.translucent_fog)
     }
 
+    /// Tactical camera presentation limits from the shared engine config.
+    pub(crate) fn camera_zoom_limits(&self) -> (f32, f32) {
+        self.platform.game_config.as_ref().map_or((0.75, 2.0), |config| {
+            (config.graphics.camera_zoom_min, config.graphics.camera_zoom_max)
+        })
+    }
     /// `[VERA] HealthBars=`: the client health-strip policy. Presentation only;
     /// the simulation never reads it.
     pub(crate) fn health_bar_mode(&self) -> crate::ui::main_menu_dialogs::options::HealthBarMode {

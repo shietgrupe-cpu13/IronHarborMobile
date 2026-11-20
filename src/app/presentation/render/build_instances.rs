@@ -181,7 +181,7 @@ pub(super) fn build_world_instances(
     // Terrain tiles use the selected TMP owner exactly. A sparse/null cell in
     // a positive suffix remains absent instead of borrowing pristine UVs.
     let uv_fn_closure;
-    let uv_fn: Option<&dyn Fn(u16, u8, u8) -> Option<TilePlacement>> = if let Some(atlas) =
+    let uv_fn: Option<&(dyn Fn(u16, u8, u8) -> Option<TilePlacement> + Sync)> = if let Some(atlas) =
         &state.match_state.match_presentation.tile_atlas
     {
         uv_fn_closure = |tile_id: u16, sub_tile: u8, variant: u8| -> Option<TilePlacement> {
@@ -202,7 +202,8 @@ pub(super) fn build_world_instances(
         // Terrain draws regardless of shroud — the native tile walk has no
         // explored gate (`CellOverlay_TileDraw @ 0x00480350`); the flat shroud
         // curtain blacks out unexplored ground in the multiply pass.
-        crate::render::terrain_instances::build_visible_instances(
+        #[cfg(target_os = "android")]
+        let terrain = crate::render::terrain_instances::build_visible_instances_parallel(
             grid,
             Some(state.match_state.match_presentation.lighting.grid()),
             state.match_state.input.camera_x,
@@ -216,7 +217,20 @@ pub(super) fn build_world_instances(
                 .presentation()
                 .and_then(|rt| rt.view().resolved_terrain()),
             terrain_buffer,
-        )
+        );
+        #[cfg(not(target_os = "android"))]
+        let terrain = crate::render::terrain_instances::build_visible_instances(
+            grid,
+            Some(state.match_state.match_presentation.lighting.grid()),
+            state.match_state.input.camera_x,
+            state.match_state.input.camera_y,
+            sw,
+            sh,
+            uv_fn.map(|callback| callback as &dyn Fn(u16, u8, u8) -> Option<TilePlacement>),
+            state.match_state.sim_runtime.presentation().and_then(|rt| rt.view().resolved_terrain()),
+            terrain_buffer,
+        );
+        terrain
     } else {
         crate::render::terrain_instances::TerrainInstances {
             normal: terrain_buffer,

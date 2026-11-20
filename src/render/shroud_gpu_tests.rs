@@ -80,7 +80,7 @@ fn production_world_zoom_resolves_before_screen_fixed_ui() {
             ..camera(size)
         },
     );
-    batch.set_native_world_resolution(&gpu.queue, source_size);
+    batch.set_native_world_resolution(&gpu.queue, source_size, 1.0);
     assert_eq!(batch.camera_uniform().screen_size, [15.0, 10.0]);
     assert_eq!(batch.camera_uniform().zoom, 1.0);
     assert_eq!(batch.ui_camera_uniform().screen_size, [12.0, 8.0]);

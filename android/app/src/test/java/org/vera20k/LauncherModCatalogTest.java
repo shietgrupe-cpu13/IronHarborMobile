@@ -45,6 +45,15 @@ public class LauncherModCatalogTest {
     }
 
     @Test
+    public void discoversModInsideUserAddedWrapperDirectory() throws Exception {
+        Path files = tempDirectory("ih-nested-mod-");
+        Path nested = files.resolve("Mods/Downloaded archive/MentalOmega330Mod");
+        Files.createDirectories(nested);
+        Files.createFile(nested.resolve("expandmo99.mix"));
+        LauncherModCatalog catalog = LauncherModCatalog.read(files.toFile());
+        assertEquals(java.util.List.of("Downloaded archive/MentalOmega330Mod"), catalog.getInstalledMods());
+    }
+    @Test
     public void publisherAndLauncherReaderAgreeAfterAtomicSelection() throws Exception {
         Path files = tempDirectory("ih-mod-publish-");
         writeUtf8(files.resolve("config.toml"),

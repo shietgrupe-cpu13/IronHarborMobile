@@ -1991,10 +1991,15 @@ impl BatchRenderer {
     /// Render the world at native texel resolution while UI keeps frame pixels.
     /// These are distinct GPU buffers; no camera is rewritten between encoded
     /// passes, since queue writes would otherwise affect every draw this frame.
-    pub(crate) fn set_native_world_resolution(&self, queue: &wgpu::Queue, size: [u32; 2]) {
+    pub(crate) fn set_native_world_resolution(
+        &self,
+        queue: &wgpu::Queue,
+        size: [u32; 2],
+        world_scale: f32,
+    ) {
         let mut uploaded = self.uploaded_camera.write().expect("camera owner lock");
         uploaded.world.screen_size = size.map(|v| v as f32);
-        uploaded.world.zoom = 1.0;
+        uploaded.world.zoom = world_scale;
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uploaded.world));
     }
 

@@ -253,13 +253,32 @@ pub(crate) fn draw_limits(state: &AppState, status_step: bool) -> DrawLimits {
     } else {
         PICTURE_INTERVAL
     };
-    page_limits(
+    let mut limits = page_limits(
         page,
         status_step,
         state.platform.hardware_cursor.on_cursor_plane(),
         super::network_match::game_frame_ms(state),
         picture_interval,
-    )
+    );
+    if page == ScreenPage::Battlefield {
+        let fps_limit = state
+            .platform
+            .game_config
+            .as_ref()
+            .map_or(0, |config| config.graphics.fps_limit);
+        limits = with_fps_limit(limits, fps_limit);
+    }
+    limits
+}
+
+/// Limit only local picture presentation. Match service and simulation
+/// admission continue on their existing independent clocks.
+fn with_fps_limit(mut limits: DrawLimits, fps_limit: u16) -> DrawLimits {
+    if fps_limit != 0 {
+        let cap_interval = Duration::from_nanos(1_000_000_000 / u64::from(fps_limit));
+        limits.picture = limits.picture.max(cap_interval);
+    }
+    limits
 }
 
 fn page_limits(
@@ -641,6 +660,19 @@ mod tests {
         picture: Duration::from_millis(16),
         pointer: Some(Duration::from_millis(64)),
     };
+
+    #[test]
+    fn presentation_fps_cap_never_changes_the_simulation_clock() {
+        let default = with_fps_limit(LIMITS, 0);
+        let cap_30 = with_fps_limit(LIMITS, 30);
+        let cap_60 = with_fps_limit(LIMITS, 60);
+        let cap_120 = with_fps_limit(LIMITS, 120);
+        assert_eq!(default.picture, LIMITS.picture);
+        assert_eq!(cap_30.picture, Duration::from_nanos(1_000_000_000 / 30));
+        assert_eq!(cap_60.picture, Duration::from_nanos(1_000_000_000 / 60));
+        assert_eq!(cap_120.picture, LIMITS.picture);
+        assert_eq!(cap_30.pointer, LIMITS.pointer);
+    }
 
     fn menu(revision: u64, caret: bool, shake: [i32; 2]) -> StillFrame {
         StillFrame::Menu {

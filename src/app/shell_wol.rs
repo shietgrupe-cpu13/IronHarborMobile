@@ -59,6 +59,16 @@ pub(crate) use test_service::{
     matchbot_options as test_service_matchbot_options,
 };
 
+/// The active login edit, for the platform input-method adapter.
+pub(crate) fn ime_login_rect(state: &AppState) -> Option<crate::ui::shell::geom::RectPx> {
+    login::ime_rect(state)
+}
+
+/// Send committed IME text through the login page's existing edit owner.
+pub(crate) fn ime_login_text(state: &mut AppState, text: &str) {
+    login::key_press(state, None, Some(text));
+}
+
 /// The wait box's reveal timer and the login drop list's scroll repeats;
 /// the caller schedules the earliest deadline with the other shell timers.
 pub(crate) fn poll(state: &mut AppState) -> Option<crate::util::time::Instant> {

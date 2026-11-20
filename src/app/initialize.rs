@@ -632,6 +632,12 @@ impl App {
         quickplay_allowed: bool,
         ares_setting: crate::util::ares_launch::AresSetting,
     ) -> Result<InitializationStep> {
+        #[cfg(target_os = "android")]
+        let ares_support_dir = game_config
+            .as_ref()
+            .map(|config| config.paths.settings_dir().join("AresSupport"));
+        #[cfg(not(target_os = "android"))]
+        let ares_support_dir: Option<std::path::PathBuf> = None;
         let batch_renderer: BatchRenderer = BatchRenderer::new(&gpu);
         let status_screen_fill = batch_renderer.create_texture(&gpu, &[255; 4], 1, 1);
         let status_card_glow =
@@ -662,9 +668,10 @@ impl App {
         let sidebar_layout_spec = SidebarChromeLayoutSpec::stock();
         let mut startup_asset_manager = game_config.as_ref().and_then(|config| {
             startup_asset_or_error(
-                AssetManager::with_mod_and_ares(
+                AssetManager::with_mod_and_ares_support(
                     &config.paths.ra2_dir,
                     mods.dir(),
+                    ares_support_dir.as_deref(),
                     startup_options.media_archive_mode,
                     ares_setting,
                     crate::assets::asset_manager::ArchiveFamily::for_ini_profile(
@@ -799,7 +806,8 @@ impl App {
                 )
                 .with_personal_rules(personal_rules)
                 .with_mod_dir(mods.dir().map(Path::to_path_buf))
-                .with_ares_setting(ares_setting);
+                .with_ares_setting(ares_setting)
+                .with_ares_support_dir(ares_support_dir.clone());
             process_assets.csf = startup_csf;
             let (startup_rules, startup_rules_projection) = startup_asset_manager
                 .as_ref()

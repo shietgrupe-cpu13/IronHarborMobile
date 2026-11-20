@@ -241,7 +241,11 @@ pub(crate) fn render_game(
     // Wheel zoom is a presentation copy of the fully resolved world. Keep all
     // native source/depth/packed operations on the same one-texel lattice;
     // filtering each sprite (or its palette indices) loses edges and details.
-    if z == 1.0 {
+    let render_scale = state.platform.game_config.as_ref().map_or(1.0, |config| {
+        f32::from(config.graphics.render_scale_percent) / 100.0
+    });
+    let world_scale = z / render_scale;
+    if z == 1.0 && render_scale == 1.0 {
         state.renderer.world_zoom_pass = None;
     } else {
         // When the Options zoom scales the frame, the world also goes
@@ -257,13 +261,15 @@ pub(crate) fn render_game(
                 &gpu.queue,
                 gpu.surface_format,
                 target,
-                z,
+                world_scale,
             )
         });
-        pass.set_view(&gpu.device, &gpu.queue, target, z, window_copy);
-        renderer
-            .batch_renderer
-            .set_native_world_resolution(&gpu.queue, pass.source_size());
+        pass.set_view(&gpu.device, &gpu.queue, target, world_scale, window_copy);
+        renderer.batch_renderer.set_native_world_resolution(
+            &gpu.queue,
+            pass.source_size(),
+            render_scale,
+        );
     }
     let world_camera = state.renderer.batch_renderer.camera_uniform();
 

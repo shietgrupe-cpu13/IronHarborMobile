@@ -34,6 +34,37 @@ pub(crate) fn login_layout(state: &AppState) -> WolLoginLayout {
     }
 }
 
+/// The currently focused login edit in window pixels, for Android's floating
+/// text-entry button and platforms with a system IME.
+pub(crate) fn ime_rect(state: &AppState) -> Option<crate::ui::shell::geom::RectPx> {
+    if !App::wol_active(state)
+        || shell_transition::blocks_shell_input(state)
+        || !App::wol_page_is_login(state)
+    {
+        return None;
+    }
+    let layout = login_layout(state);
+    let login = state.frontend.wol.as_ref()?.login()?;
+    if let Some(form) = login.account.as_ref() {
+        return account_form_layout(state)?
+            .fields
+            .get(form.focused)
+            .map(|(_, edit)| *edit);
+    }
+    if let Some(form) = login.form.as_ref() {
+        return layout
+            .online?
+            .fields
+            .get(form.focused)
+            .map(|(_, edit)| *edit);
+    }
+    match login.focused_control {
+        NICKNAME => Some(layout.nickname_text_rect()),
+        PASSWORD => Some(layout.password),
+        _ => None,
+    }
+}
+
 /// `0x0072C600`: LoginScreen.shp through LoginScreen.PAL, only at 800 wide.
 pub(crate) fn open_login_art(state: &mut AppState) -> bool {
     if state.frontend.wol_login_art.is_some() {

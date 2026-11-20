@@ -4656,6 +4656,79 @@ fn command_bar_team_press_action(group: &[u64], selected: &[u64]) -> GroupPressA
     }
 }
 
+/// Android's movable C1..C10 controls have a touch-specific contract. A tap
+/// fills an empty group from the current selection or recalls a populated
+/// group. Holding with selected units merges them into the group; holding
+/// with no selection clears its membership. Keep this separate from keyboard
+/// bindings so stock Ctrl/Shift/digit behavior remains unchanged.
+#[derive(Debug, PartialEq, Eq)]
+enum AndroidHudGroupAction {
+    Assign(Vec<u64>),
+    Recall,
+}
+
+fn android_hud_group_action(
+    group: &[u64],
+    selected: &[u64],
+    held: bool,
+) -> Option<AndroidHudGroupAction> {
+    if held {
+        if selected.is_empty() {
+            return Some(AndroidHudGroupAction::Assign(Vec::new()));
+        }
+        let mut merged = Vec::with_capacity(group.len() + selected.len());
+        for id in group.iter().chain(selected) {
+            if !merged.contains(id) {
+                merged.push(*id);
+            }
+        }
+        return Some(AndroidHudGroupAction::Assign(merged));
+    }
+    if group.is_empty() {
+        (!selected.is_empty())
+            .then(|| AndroidHudGroupAction::Assign(selected.to_vec()))
+    } else {
+        Some(AndroidHudGroupAction::Recall)
+    }
+}
+
+/// Apply a native HUD group tap/hold on the app event loop. The existing
+/// simulation command remains the sole owner of group membership.
+pub(crate) fn handle_android_hud_control_group(
+    state: &mut AppState,
+    slot: usize,
+    held: bool,
+) {
+    if slot >= 10 {
+        return;
+    }
+    let sim = state
+        .match_state
+        .sim_runtime
+        .runtime()
+        .map(|runtime| &runtime.simulation);
+    let group = sim
+        .map(|sim| sim.projected_control_groups()[slot].clone())
+        .unwrap_or_default();
+    let selected = selected_stable_ids_in_order(
+        sim,
+        state.rules(),
+        &state.match_state.input.selection_order,
+        state.match_state.input.selection_order_pending,
+    );
+    match android_hud_group_action(&group, &selected, held) {
+        Some(AndroidHudGroupAction::Assign(members)) => {
+            queue_control_group_assignment(state, slot, members)
+        }
+        Some(AndroidHudGroupAction::Recall) => handle_control_group_command(
+            state,
+            slot,
+            GroupPress::Fixed(GroupPressAction::Recall),
+        ),
+        None => {}
+    }
+}
+
 /// Who pressed a control group: a key binding, a command-bar Team button,
 /// or a binding with one fixed action.
 #[derive(Debug, Clone, Copy)]
@@ -5379,7 +5452,8 @@ mod deploy_key_tests {
 #[cfg(all(test, tests_app_input_d_z))]
 mod control_group_tests {
     use super::{
-        GroupPressAction, KeyModifiers, TEAM_SELECTION_VOICE_POLICY, TeamSelection,
+        AndroidHudGroupAction, GroupPressAction, KeyModifiers, TEAM_SELECTION_VOICE_POLICY, TeamSelection,
+        android_hud_group_action,
         command_bar_team_press_action, control_group_action_for_input, control_group_press_action,
         live_group_members, schedule_control_group_assignment, selection_voice_recipients,
         team_selection, team_walk_members,
@@ -5578,6 +5652,35 @@ mod control_group_tests {
         assert_eq!(
             command_bar_team_press_action(&[1, 2], &[1]),
             GroupPressAction::Recall
+        );
+    }
+
+    #[test]
+    fn android_hud_tap_assigns_only_an_empty_group_and_recalls_a_filled_group() {
+        assert_eq!(
+            android_hud_group_action(&[], &[11, 12], false),
+            Some(AndroidHudGroupAction::Assign(vec![11, 12]))
+        );
+        assert_eq!(android_hud_group_action(&[], &[], false), None);
+        assert_eq!(
+            android_hud_group_action(&[11, 12], &[21], false),
+            Some(AndroidHudGroupAction::Recall)
+        );
+    }
+
+    #[test]
+    fn android_hud_hold_merges_selection_or_clears_when_empty() {
+        assert_eq!(
+            android_hud_group_action(&[11, 12], &[12, 21, 22], true),
+            Some(AndroidHudGroupAction::Assign(vec![11, 12, 21, 22]))
+        );
+        assert_eq!(
+            android_hud_group_action(&[11, 12], &[], true),
+            Some(AndroidHudGroupAction::Assign(Vec::new()))
+        );
+        assert_eq!(
+            android_hud_group_action(&[], &[21], true),
+            Some(AndroidHudGroupAction::Assign(vec![21]))
         );
     }
 

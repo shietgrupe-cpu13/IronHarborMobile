@@ -19,6 +19,10 @@ import android.provider.DocumentsContract
 import android.provider.Settings
 import android.system.ErrnoException
 import android.system.Os
+import android.text.InputType
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
+import android.widget.EditText
 import java.io.File
 import java.io.IOException
 
@@ -136,6 +140,69 @@ class VeraActivity : NativeActivity() {
 
     /** Uses the engine's config editor, retaining the player's other settings. */
     private external fun nativeConfigForImport(directory: String): String
+
+    /** Sends a HUD key through the existing winit event loop. */
+    private external fun nativeHudKey(androidKeyCode: Int, pressed: Boolean): Boolean
+
+    /** Dispatches a touch-specific control-group tap or hold through the app loop. */
+    private external fun nativeHudControlGroup(groupNumber: Int, held: Boolean): Boolean
+
+    /** Commits text into the game screen's currently focused text field. */
+    private external fun nativeSubmitGameText(text: String): Boolean
+
+    fun sendHudKey(androidKeyCode: Int, pressed: Boolean) {
+        if (!nativeHudKey(androidKeyCode, pressed)) {
+            android.util.Log.w("IronHarborHUD", "Game input loop did not accept key code $androidKeyCode")
+        }
+    }
+
+    fun sendHudControlGroup(groupNumber: Int, held: Boolean) {
+        if (!nativeHudControlGroup(groupNumber, held)) {
+            android.util.Log.w("IronHarborHUD", "Game input loop did not accept control group C$groupNumber")
+        }
+    }
+
+    /** A visible Android text box for account, lobby, and chat fields. */
+    fun showGameTextInput() {
+        val input = EditText(this).apply {
+            hint = "Type into the focused game field"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            imeOptions = EditorInfo.IME_ACTION_DONE
+            setSingleLine(true)
+            isFocusable = true
+            isFocusableInTouchMode = true
+        }
+        val dialog = android.app.AlertDialog.Builder(this)
+            .setTitle("Game text input")
+            .setMessage("Text is sent to the field currently focused in the game.")
+            .setView(input)
+            .setPositiveButton("SEND", null)
+            .setNegativeButton("CANCEL", null)
+            .create()
+        dialog.setOnShowListener {
+            input.requestFocus()
+            dialog.window?.setSoftInputMode(
+                android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE or
+                    android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE,
+            )
+            input.post {
+                getSystemService(InputMethodManager::class.java)
+                    ?.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+            }
+            dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val text = input.text?.toString().orEmpty()
+                if (text.isNotEmpty() && !nativeSubmitGameText(text)) {
+                    android.widget.Toast.makeText(
+                        this,
+                        "Could not send text to the game. Reopen the field and try again.",
+                        android.widget.Toast.LENGTH_LONG,
+                    ).show()
+                }
+                dialog.dismiss()
+            }
+        }
+        dialog.show()
+    }
 
     fun cancelImport(): Boolean = AssetImportJob.cancelActive()
 

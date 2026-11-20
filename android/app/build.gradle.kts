@@ -23,7 +23,8 @@ val veraVersionName: String = rootProject.file("../Cargo.toml")
     .first { it.trimStart().startsWith("version = ") }
     .substringAfter('"')
     .substringBefore('"')
-val veraVersionCode = 229
+val veraVersionCode = 235
+val sideBySideDebug = providers.gradleProperty("ironHarborSideBySideDebug").orNull == "true"
 val releaseStoreFile = System.getenv("ANDROID_RELEASE_STORE_FILE")
 val releaseStorePassword = System.getenv("ANDROID_RELEASE_STORE_PASSWORD")
 val releaseKeyAlias = System.getenv("ANDROID_RELEASE_KEY_ALIAS")
@@ -95,6 +96,7 @@ android {
     buildTypes {
         debug {
             isMinifyEnabled = false
+            if (sideBySideDebug) applicationIdSuffix = ".debug"
         }
         release {
             // Keep JVM entry points named for the native JNI callbacks.

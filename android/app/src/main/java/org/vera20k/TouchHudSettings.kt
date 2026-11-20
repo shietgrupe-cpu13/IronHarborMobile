@@ -15,6 +15,7 @@ internal object TouchHudSettings {
     const val HUD_ACTIVE_SET = "hud_active_set"
     const val HUD_DOCK = "hud_dock"
     const val HUD_TOGGLE = "HUD_TOGGLE"
+    const val HUD_TEXT = "HUD_TEXT"
     const val HUD_EDIT = "HUD_EDIT"
     const val HUD_HIDDEN = "hud_hidden"
     const val SET_ONE = "SET1"
@@ -68,10 +69,14 @@ internal object TouchHudSettings {
     val utilityButtons = listOf(
         Button(HUD_EDIT, "EDIT", 0),
         Button(HUD_TOGGLE, "HIDE", 0),
+        Button(HUD_TEXT, "TXT", 0),
     )
-    val buttons: List<Button> = commandButtons.take(4) + groupButtons + commandButtons.drop(4)
-    val layoutButtons: List<Button> = buttons + setSelectorButtons + utilityButtons
-    val defaultVisible: Set<String> = commandButtons.take(4).mapTo(linkedSetOf()) { it.id } + groupButtons.take(5).map { it.id }
+    // The set selectors participate in visibility/restore alongside actions,
+    // but remain outside key remapping and engine command bindings.
+    val buttons: List<Button> = commandButtons.take(4) + groupButtons + commandButtons.drop(4) + setSelectorButtons
+    val layoutButtons: List<Button> = buttons + utilityButtons
+    val defaultVisible: Set<String> = commandButtons.take(4).mapTo(linkedSetOf()) { it.id } +
+        groupButtons.take(5).map { it.id } + setSelectorButtons.map { it.id }
     val remappableActions: List<Button> = commandButtons
 
     fun parseVisible(encoded: String?, isStored: Boolean): Set<String> {
@@ -109,6 +114,11 @@ internal object TouchHudSettings {
             0 -> 0.03f to 0.90f
             1 -> 0.03f to 0.50f
             else -> 0.90f to 0.90f
+        }
+        if (id == HUD_TEXT) return when (dock.coerceIn(0, 2)) {
+            0 -> 0.03f to 0.78f
+            1 -> 0.03f to 0.61f
+            else -> 0.90f to 0.78f
         }
         if (id == SET_ONE) return 0.48f to 0.06f
         if (id == SET_TWO) return 0.64f to 0.06f

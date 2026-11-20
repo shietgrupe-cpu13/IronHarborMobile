@@ -40,6 +40,12 @@ internal data class LauncherModCatalog(
     val profile: LauncherIniProfile,
     val configError: String?,
 ) {
+    fun withAdditionalMods(additional: Collection<String>): LauncherModCatalog = copy(
+        installedMods = (installedMods + additional)
+            .distinctBy { it.lowercase(Locale.ROOT) }
+            .sortedBy { it.lowercase(Locale.ROOT) },
+    )
+
     fun containsSelectedMod(): Boolean =
         selectedMod == null || installedMods.any { it.equals(selectedMod, ignoreCase = true) }
 
@@ -51,13 +57,7 @@ internal data class LauncherModCatalog(
 
         @JvmStatic
         fun read(filesDirectory: File): LauncherModCatalog {
-            val installed = File(filesDirectory, "Mods").listFiles()
-                ?.asSequence()
-                ?.filter { it.isDirectory && !Files.isSymbolicLink(it.toPath()) }
-                ?.map(File::getName)
-                ?.sortedBy { it.lowercase(Locale.ROOT) }
-                ?.toList()
-                .orEmpty()
+            val installed = discoverModFolders(File(filesDirectory, "Mods"))
             val config = File(filesDirectory, "config.toml")
             if (!config.isFile) {
                 return LauncherModCatalog(installed, null, LauncherIniProfile.YR, null)
@@ -95,6 +95,32 @@ internal data class LauncherModCatalog(
             }
         }
 
+        /** Finds wrapper/nested mod folders without following links or staging trees. */
+        @JvmStatic
+        fun discoverModFolders(modsDirectory: File, maxDepth: Int = 4): List<String> {
+            if (maxDepth < 1 || !modsDirectory.isDirectory || Files.isSymbolicLink(modsDirectory.toPath())) {
+                return emptyList()
+            }
+            val root = runCatching { modsDirectory.canonicalFile }.getOrNull() ?: return emptyList()
+            val result = linkedSetOf<String>()
+            fun visit(directory: File, relative: String, depth: Int) {
+                if (depth > maxDepth || Files.isSymbolicLink(directory.toPath())) return
+                val entries = directory.listFiles()?.sortedBy { it.name.lowercase(Locale.ROOT) } ?: return
+                val regularFiles = entries.filter { it.isFile && !Files.isSymbolicLink(it.toPath()) }
+                if (relative.isNotEmpty() && (regularFiles.isNotEmpty() || entries.isEmpty())) result += relative
+                if (depth == maxDepth) return
+                entries.asSequence()
+                    .filter { it.isDirectory && !Files.isSymbolicLink(it.toPath()) && !it.name.startsWith('.') }
+                    .forEach { child ->
+                        val canonical = runCatching { child.canonicalFile }.getOrNull() ?: return@forEach
+                        if (!canonical.toPath().startsWith(root.toPath())) return@forEach
+                        val childRelative = if (relative.isEmpty()) child.name else "$relative/${child.name}"
+                        visit(child, childRelative, depth + 1)
+                    }
+            }
+            visit(modsDirectory, "", 0)
+            return result.sortedBy { it.lowercase(Locale.ROOT) }
+        }
         private fun readString(value: String): String {
             if (value.startsWith('\'')) {
                 val end = value.indexOf('\'', startIndex = 1)

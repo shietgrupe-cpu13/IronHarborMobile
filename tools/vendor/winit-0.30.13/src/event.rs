@@ -655,6 +655,28 @@ pub struct KeyEvent {
     pub(crate) platform_specific: platform_impl::KeyEventExtra,
 }
 
+impl KeyEvent {
+    /// Create an Android key event for controls hosted outside winit's native
+    /// input queue, such as the Kotlin touch HUD. The event still enters the
+    /// application's ordinary `WindowEvent::KeyboardInput` path.
+    #[cfg(target_os = "android")]
+    pub fn synthetic_android(
+        physical_key: keyboard::PhysicalKey,
+        logical_key: keyboard::Key,
+        state: ElementState,
+    ) -> Self {
+        Self {
+            physical_key,
+            logical_key,
+            text: None,
+            location: keyboard::KeyLocation::Standard,
+            state,
+            repeat: false,
+            platform_specific: platform_impl::KeyEventExtra {},
+        }
+    }
+}
+
 /// Describes keyboard modifiers event.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Modifiers {

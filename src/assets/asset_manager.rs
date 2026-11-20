@@ -590,7 +590,22 @@ impl AssetManager {
     }
 
     fn from_roots(ra2_dir: &Path, mod_dir: Option<&Path>) -> Result<Self, AssetError> {
+        Self::from_roots_with_ares_support(ra2_dir, mod_dir, None)
+    }
+
+    fn from_roots_with_ares_support(
+        ra2_dir: &Path,
+        mod_dir: Option<&Path>,
+        support_dir: Option<&Path>,
+    ) -> Result<Self, AssetError> {
         let mut loose_files = Self::open_loose_root(ra2_dir)?;
+        // This opt-in root contributes only ares.mix and sits after the game
+        // installation but before the selected mod in lookup priority.
+        if let Some(support_dir) = support_dir.filter(|path| crate::util::file_system::is_dir(path)) {
+            if let Some(archive) = Self::open_loose_root(support_dir)?.remove("ares.mix") {
+                loose_files.insert("ares.mix".to_owned(), archive);
+            }
+        }
         if let Some(mod_dir) = mod_dir {
             // Archives are found through this catalogue too
             // (`mount_named_archive`), so a mod's `expandmd50.mix` mounts where
@@ -647,6 +662,7 @@ impl AssetManager {
         let manager = Self::open_startup_archives(
             ra2_dir,
             mod_dir,
+            None,
             media_mode,
             Default::default(),
             ArchiveFamily::Yr,
@@ -672,6 +688,7 @@ impl AssetManager {
         let manager = Self::open_startup_archives(
             ra2_dir,
             mod_dir,
+            None,
             media_mode,
             ares_setting,
             family,
@@ -692,6 +709,30 @@ impl AssetManager {
         Ok(manager)
     }
 
+    /// Android launcher variant with one shared Ares archive root. The root is
+    /// exposed only for a selected mod; a mod's own archive remains the winner.
+    pub fn with_mod_and_ares_support(
+        ra2_dir: &Path,
+        mod_dir: Option<&Path>,
+        ares_support_dir: Option<&Path>,
+        media_mode: MediaArchiveMode,
+        ares_setting: crate::util::ares_launch::AresSetting,
+        family: ArchiveFamily,
+    ) -> Result<Self, AssetError> {
+        let manager = Self::open_startup_archives(
+            ra2_dir,
+            mod_dir,
+            ares_support_dir,
+            media_mode,
+            ares_setting,
+            family,
+            StartupArchivePolicy::OptionalWarnings,
+        )?;
+        crate::util::ares_launch::set_setting(ares_setting);
+        crate::util::ares_launch::set_game_ships_ares(manager.ships_ares());
+        Ok(manager)
+    }
+
     /// Build the launch's read-only startup archive view and strictly validate
     /// an INI profile. Unlike `with_mod_and_ares`, this inspection helper does
     /// not publish process-global Ares state, so a launcher preflight cannot
@@ -707,6 +748,30 @@ impl AssetManager {
         let manager = Self::open_startup_archives(
             ra2_dir,
             mod_dir,
+            None,
+            media_mode,
+            ares_setting,
+            family,
+            StartupArchivePolicy::OptionalWarnings,
+        )?;
+        manager.validate_ini_roots_strict(config)
+    }
+
+    /// Launcher preflight using the same selected-mod-only shared Ares root as
+    /// gameplay startup.
+    pub fn inspect_launch_ini_roots_with_ares_support(
+        ra2_dir: &Path,
+        mod_dir: Option<&Path>,
+        ares_support_dir: Option<&Path>,
+        media_mode: MediaArchiveMode,
+        ares_setting: crate::util::ares_launch::AresSetting,
+        config: &crate::util::ini_roots::IniRootConfig,
+    ) -> Result<crate::util::ini_roots::IniRoots, AssetError> {
+        let family = ArchiveFamily::for_ini_profile(config.profile);
+        let manager = Self::open_startup_archives(
+            ra2_dir,
+            mod_dir,
+            ares_support_dir,
             media_mode,
             ares_setting,
             family,
@@ -728,6 +793,7 @@ impl AssetManager {
         let manager = Self::open_startup_archives(
             ra2_dir,
             None,
+            None,
             media_mode,
             Default::default(),
             ArchiveFamily::Yr,
@@ -739,12 +805,20 @@ impl AssetManager {
     fn open_startup_archives(
         ra2_dir: &Path,
         mod_dir: Option<&Path>,
+        ares_support_dir: Option<&Path>,
         media_mode: MediaArchiveMode,
         ares_setting: crate::util::ares_launch::AresSetting,
         family: ArchiveFamily,
         mut policy: StartupArchivePolicy<'_>,
     ) -> Result<Self, AssetError> {
-        let mut manager = Self::from_roots(ra2_dir, mod_dir)?;
+        let support_dir = if mod_dir.is_some()
+            && ares_setting != crate::util::ares_launch::AresSetting::Off
+        {
+            ares_support_dir
+        } else {
+            None
+        };
+        let mut manager = Self::from_roots_with_ares_support(ra2_dir, mod_dir, support_dir)?;
         manager.ares_setting = ares_setting;
         let tag = family.tag();
 
@@ -2659,6 +2733,38 @@ mod tests {
         let off = open(Some(mod_dir.path()), AresSetting::Off);
         assert!(!off.ships_ares() && !off.ares_mix_mounted());
         assert_eq!(off.get_ref("ares.txt"), None);
+    }
+
+    #[test]
+    fn shared_ares_archive_is_mod_only_and_can_be_disabled() {
+        use crate::util::ares_launch::AresSetting;
+        let install = audio_test_install("ares-shared-support");
+        install.write_mix("ares.mix", "ares.txt", b"install Ares");
+        let mod_dir = TestDirectory::new("ares-shared-mod");
+        let support = TestDirectory::new("ares-shared-root");
+        support.write_mix("ares.mix", "ares.txt", b"shared Ares");
+        let open = |selected_mod, setting| {
+            AssetManager::with_mod_and_ares_support(
+                install.path(),
+                selected_mod,
+                Some(support.path()),
+                MediaArchiveMode::STOCK_DIGITAL,
+                setting,
+                ArchiveFamily::Yr,
+            )
+            .unwrap()
+        };
+
+        let vanilla = open(None, AresSetting::Auto);
+        assert!(!vanilla.ships_ares() && !vanilla.ares_mix_mounted());
+        let selected = open(Some(mod_dir.path()), AresSetting::Auto);
+        assert!(selected.ships_ares() && selected.ares_mix_mounted());
+        assert_eq!(selected.get_ref("ares.txt"), Some(&b"shared Ares"[..]));
+        mod_dir.write_mix("ares.mix", "ares.txt", b"mod Ares");
+        let mod_archive = open(Some(mod_dir.path()), AresSetting::Auto);
+        assert_eq!(mod_archive.get_ref("ares.txt"), Some(&b"mod Ares"[..]));
+        let disabled = open(Some(mod_dir.path()), AresSetting::Off);
+        assert!(!disabled.ships_ares() && !disabled.ares_mix_mounted());
     }
 
     #[test]

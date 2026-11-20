@@ -205,6 +205,9 @@ webpki-roots = "1.0"
 # Ed25519 for the updater's signed release manifest (src/app/updater). Already
 # compiled for ureq's rustls, so it adds no crate.
 ring = "0.17"
+# CPU-side terrain instance preparation uses the same deterministic indexed
+# parallel iteration on native desktop and Android builds.
+rayon = "1.11"
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 wasm-bindgen = { version = "0.2", optional = true }

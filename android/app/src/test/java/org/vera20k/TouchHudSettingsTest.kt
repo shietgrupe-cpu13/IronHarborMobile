@@ -19,6 +19,15 @@ class TouchHudSettingsTest {
         assertEquals("STOP,C1", TouchHudSettings.encodeVisible(setOf("C1", "STOP", "UNKNOWN")))
     }
 
+    @Test fun setSelectorsCanBeHiddenAndRestoredThroughVisibleButtonStorage() {
+        val selectors = setOf(TouchHudSettings.SET_ONE, TouchHudSettings.SET_TWO)
+        assertTrue(TouchHudSettings.defaultVisible.containsAll(selectors))
+        assertEquals(selectors, TouchHudSettings.parseVisible("SET1,SET2", true))
+        assertEquals("SET1,SET2", TouchHudSettings.encodeVisible(selectors))
+        assertEquals(selectors, TouchHudSettings.visibleForSet(selectors, emptyMap(), activeSet = 1))
+        assertEquals(selectors, TouchHudSettings.visibleForSet(selectors, emptyMap(), activeSet = 2))
+    }
+
     @Test fun normalizedPositionsClampAndRejectMalformedValues() {
         assertEquals(
             mapOf("STOP" to (0f to 1f), "C2" to (0.25f to 0.5f)),
@@ -80,15 +89,28 @@ class TouchHudSettingsTest {
     }
 
     @Test fun inGameEditAndHideControlsArePartOfTheMovableLayout() {
-        assertEquals(listOf(TouchHudSettings.HUD_EDIT, TouchHudSettings.HUD_TOGGLE),
+        assertEquals(listOf(TouchHudSettings.HUD_EDIT, TouchHudSettings.HUD_TOGGLE, TouchHudSettings.HUD_TEXT),
             TouchHudSettings.utilityButtons.map { it.id })
         assertTrue(TouchHudSettings.layoutButtons.any { it.id == TouchHudSettings.HUD_EDIT })
         assertTrue(TouchHudSettings.layoutButtons.any { it.id == TouchHudSettings.HUD_TOGGLE })
+        assertTrue(TouchHudSettings.layoutButtons.any { it.id == TouchHudSettings.HUD_TEXT })
         val points = mapOf(
             TouchHudSettings.HUD_EDIT to (0.31f to 0.12f),
             TouchHudSettings.HUD_TOGGLE to (0.73f to 0.88f),
+            TouchHudSettings.HUD_TEXT to (0.47f to 0.8f),
         )
         assertEquals(points, TouchHudSettings.parsePositions(TouchHudSettings.encodePositions(points)))
+    }
+
+    @Test fun textEntryButtonHasSafeDefaultPositionsAndCanBeMoved() {
+        for (dock in 0..2) {
+            val (x, y) = TouchHudSettings.defaultPosition(TouchHudSettings.HUD_TEXT, dock = dock)
+            assertTrue("dock $dock x=$x", x in 0f..1f)
+            assertTrue("dock $dock y=$y", y in 0f..1f)
+        }
+        assertEquals(0.47f to 0.8f, TouchHudSettings.parsePositions(
+            "HUD_TEXT:0.47,0.8",
+        ).getValue(TouchHudSettings.HUD_TEXT))
     }
 
     @Test fun commandButtonsUseStockAndroidPhysicalKeyCodes() {

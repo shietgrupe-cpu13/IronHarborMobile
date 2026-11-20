@@ -42,6 +42,8 @@ pub(crate) struct ProcessAssets {
     /// The launch's Ares setting (`util::ares_launch::AresSetting`), kept as
     /// the mod folder is.
     ares_setting: crate::util::ares_launch::AresSetting,
+    /// The Android shared Ares archive root for selected mods.
+    ares_support_dir: Option<std::path::PathBuf>,
     /// That folder's files as one digest (`app::mod_files::files_digest`), taken
     /// once: the pre-match check compares it.
     mod_files: std::sync::Arc<std::sync::OnceLock<Result<[u8; 32], String>>>,
@@ -130,6 +132,7 @@ impl ProcessAssets {
             media_archive_mode,
             mod_dir: None,
             ares_setting: Default::default(),
+            ares_support_dir: None,
             mod_files: Default::default(),
             mod_files_ahead: Default::default(),
             map_additions: Default::default(),
@@ -179,6 +182,14 @@ impl ProcessAssets {
         setting: crate::util::ares_launch::AresSetting,
     ) -> Self {
         self.ares_setting = setting;
+        self
+    }
+
+    pub(crate) fn with_ares_support_dir(
+        mut self,
+        directory: Option<std::path::PathBuf>,
+    ) -> Self {
+        self.ares_support_dir = directory;
         self
     }
 
@@ -324,9 +335,10 @@ impl ProcessAssets {
         &self,
         root: &std::path::Path,
     ) -> anyhow::Result<AssetManager> {
-        let assets = AssetManager::with_mod_and_ares(
+        let assets = AssetManager::with_mod_and_ares_support(
             root,
             self.mod_dir.as_deref(),
+            self.ares_support_dir.as_deref(),
             self.media_archive_mode,
             self.ares_setting,
             crate::assets::asset_manager::ArchiveFamily::for_ini_profile(self.ini_config.profile),

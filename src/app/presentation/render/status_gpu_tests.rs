@@ -90,7 +90,7 @@ fn wheel_zoom_health_pixels(type_name: &str, category: EntityCategory) {
             (zoom != 1.0).then(|| WorldZoomPass::new(&gpu.device, &gpu.queue, format, size, zoom));
         let source_size = resolve.as_ref().map_or(size, WorldZoomPass::source_size);
         if resolve.is_some() {
-            batch.set_native_world_resolution(&gpu.queue, source_size);
+            batch.set_native_world_resolution(&gpu.queue, source_size, 1.0);
         }
         let status = techno_extras_for_parent(
             &sim,

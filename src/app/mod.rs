@@ -72,6 +72,7 @@ mod hidden_run;
 mod in_game;
 mod initialize;
 pub(crate) mod input;
+pub mod android_input;
 pub(crate) mod lan_service;
 pub(crate) mod loading;
 pub(crate) mod map_library;
@@ -352,6 +353,8 @@ impl App {
     /// when it ends (docs/sim-thread.md).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn set_sim_wake(&mut self, proxy: winit::event_loop::EventLoopProxy<()>) {
+        #[cfg(target_os = "android")]
+        android_input::install_proxy(proxy.clone());
         self.sim_wake = Some(proxy);
     }
 

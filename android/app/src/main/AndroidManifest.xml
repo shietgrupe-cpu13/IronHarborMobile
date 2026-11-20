@@ -56,6 +56,11 @@
             android:configChanges="keyboard|keyboardHidden|navigation|uiMode|fontScale|locale|layoutDirection"
             android:theme="@style/Theme.IronHarbor.Launcher" />
 
+        <service
+            android:name="org.vera20k.CameraZoomSettingsService"
+            android:exported="false"
+            android:process=":game" />
+
         <!-- The engine toggles two aliases for its icon preference; both use
              this fork's original icon and both enter the Kotlin launcher. -->
         <activity-alias
