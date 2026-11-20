@@ -7,6 +7,10 @@ import android.widget.ArrayAdapter
 import android.widget.TextView
 import java.io.File
 
+internal fun localFolderRowLabels(entries: List<File?>): List<String> =
+    if (entries.isEmpty()) listOf("No subfolders")
+    else entries.map { entry -> entry?.name ?: "Parent folder" }
+
 /** Small in-launcher folder browser for local paths the native engine can open directly. */
 internal object LocalFolderPicker {
     fun show(
@@ -32,12 +36,14 @@ internal object LocalFolderPicker {
             if (parent != null) add(null)
             addAll(directories)
         }
-        val displayEntries = entries.ifEmpty { listOf(null) }
-        val adapter = object : ArrayAdapter<File?>(activity, android.R.layout.select_dialog_item, displayEntries) {
+        // ArrayAdapter binds its items before this custom getView body runs, so
+        // its data must not contain the null used internally for the parent row.
+        val rowLabels = localFolderRowLabels(entries)
+        val adapter = object : ArrayAdapter<String>(activity, android.R.layout.select_dialog_item, rowLabels) {
             override fun getView(position: Int, convertView: android.view.View?, parent: android.view.ViewGroup): android.view.View {
                 val row = super.getView(position, convertView, parent) as TextView
-                val entry = getItem(position)
-                row.text = if (entries.isEmpty()) "No subfolders" else entry?.name ?: "Parent folder"
+                val entry = entries.getOrNull(position)
+                row.text = rowLabels.getOrNull(position).orEmpty()
                 row.textSize = 15f
                 row.typeface = Typeface.DEFAULT
                 row.minHeight = (48 * activity.resources.displayMetrics.density + 0.5f).toInt()

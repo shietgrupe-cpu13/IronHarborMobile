@@ -136,7 +136,10 @@ class LauncherActivity : Activity() {
         super.onResume()
         launchGate.returnedToLauncher()
         updateEngineDataRoot()
-        if (gameWasLaunched) gameWasLaunched = false
+        if (gameWasLaunched) {
+            gameWasLaunched = false
+            StartupDiagnostics.captureAfterGame(this)
+        }
         if (::pageBody.isInitialized) {
             refreshInstallation()
             refreshSharedModCatalogAsync()
@@ -1386,7 +1389,11 @@ class LauncherActivity : Activity() {
         infoRow(device, "File/launch timing", if (preflight.isFile) preflight.readLines().take(5).joinToString("  /  ") else "Recorded after the next Play preflight")
         infoRow(device, "FPS comparison", "Use the in-game CPU/GPU overlay and matching workloads; the diagnostics ZIP does not yet record live frame samples")
         infoRow(device, "Log export", "Full retained engine logs and crash report in a ZIP")
+        infoRow(device, "Automatic startup log", "${StartupDiagnostics.locationDescription(this)} — refreshed at launch and after returning from a game; the same file is overwritten")
         pageBody.addView(device, margin(bottom = 12))
+        pageBody.addView(actionButton("SHARE AUTOMATIC STARTUP LOG", primary = false) {
+            StartupDiagnostics.shareLatest(this)
+        }.apply { isEnabled = Build.VERSION.SDK_INT >= 29 })
         pageBody.addView(actionButton(
             if (exportingDiagnostics) "PREPARING DIAGNOSTICS ZIP..." else "EXPORT FULL DIAGNOSTICS ZIP",
             primary = false,
