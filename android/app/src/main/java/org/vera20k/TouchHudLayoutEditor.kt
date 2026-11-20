@@ -48,7 +48,7 @@ internal class TouchHudLayoutEditor(private val activity: Activity) {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        val instruction = label("DRAG BUTTONS TO POSITION · TAP TO SELECT", 14, true).apply {
+        val instruction = label("DRAG BUTTONS TO POSITION  /  TAP TO SELECT", 14, true).apply {
             setPadding(dp(5), dp(5), dp(5), dp(5))
         }
         heading.addView(instruction, LinearLayout.LayoutParams(0, dp(42), 1f))
@@ -68,7 +68,7 @@ internal class TouchHudLayoutEditor(private val activity: Activity) {
         val preview = TouchHudLayoutPreview(
             activity, visible, positions, sizes, controlSets, layout, dock, scale, opacity,
         ) { selected ->
-            selectedLabel.text = selected?.let { "${it.label}  ·  ${sizes[it.id] ?: 100}%" }
+            selectedLabel.text = selected?.let { "${it.label}   /   ${sizes[it.id] ?: 100}%" }
                 ?: "No control selected"
         }
         previewSet.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
@@ -86,7 +86,7 @@ internal class TouchHudLayoutEditor(private val activity: Activity) {
             gravity = Gravity.CENTER_VERTICAL
             orientation = LinearLayout.HORIZONTAL
         }
-        sizeRow.addView(controlButton("SIZE −") { preview.resizeSelected(-10) }, weighted())
+        sizeRow.addView(controlButton("SIZE -") { preview.resizeSelected(-10) }, weighted())
         sizeRow.addView(selectedLabel.also { it.gravity = Gravity.CENTER }, weighted())
         sizeRow.addView(controlButton("SIZE +") { preview.resizeSelected(10) }, weighted())
         root.addView(sizeRow, LinearLayout.LayoutParams(-1, dp(48)))
@@ -140,8 +140,8 @@ internal class TouchHudLayoutEditor(private val activity: Activity) {
                 preview.selectFirstVisible()
                 preview.invalidate()
             }
-            .setPositiveButton("DONE", null)
-            .setNegativeButton("CANCEL") { _, _ ->
+            .setPositiveButton("Done", null)
+            .setNegativeButton("Cancel") { _, _ ->
                 // Revert only this checklist; the layout preview remains a separate draft.
                 actions.forEachIndexed { index, button ->
                     if (checked[index]) visible.add(button.id) else visible.remove(button.id)
@@ -154,10 +154,23 @@ internal class TouchHudLayoutEditor(private val activity: Activity) {
 
     private fun controlButton(text: String, primary: Boolean = false, action: () -> Unit) =
         Button(activity).apply {
-            this.text = text
+            this.text = text.lowercase(java.util.Locale.ROOT).replaceFirstChar { it.titlecase(java.util.Locale.ROOT) }
             isAllCaps = false
             setTextColor(Color.WHITE)
             textSize = 12f
+            compoundDrawablePadding = dp(6)
+            val key = text.lowercase(java.util.Locale.ROOT)
+            val iconId = when {
+                "size" in key -> R.drawable.ic_ih_settings
+                "cancel" in key || "hide" in key -> R.drawable.ic_ih_close
+                "save" in key || "restore" in key -> R.drawable.ic_ih_selected
+                else -> R.drawable.ic_ih_list
+            }
+            val icon = activity.getDrawable(iconId)?.mutate()?.apply {
+                setTint(if (primary) Color.BLACK else Color.rgb(163, 220, 130))
+            }
+            setCompoundDrawablesRelativeWithIntrinsicBounds(icon, null, null, null)
+            minHeight = dp(46)
             background = GradientDrawable().apply {
                 cornerRadius = dp(8).toFloat()
                 setColor(if (primary) Color.rgb(42, 107, 77) else Color.rgb(28, 43, 44))

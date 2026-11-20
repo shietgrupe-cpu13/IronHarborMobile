@@ -4,19 +4,19 @@
     <style name="Theme.IronHarbor.Game" parent="android:Theme.Black.NoTitleBar.Fullscreen">
         <item name="android:windowBackground">@drawable/splash_background</item>
         <item name="android:windowSplashScreenBackground">@color/launcher_background</item>
-        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher_ironharbor_foreground</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@mipmap/iron_harbor_beacon_logo</item>
         <item name="android:windowSplashScreenAnimationDuration">0</item>
     </style>
 
     <style name="Theme.IronHarbor.PrimarySplash" parent="Theme.IronHarbor.Launcher">
         <item name="android:windowSplashScreenBackground">@color/launcher_background</item>
-        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher_ironharbor_foreground</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@mipmap/iron_harbor_beacon_logo</item>
         <item name="android:windowSplashScreenAnimationDuration">0</item>
     </style>
 
     <style name="Theme.IronHarbor.SecondarySplash" parent="Theme.IronHarbor.Launcher">
         <item name="android:windowSplashScreenBackground">@color/launcher_background</item>
-        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher_ironharbor_foreground</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@mipmap/iron_harbor_beacon_logo</item>
         <item name="android:windowSplashScreenAnimationDuration">0</item>
     </style>
 </resources>

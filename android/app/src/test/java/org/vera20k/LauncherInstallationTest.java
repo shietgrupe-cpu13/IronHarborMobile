@@ -26,7 +26,8 @@ public class LauncherInstallationTest {
         File install = temporary.newFolder("retail");
         Files.write(install.toPath().resolve("RA2.MIX"), new byte[] {1});
         Files.write(install.toPath().resolve("Ra2Md.Mix"), new byte[] {2});
-        writeConfig(files.toPath().resolve("config.toml"), install.getAbsolutePath());
+        Files.createDirectories(files.toPath().resolve("Config"));
+        writeConfig(files.toPath().resolve("Config/config.toml"), install.getAbsolutePath());
 
         LauncherInstallation state = LauncherInstallation.Companion.read(files);
         assertTrue(state.getReady());
@@ -34,10 +35,25 @@ public class LauncherInstallationTest {
         assertTrue(state.getMissingArchives().isEmpty());
     }
 
+    @Test public void gameFolderPickerValidationRequiresBothBaseArchivesAtFolderRoot() throws Exception {
+        File install = temporary.newFolder("picked-game");
+        Files.write(install.toPath().resolve("RA2.MIX"), new byte[] {1});
+        assertEquals(java.util.Collections.singletonList("ra2md.mix"),
+                LauncherInstallation.Companion.missingRequiredArchives(install));
+        Files.write(install.toPath().resolve("Ra2Md.Mix"), new byte[] {2});
+        assertTrue(LauncherInstallation.Companion.missingRequiredArchives(install).isEmpty());
+        File nestedOnly = new File(install, "mods/example");
+        assertTrue(nestedOnly.mkdirs());
+        Files.write(nestedOnly.toPath().resolve("ra2.mix"), new byte[] {3});
+        assertEquals(java.util.Collections.singletonList("ra2md.mix"),
+                LauncherInstallation.Companion.missingRequiredArchives(nestedOnly));
+    }
+
     @Test public void doesNotReadARa2DirFromAnotherConfigSection() throws Exception {
         File files = temporary.newFolder("app-files");
         File install = temporary.newFolder("retail");
-        Files.write(files.toPath().resolve("config.toml"), (
+        Files.createDirectories(files.toPath().resolve("Config"));
+        Files.write(files.toPath().resolve("Config/config.toml"), (
                 "[other]\nra2_dir = \"" + install.getAbsolutePath() + "\"\n")
                 .getBytes(StandardCharsets.UTF_8));
 

@@ -635,7 +635,7 @@ impl App {
         #[cfg(target_os = "android")]
         let ares_support_dir = game_config
             .as_ref()
-            .map(|config| config.paths.settings_dir().join("AresSupport"));
+            .map(|config| config.paths.ares_support_dir());
         #[cfg(not(target_os = "android"))]
         let ares_support_dir: Option<std::path::PathBuf> = None;
         let batch_renderer: BatchRenderer = BatchRenderer::new(&gpu);

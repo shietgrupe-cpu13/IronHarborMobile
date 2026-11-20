@@ -31,9 +31,10 @@ public class LauncherModCatalogTest {
     @Test
     public void readsInstalledModsAndPersistedMoChoice() throws Exception {
         Path files = tempDirectory("ih-mod-catalog-");
+        Files.createDirectories(files.resolve("Config"));
         Files.createDirectories(files.resolve("Mods/Mental Omega"));
         Files.createDirectories(files.resolve("Mods/VanillaLike"));
-        writeUtf8(files.resolve("config.toml"),
+        writeUtf8(files.resolve("Config/config.toml"),
                 "\uFEFF[paths]\nra2_dir = \"/owned/game\"\nmod = \"Mental Omega\"\n[ini]\nprofile = \"mo\"\n");
 
         LauncherModCatalog catalog = LauncherModCatalog.read(files.toFile());
@@ -45,18 +46,20 @@ public class LauncherModCatalogTest {
     }
 
     @Test
-    public void discoversModInsideUserAddedWrapperDirectory() throws Exception {
+    public void discoversOnlyImmediateModFoldersNotTheirSubfolders() throws Exception {
         Path files = tempDirectory("ih-nested-mod-");
-        Path nested = files.resolve("Mods/Downloaded archive/MentalOmega330Mod");
-        Files.createDirectories(nested);
-        Files.createFile(nested.resolve("expandmo99.mix"));
+        Path mod = files.resolve("Mods/ExampleFolder Mod1");
+        Files.createDirectories(mod.resolve("Nested Content/Another Folder"));
+        Files.createFile(mod.resolve("expandmo99.mix"));
+        Files.createDirectories(files.resolve("Mods/VanillaLike"));
         LauncherModCatalog catalog = LauncherModCatalog.read(files.toFile());
-        assertEquals(java.util.List.of("Downloaded archive/MentalOmega330Mod"), catalog.getInstalledMods());
+        assertEquals(java.util.List.of("ExampleFolder Mod1", "VanillaLike"), catalog.getInstalledMods());
     }
     @Test
     public void publisherAndLauncherReaderAgreeAfterAtomicSelection() throws Exception {
         Path files = tempDirectory("ih-mod-publish-");
-        writeUtf8(files.resolve("config.toml"),
+        Files.createDirectories(files.resolve("Config"));
+        writeUtf8(files.resolve("Config/config.toml"),
                 "[paths]\nra2_dir = \"/owned/game\"\nmod = \"Old\"\n[ini]\nprofile = \"yr\"\n");
         Files.createDirectories(files.resolve("Mods/New Mod"));
 
@@ -74,8 +77,9 @@ public class LauncherModCatalogTest {
     @Test
     public void reportsMissingSelectedModInsteadOfShowingItAsApplied() throws Exception {
         Path files = tempDirectory("ih-mod-missing-");
+        Files.createDirectories(files.resolve("Config"));
         Files.createDirectories(files.resolve("Mods/Other"));
-        writeUtf8(files.resolve("config.toml"),
+        writeUtf8(files.resolve("Config/config.toml"),
                 "[paths]\nra2_dir = \"/owned/game\"\nmod = \"Removed Mod\"\n");
 
         LauncherModCatalog catalog = LauncherModCatalog.read(files.toFile());

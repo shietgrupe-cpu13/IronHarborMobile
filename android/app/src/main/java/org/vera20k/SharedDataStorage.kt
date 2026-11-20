@@ -10,7 +10,7 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.util.UUID
 
-/** User-owned Documents/IronHarborRA2YR tree plus the filesystem mirror used by Rust. */
+/** User-owned Documents/RA2Harbor tree used directly by the Rust engine. */
 internal class SharedDataStorage(private val context: Context) {
     private val resolver = context.contentResolver
 
@@ -24,19 +24,57 @@ internal class SharedDataStorage(private val context: Context) {
         val selectedName = displayName(tree, rootId)
         val root = if (selectedName.equals(ROOT_NAME, ignoreCase = true)) {
             selected
+        } else if (LEGACY_ROOT_NAMES.any { selectedName.equals(it, ignoreCase = true) }) {
+            // The user selected the legacy folder itself rather than Documents.
+            // Use that tree in place; never create a nested replacement inside it.
+            selected
         } else {
             findChild(tree, rootId, ROOT_NAME)
-                ?: migrateLegacyRoot(tree, rootId, selected)
+                ?: migrateLegacyRoot(tree, rootId)
                 ?: createDirectory(tree, selected, ROOT_NAME)
         }
         return root
     }
 
-    /** Store the chosen original game tree; the engine gets a private path mirror. */
+    /** The filesystem path used by the engine; content:// URIs are never passed to Rust. */
+    fun directRootPath(): File? {
+        if (!hasDirectSharedStorageAccess()) return null
+        val primary = Environment.getExternalStorageDirectory()
+        val root = treeUri()?.let { tree ->
+            val rootId = runCatching { DocumentsContract.getDocumentId(rootUri()) }.getOrNull()
+            rootId?.let { AndroidSharedStoragePath.fromDocumentId(it, primary) }
+        } ?: if (treeUri() == null) {
+            AndroidSharedStoragePath.defaultDataRoot(primary)
+        } else {
+            // A revoked or unresolvable previously selected tree must not silently
+            // redirect saves and configuration into a different directory.
+            return null
+        }
+        if (!root.exists() && !root.mkdirs()) return null
+        if (!root.isDirectory) return null
+        listOf("Saves", "Maps", "Mods", "Logs", "Config", "Mods/AresSupport").forEach { name ->
+            val child = File(root, name)
+            if (!child.isDirectory && !child.mkdirs() && !child.isDirectory) return null
+        }
+        return root
+    }
+
+    /** Store the chosen original game tree; the engine reads its shared path directly. */
     fun setGameSource(tree: Uri, displayName: String) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putString(GAME_SOURCE_URI, tree.toString())
             .putString(GAME_SOURCE_NAME, safeName(displayName))
+            .remove(GAME_SOURCE_PATH)
+            .remove(ACTIVE_GAME)
+            .apply()
+    }
+
+    fun setGameSourcePath(directory: File) {
+        val canonical = directory.canonicalFile
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString(GAME_SOURCE_PATH, canonical.path)
+            .putString(GAME_SOURCE_NAME, safeName(canonical.name))
+            .remove(GAME_SOURCE_URI)
             .remove(ACTIVE_GAME)
             .apply()
     }
@@ -44,6 +82,7 @@ internal class SharedDataStorage(private val context: Context) {
     fun clearGameSource() {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .remove(GAME_SOURCE_URI)
+            .remove(GAME_SOURCE_PATH)
             .remove(GAME_SOURCE_NAME)
             .remove(ACTIVE_GAME)
             .apply()
@@ -51,6 +90,9 @@ internal class SharedDataStorage(private val context: Context) {
 
     fun gameSourceTree(): Uri? = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         .getString(GAME_SOURCE_URI, null)?.let(Uri::parse)
+
+    fun gameSourcePath(): File? = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        .getString(GAME_SOURCE_PATH, null)?.let(::File)
 
     fun gameSourceName(): String? = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         .getString(GAME_SOURCE_NAME, null)
@@ -66,6 +108,10 @@ internal class SharedDataStorage(private val context: Context) {
 
     /** Resolve the selected primary-volume folder even after access is revoked, to prevent self-mirroring. */
     fun primaryGameSourceMatches(destination: File): Boolean {
+        val directPath = gameSourcePath()
+        if (directPath != null) {
+            return runCatching { directPath.canonicalFile == destination.canonicalFile }.getOrDefault(false)
+        }
         val tree = gameSourceTree() ?: return false
         val direct = primaryPathForTree(tree) ?: return false
         return runCatching { direct.canonicalFile == destination.canonicalFile }.getOrDefault(false)
@@ -77,7 +123,7 @@ internal class SharedDataStorage(private val context: Context) {
         return AndroidSharedStoragePath.fromDocumentId(id, Environment.getExternalStorageDirectory())
     }
 
-    /** Mirror a SAF source into the filesystem directory consumed by Rust. */
+    /** Legacy mirror helper retained for migrating older installs. Game launch no longer calls it. */
     fun mirrorGameSource(destination: File) {
         val tree = gameSourceTree() ?: throw IOException("Locate your game folder again")
         try {
@@ -90,8 +136,12 @@ internal class SharedDataStorage(private val context: Context) {
     }
 
     fun ensureLayout() {
+        if (treeUri() == null) {
+            if (directRootPath() == null) throw IOException("Grant All files access to prepare Documents/$ROOT_NAME")
+            return
+        }
         val root = rootUri()
-        listOf("Mods", "Maps", "Saves", "Logs", "AresSupport").forEach { ensureChild(root, it) }
+        listOf("Mods", "Maps", "Saves", "Logs", "Config", "Mods/AresSupport").forEach { ensureArea(it) }
     }
 
     fun setActiveGameFolder(name: String) {
@@ -102,10 +152,27 @@ internal class SharedDataStorage(private val context: Context) {
     fun activeGameFolder(): String? = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         .getString(ACTIVE_GAME, null)
 
+    fun setExternalModPath(path: String?) {
+        val edit = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+        if (path == null) edit.remove(ACTIVE_EXTERNAL_MOD_PATH)
+        else edit.putString(ACTIVE_EXTERNAL_MOD_PATH, File(path).canonicalPath)
+        edit.apply()
+    }
+
+    fun externalModPath(): String? = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        .getString(ACTIVE_EXTERNAL_MOD_PATH, null)
+
     fun displayLocation(): String {
-        val tree = treeUri() ?: return "Not selected"
+        val tree = treeUri() ?: return "Documents/$ROOT_NAME"
         val selectedId = DocumentsContract.getDocumentId(rootUri())
         return "Documents/${displayName(tree, selectedId)}"
+    }
+
+    /** Old roots that still contain data are left untouched if they could not be renamed. */
+    fun retainedLegacyRoots(): List<String> {
+        val tree = treeUri() ?: return emptyList()
+        val parentId = runCatching { DocumentsContract.getTreeDocumentId(tree) }.getOrNull() ?: return emptyList()
+        return LEGACY_ROOT_NAMES.filter { findChild(tree, parentId, it) != null }
     }
 
     fun copyLocalDirectory(area: String, source: File, childName: String? = null) {
@@ -135,7 +202,29 @@ internal class SharedDataStorage(private val context: Context) {
     }
 
     fun copyLocalFile(area: String, source: File) {
-        val parent = ensureChild(rootUri(), area)
+        if (treeUri() == null) {
+            val root = directRootPath() ?: throw IOException("Grant All files access to write in Documents/$ROOT_NAME")
+            val safe = safeName(source.name)
+            val directory = File(root, area).canonicalFile
+            if (!directory.toPath().startsWith(root.canonicalFile.toPath())) throw IOException("Unsafe destination folder")
+            if (!directory.isDirectory && !directory.mkdirs()) throw IOException("Cannot create Documents/$ROOT_NAME/$area")
+            val destination = File(directory, safe)
+            if (destination.exists()) throw IOException("Documents/$ROOT_NAME/$area/$safe already exists")
+            val temporary = File(directory, ".$safe.${UUID.randomUUID()}.tmp")
+            try {
+                source.inputStream().use { input ->
+                    FileOutputStream(temporary).use { output ->
+                        input.copyTo(output, 1 shl 16)
+                        output.fd.sync()
+                    }
+                }
+                if (!temporary.renameTo(destination)) throw IOException("Cannot publish $safe")
+            } finally {
+                temporary.delete()
+            }
+            return
+        }
+        val parent = ensureArea(area)
         val tree = treeUri()!!
         val safe = safeName(source.name)
         if (findChild(tree, DocumentsContract.getDocumentId(parent), safe) != null) {
@@ -159,10 +248,31 @@ internal class SharedDataStorage(private val context: Context) {
             if (cursor.moveToFirst()) cursor.getString(0) else null
         } ?: throw IOException("Cannot read the selected file name")
         val safe = safeName(name)
-        if (area.equals("AresSupport", ignoreCase = true) && !safe.equals("ares.mix", ignoreCase = true)) {
+        if (area.endsWith("AresSupport", ignoreCase = true) && !safe.equals("ares.mix", ignoreCase = true)) {
             throw IOException("Choose the file named ares.mix")
         }
-        val parent = ensureChild(rootUri(), area)
+        if (treeUri() == null) {
+            val root = directRootPath() ?: throw IOException("Grant All files access to write in Documents/$ROOT_NAME")
+            val directory = File(root, area).canonicalFile
+            if (!directory.toPath().startsWith(root.canonicalFile.toPath())) throw IOException("Unsafe destination folder")
+            if (!directory.isDirectory && !directory.mkdirs()) throw IOException("Cannot create Documents/$ROOT_NAME/$area")
+            val destination = File(directory, safe)
+            if (destination.exists()) throw IOException("Documents/$ROOT_NAME/$area/$safe already exists; existing data was left unchanged")
+            val temporary = File(directory, ".$safe.${UUID.randomUUID()}.tmp")
+            try {
+                resolver.openInputStream(source)?.use { input ->
+                    FileOutputStream(temporary).use { output ->
+                        input.copyTo(output, 1 shl 16)
+                        output.fd.sync()
+                    }
+                } ?: throw IOException("Cannot read the selected file")
+                if (!temporary.renameTo(destination)) throw IOException("Cannot publish $safe")
+            } finally {
+                temporary.delete()
+            }
+            return safe
+        }
+        val parent = ensureArea(area)
         val tree = treeUri()!!
         if (findChildFile(tree, DocumentsContract.getDocumentId(parent), safe) != null) {
             throw IOException("Documents/$ROOT_NAME/$area/$safe already exists; remove it first if you want to replace it")
@@ -193,29 +303,18 @@ internal class SharedDataStorage(private val context: Context) {
         mirrorDocumentDirectory(parent, destination, treeUri()!!)
     }
 
-    /** Lists real mod roots in the user-managed SAF folder without copying their contents. */
-    fun listModFolders(maxDepth: Int = 4): List<String> {
-        if (maxDepth < 1 || treeUri() == null) return emptyList()
+    /** Lists only immediate mod roots in the user-managed SAF folder, without copying their contents. */
+    fun listModFolders(): List<String> {
+        if (treeUri() == null) return emptyList()
         val tree = treeUri()!!
         val mods = ensureChild(rootUri(), "Mods")
-        val result = linkedSetOf<String>()
-        fun visit(document: Uri, relative: String, depth: Int) {
-            if (depth > maxDepth) return
-            val entries = children(tree, DocumentsContract.getDocumentId(document))
-            val files = entries.filter { it.mime != DocumentsContract.Document.MIME_TYPE_DIR }
-            if (relative.isNotEmpty() && (files.isNotEmpty() || entries.isEmpty())) result += relative
-            if (depth == maxDepth) return
-            entries.asSequence()
-                .filter { it.mime == DocumentsContract.Document.MIME_TYPE_DIR && !it.name.startsWith(".") }
-                .forEach { entry ->
-                    val name = safeName(entry.name)
-                    val child = DocumentsContract.buildDocumentUriUsingTree(tree, entry.id)
-                    val path = if (relative.isEmpty()) name else "$relative/$name"
-                    visit(child, path, depth + 1)
-                }
-        }
-        visit(mods, "", 0)
-        return result.sortedBy { it.lowercase(java.util.Locale.ROOT) }
+        return children(tree, DocumentsContract.getDocumentId(mods))
+            .asSequence()
+            .filter { it.mime == DocumentsContract.Document.MIME_TYPE_DIR && !it.name.startsWith(".") }
+            .map { safeName(it.name) }
+            .distinctBy { it.lowercase(java.util.Locale.ROOT) }
+            .sortedBy { it.lowercase(java.util.Locale.ROOT) }
+            .toList()
     }
 
     /** Mirrors one selected nested SAF folder into its engine path, never the whole Mods tree. */
@@ -357,6 +456,12 @@ internal class SharedDataStorage(private val context: Context) {
         return findChild(tree, id, name) ?: createDirectory(tree, parent, name)
     }
 
+    private fun ensureArea(area: String): Uri {
+        var current = rootUri()
+        for (segment in area.split('/')) current = ensureChild(current, safeName(segment))
+        return current
+    }
+
     private fun findChild(tree: Uri, parentId: String, name: String): Uri? =
         children(tree, parentId).firstOrNull { (id, childName, mime) ->
             mime == DocumentsContract.Document.MIME_TYPE_DIR && childName.equals(name, ignoreCase = true)
@@ -371,12 +476,17 @@ internal class SharedDataStorage(private val context: Context) {
         DocumentsContract.createDocument(resolver, parent, DocumentsContract.Document.MIME_TYPE_DIR, safeName(name))
             ?: throw IOException("Cannot create Documents folder $name")
 
-    /** Rename the old app-owned root in place; retain it unchanged if unsupported. */
-    private fun migrateLegacyRoot(tree: Uri, parentId: String, parent: Uri): Uri? {
-        val legacy = findChild(tree, parentId, LEGACY_ROOT_NAME) ?: return null
-        return runCatching { DocumentsContract.renameDocument(resolver, legacy, ROOT_NAME) }
-            .getOrNull()
-            ?: legacy
+    /** Reuse an existing user folder by renaming it; never delete its contents. */
+    private fun migrateLegacyRoot(tree: Uri, parentId: String): Uri? {
+        for (legacyName in LEGACY_ROOT_NAMES) {
+            val legacy = findChild(tree, parentId, legacyName) ?: continue
+            val renamed = runCatching { DocumentsContract.renameDocument(resolver, legacy, ROOT_NAME) }.getOrNull()
+            if (renamed != null) return renamed
+            // Providers that cannot rename remain accessible. Do not create a
+            // second root that would split the user's existing data.
+            return legacy
+        }
+        return null
     }
 
     private fun deleteChildren(folder: Uri) {
@@ -438,10 +548,12 @@ internal class SharedDataStorage(private val context: Context) {
         private const val PREFS = "ironharbor_user_storage"
         private const val TREE_URI = "documents_tree_uri"
         private const val ACTIVE_GAME = "active_game_folder"
+        private const val ACTIVE_EXTERNAL_MOD_PATH = "active_external_mod_path"
         private const val GAME_SOURCE_URI = "game_source_tree_uri"
+        private const val GAME_SOURCE_PATH = "game_source_path"
         private const val GAME_SOURCE_NAME = "game_source_name"
-        private const val ROOT_NAME = "IronHarborRA2YR"
-        private const val LEGACY_ROOT_NAME = "RA2IRONHARBOR"
+        private const val ROOT_NAME = "RA2Harbor"
+        private val LEGACY_ROOT_NAMES = listOf("IronHarborRA2YR", "RA2IRONHARBOR")
 
         fun setTree(context: Context, tree: Uri) {
             val preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)

@@ -333,6 +333,10 @@ impl PerformanceOverlay {
             frame
                 .stats
                 .close_window(now, frame_ms, tps, source.and_then(match_sample), gpu_ms);
+            log::info!(
+                "Performance sample: {}",
+                panel::format_sample(&frame.stats.shown)
+            );
         }
         let mut rows = panel::rows(&frame.stats.shown, self.thread_rows);
         let mut instances = Vec::new();

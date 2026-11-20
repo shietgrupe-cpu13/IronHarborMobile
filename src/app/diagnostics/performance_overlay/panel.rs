@@ -336,6 +336,74 @@ fn milliseconds(ms: f32) -> String {
     }
 }
 
+/// Stable, locale-independent performance data for the app log. These samples
+/// are emitted once per visible panel window, so a diagnostics export can be
+/// profiled without relying on a screenshot.
+pub(super) fn format_sample(shown: &Shown) -> String {
+    let fps = if shown.frame_ms.is_finite() && shown.frame_ms > 0.0 {
+        format!("{:.1}", 1000.0 / shown.frame_ms)
+    } else {
+        "na".to_owned()
+    };
+    let frame_ms = if shown.frame_ms.is_finite() && shown.frame_ms >= 0.0 {
+        format!("{:.2}", shown.frame_ms)
+    } else {
+        "na".to_owned()
+    };
+    let sim_tps = shown
+        .tps
+        .filter(|tps| tps.is_finite())
+        .map(|tps| format!("{tps:.1}"))
+        .unwrap_or_else(|| "na".to_owned());
+    let units = shown
+        .units
+        .map(|units| units.to_string())
+        .unwrap_or_else(|| "na".to_owned());
+    let gpu_ms = shown
+        .gpu_ms
+        .filter(|ms| ms.is_finite())
+        .map(|ms| format!("{ms:.2}"))
+        .unwrap_or_else(|| "na".to_owned());
+    let cpu_areas = shown
+        .areas
+        .iter()
+        .map(|(name, percent)| format!("{name}={percent:.1}%"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let core_loads = shown
+        .core_loads
+        .as_ref()
+        .map(|loads| {
+            loads
+                .iter()
+                .map(|load| format!("{load:.0}%"))
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .unwrap_or_else(|| "na".to_owned());
+    let thread_loads = shown
+        .threads
+        .map(|loads| {
+            format!(
+                "main={:.0}%,sim={:.0}%,other={:.0}%",
+                loads.main, loads.simulation, loads.others
+            )
+        })
+        .unwrap_or_else(|| "na".to_owned());
+    let loop_rates = shown
+        .loop_rates
+        .map(|rates| {
+            format!(
+                "main={:.1},sim={:.1},turns={:.1}",
+                rates.main_ticks, rates.simulation_ticks, rates.turns
+            )
+        })
+        .unwrap_or_else(|| "na".to_owned());
+    format!(
+        "fps={fps} frame_ms={frame_ms} sim_tps={sim_tps} units={units} gpu_ms={gpu_ms} cpu_areas=[{cpu_areas}] core_loads=[{core_loads}] thread_loads=[{thread_loads}] loop_rates=[{loop_rates}]"
+    )
+}
+
 fn first_row(shown: &Shown) -> String {
     let frame_ms = shown.frame_ms;
     let mut row = if frame_ms.is_finite() && frame_ms > 0.0 {
@@ -444,6 +512,34 @@ mod tests {
         // A GPU-bound frame fills the bar, and no frame rate yet means no row.
         assert_eq!(gpu(30.0, 20.0)[1], Part::Bars(vec![100.0]));
         assert_eq!(gpu(5.0, f32::NAN).len(), 1);
+    }
+
+    #[test]
+    fn performance_sample_is_stable_and_contains_cpu_gpu_and_simulation_rates() {
+        let shown = Shown {
+            frame_ms: 20.0,
+            tps: Some(30.0),
+            units: Some(122),
+            areas: vec![("VERA:CpuDrawWorld", 38.0), ("VERA:CpuTargeting", 7.0)],
+            gpu_ms: Some(8.5),
+            core_loads: Some(vec![80.0, 40.0]),
+            threads: Some(ThreadLoads {
+                main: 72.0,
+                simulation: 24.0,
+                others: 18.0,
+            }),
+            loop_rates: Some(LoopRates {
+                main_ticks: 30.0,
+                simulation_ticks: 0.0,
+                turns: 60.0,
+            }),
+            ..Shown::default()
+        };
+
+        assert_eq!(
+            format_sample(&shown),
+            "fps=50.0 frame_ms=20.00 sim_tps=30.0 units=122 gpu_ms=8.50 cpu_areas=[VERA:CpuDrawWorld=38.0%,VERA:CpuTargeting=7.0%] core_loads=[80%,40%] thread_loads=[main=72%,sim=24%,other=18%] loop_rates=[main=30.0,sim=0.0,turns=60.0]"
+        );
     }
 
     /// The rows' text with the thread rows on.

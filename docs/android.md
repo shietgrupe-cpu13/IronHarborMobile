@@ -281,8 +281,36 @@ The game folder picker no longer forces creation of the separate Documents data 
 
 The launcher scans the selected Documents Mods tree on a background thread, finds nested mod folders up to four levels deep, and presents them by relative path. It mirrors and validates only the selected mod for the engine instead of synchronizing the entire Mods tree on every Play. Existing private-only mod folders remain supported. User-managed originals in Documents are not deleted by this process.
 
-Play now records durations for game-source sync, selected-mod sync, Ares, Maps, Saves, and engine selection validation in `launcher-preflight-latest.txt`; the full diagnostics export includes that trace. This diagnoses launch/file delays. Live FPS, frame-time, CPU/GPU phase, and input-latency measurements still require equivalent in-game profiling captures; this build makes no FPS improvement claim.
+Play records durations for game-source sync, selected-mod sync, Ares, Maps, Saves, and engine selection validation in `launcher-preflight-latest.txt`; the full diagnostics export includes that trace. This diagnoses launch/file delays. When the in-game Performance Stats panel is visible, the engine also logs one numeric sample per second with FPS, frame time, simulation TPS, unit count, GPU time, CPU areas, core/thread loads, and event-loop rates. Compare captures under equivalent workloads before attributing a performance change; the measurements do not imply an FPS improvement by themselves.
 
 Launcher Settings now exposes Camera & Zoom minimum and maximum bounds, defaulting to `0.75` and `2.0` within the engine's existing `0.25`–`4.0` camera scale. The values use `[graphics] camera_zoom_min` and `camera_zoom_max` in the engine's `config.toml` parser/writer. Pinch, replay wheel zoom, and the optional in-match wheel view-distance steps obey the configured bounds; an Android service forwards updates into the existing `:game` event loop while it is alive. Otherwise the saved range is read at next launch. Windows uses the same engine configuration and clamp paths; the launcher sliders are Android UI. There is no standalone camera zoom keyboard binding in the current engine, so no new shortcut was added.
 
-Launcher Settings also exposes a 50–100% world render scale in 5% steps and a local gameplay presentation cap (30, 60, 120 FPS, or engine default). The `render_scale_percent` and `fps_limit` keys live in the existing `[graphics]` section. A non-native world target is used for battlefield rendering and upscaled into the existing full-size frame; screen-space UI remains at the surface resolution. The chosen scale takes effect on the next game launch. The FPS cap gates presentation only; simulation and multiplayer pacing are unchanged. The engine's default/display pacing can limit actual output below 120 FPS. Adaptive resolution is not implemented. Lowering scale may reduce GPU pixel work, but does not reduce CPU-side world-instance preparation; Android device benchmarking is required before claiming a performance gain.
+Launcher Settings exposes a 50–100% world render scale in 5% steps as an **experimental beta**; 100% is the default and recommended value. Lower settings have been reported to offset the movement indicator and omit building textures, so they are not recommended for normal play until those rendering issues are corrected. The `render_scale_percent` and `fps_limit` keys live in the existing `[graphics]` section. A non-native world target is used for battlefield rendering and upscaled into the existing full-size frame; screen-space UI remains at the surface resolution. The chosen scale takes effect on the next game launch. The FPS cap gates presentation only; simulation and multiplayer pacing are unchanged. The engine's default/display pacing can limit actual output below 120 FPS. Adaptive resolution is not implemented. Lowering scale may reduce GPU pixel work, but does not reduce CPU-side world-instance preparation; no performance gain has been established.
+
+
+## B31 ? direct shared storage and single user-data root
+
+The Android launcher uses `Documents/RA2Harbor` as the engine data directory.
+`Config/config.toml` is the Android config location; engine settings remain in
+`Config`, while maps, mods, saves, and logs use `Maps`, `Mods`, `Saves`, and
+`Logs`. The engine's Android startup reads a small app-private path pointer and
+sets its working directory to the selected shared folder. Game archives remain
+at the folder selected in SAF and are read from that original location. Game
+selection and mod selection no longer stage a second engine copy. Mods are
+selected in place from `Documents/RA2Harbor/Mods`, including supported nested
+folders. Map imports are published once into `Maps`.
+
+The app reuses an existing `IronHarborRA2YR` or `RA2IRONHARBOR` folder by
+renaming one to `RA2Harbor` when possible; it does not delete legacy folders or
+overwrite conflicting files. It migrates missing app-private settings and
+user data into the selected root once, retaining the source files. If an older
+shared folder cannot be renamed, it remains untouched and the launcher reports
+it. Because the Rust engine consumes normal filesystem paths, Android 11+
+All files access is required for direct shared-storage game/mod reads and for
+using the shared folder as the engine working directory. SAF-only/cloud
+providers that cannot map to a local primary-storage path are rejected without
+copying their game or mod contents. This permission remains declared and is
+user-granted in Android Settings.
+
+Build B31 verification results and device-test status are recorded in
+`out/logs/changelog-b31.txt` after the build completes.

@@ -130,7 +130,7 @@ fn handle_suffix() -> Option<String> {
 fn read_launcher_config(
     files_directory: &std::path::Path,
 ) -> anyhow::Result<(std::path::PathBuf, String)> {
-    let config_path = files_directory.join("config.toml");
+    let config_path = files_directory.join("Config").join("config.toml");
     let contents = match std::fs::read_to_string(&config_path) {
         Ok(contents) => contents,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -163,6 +163,16 @@ fn launcher_mod_directory(
         return Ok(None);
     };
     let path = std::path::Path::new(name);
+    if path.is_absolute() {
+        let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+            anyhow::anyhow!("The selected mod folder is unavailable at {}: {error}", path.display())
+        })?;
+        anyhow::ensure!(
+            metadata.file_type().is_dir() && !metadata.file_type().is_symlink(),
+            "The selected absolute mod path must be a real folder"
+        );
+        return Ok(Some(std::fs::canonicalize(path)?));
+    }
     let components: Vec<_> = path.components().collect();
     anyhow::ensure!(
         !name.contains('\\')
@@ -202,7 +212,7 @@ fn validate_launcher_selection(config: &vera20k::util::config::GameConfig) -> an
     let roots = vera20k::assets::asset_manager::AssetManager::inspect_launch_ini_roots_with_ares_support(
         &config.paths.ra2_dir,
         mod_dir.as_deref(),
-        Some(&config.paths.settings_dir().join("AresSupport")),
+        Some(&config.paths.ares_support_dir()),
         vera20k::assets::asset_manager::MediaArchiveMode::STOCK_DIGITAL,
         vera20k::util::ares_launch::AresSetting::Auto,
         &config.ini,
@@ -390,7 +400,7 @@ pub extern "system" fn Java_org_vera20k_VeraActivity_nativeConfigForImport(
         let directory: String = env.get_string(&directory)?.into();
         let config_path = vera20k::util::platform_dir::get()
             .ok_or_else(|| anyhow::anyhow!("The app data directory is unavailable"))?
-            .join("config.toml");
+            .join("Config/config.toml");
         let previous = match std::fs::read_to_string(config_path) {
             Ok(contents) => contents,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -422,13 +432,19 @@ pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeConfigForImport(
     let result = (|| -> anyhow::Result<jstring> {
         let directory: String = env.get_string(&directory)?.into();
         let files_directory: String = env.get_string(&files_directory)?.into();
-        let config_path = std::path::Path::new(&files_directory).join("config.toml");
-        let previous = match std::fs::read_to_string(config_path) {
+        let config_path = std::path::Path::new(&files_directory).join("Config/config.toml");
+        let previous = match std::fs::read_to_string(&config_path) {
             Ok(contents) => contents,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
             Err(error) => return Err(error.into()),
         };
-        let contents = vera20k::util::config::set_paths_key(&previous, "ra2_dir", &directory);
+        let contents = vera20k::util::config::set_paths_key(
+            &vera20k::util::config::set_paths_key(&previous, "ra2_dir", &directory),
+            "settings_dir",
+            &std::path::Path::new(&files_directory)
+                .join("Config")
+                .to_string_lossy(),
+        );
         Ok(env.new_string(contents)?.into_raw())
     })();
     match result {
@@ -448,7 +464,7 @@ pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeGetCameraZoomLimi
 ) -> jstring {
     let result = (|| -> anyhow::Result<jstring> {
         let files_directory: String = env.get_string(&files_directory)?.into();
-        let config_path = std::path::Path::new(&files_directory).join("config.toml");
+        let config_path = std::path::Path::new(&files_directory).join("Config/config.toml");
         let contents = match std::fs::read_to_string(config_path) {
             Ok(contents) => contents,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -478,7 +494,7 @@ pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeConfigForCameraZo
 ) -> jstring {
     let result = (|| -> anyhow::Result<jstring> {
         let files_directory: String = env.get_string(&files_directory)?.into();
-        let config_path = std::path::Path::new(&files_directory).join("config.toml");
+        let config_path = std::path::Path::new(&files_directory).join("Config/config.toml");
         let previous = match std::fs::read_to_string(config_path) {
             Ok(contents) => contents,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -504,7 +520,7 @@ pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeGetRenderOptions(
 ) -> jstring {
     let result = (|| -> anyhow::Result<jstring> {
         let files_directory: String = env.get_string(&files_directory)?.into();
-        let config_path = std::path::Path::new(&files_directory).join("config.toml");
+        let config_path = std::path::Path::new(&files_directory).join("Config/config.toml");
         let contents = match std::fs::read_to_string(config_path) {
             Ok(contents) => contents,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -532,7 +548,7 @@ pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeConfigForRenderOp
 ) -> jstring {
     let result = (|| -> anyhow::Result<jstring> {
         let files_directory: String = env.get_string(&files_directory)?.into();
-        let config_path = std::path::Path::new(&files_directory).join("config.toml");
+        let config_path = std::path::Path::new(&files_directory).join("Config/config.toml");
         let previous = match std::fs::read_to_string(config_path) {
             Ok(contents) => contents,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -700,7 +716,7 @@ pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeMapsDirectory(
         let files_directory: String = env.get_string(&files_directory)?.into();
         let files_directory = std::path::PathBuf::from(files_directory);
         vera20k::util::platform_dir::set(files_directory.clone());
-        let config_path = files_directory.join("config.toml");
+        let config_path = files_directory.join("Config/config.toml");
         let contents = match std::fs::read_to_string(&config_path) {
             Ok(contents) => contents,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -939,12 +955,13 @@ fn android_main(app: AndroidApp) {
     vera20k::util::device_identity::install(vera20k::util::device_identity::Hooks {
         handle_suffix,
     });
-    // Android starts every process in "/" with no writable home. Hand the app's
-    // private folder to the engine before anything opens a file: it becomes
-    // both the working directory and the settings folder, so logs, config.toml,
-    // VERA.INI, saves and replays all persist there.
+    // Android starts every process in "/" with no writable home. Prefer the
+    // user's Documents/RA2Harbor directory when the launcher has established
+    // direct shared-storage access. The pointer itself stays in app-private
+    // preferences; engine files and generated data live in the selected folder.
     match app.internal_data_path() {
         Some(dir) => {
+            let dir = android_user_data_root(&dir).unwrap_or(dir);
             if let Err(error) = vera20k::entry::adopt_android_data_dir(&dir) {
                 eprintln!("cannot use the app data directory: {error:#}");
             }
@@ -1005,6 +1022,13 @@ fn android_main(app: AndroidApp) {
     // from a clean slate: the event loop above cannot be rebuilt, so a cached
     // process would serve the new activity nothing but its splash.
     std::process::exit(0);
+}
+
+fn android_user_data_root(internal_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    let pointer = internal_dir.join("launcher-data-root.txt");
+    let value = std::fs::read_to_string(pointer).ok()?;
+    let path = std::path::PathBuf::from(value.trim());
+    (path.is_absolute() && path.is_dir()).then_some(path)
 }
 
 /// Claims this process's single event loop.

@@ -58,7 +58,7 @@ internal data class LauncherModCatalog(
         @JvmStatic
         fun read(filesDirectory: File): LauncherModCatalog {
             val installed = discoverModFolders(File(filesDirectory, "Mods"))
-            val config = File(filesDirectory, "config.toml")
+            val config = File(filesDirectory, "Config/config.toml")
             if (!config.isFile) {
                 return LauncherModCatalog(installed, null, LauncherIniProfile.YR, null)
             }
@@ -95,31 +95,23 @@ internal data class LauncherModCatalog(
             }
         }
 
-        /** Finds wrapper/nested mod folders without following links or staging trees. */
+        /** Lists only immediate mod folders, without treating folders inside a mod as separate mods. */
         @JvmStatic
-        fun discoverModFolders(modsDirectory: File, maxDepth: Int = 4): List<String> {
-            if (maxDepth < 1 || !modsDirectory.isDirectory || Files.isSymbolicLink(modsDirectory.toPath())) {
+        fun discoverModFolders(modsDirectory: File): List<String> {
+            if (!modsDirectory.isDirectory || Files.isSymbolicLink(modsDirectory.toPath())) {
                 return emptyList()
             }
             val root = runCatching { modsDirectory.canonicalFile }.getOrNull() ?: return emptyList()
-            val result = linkedSetOf<String>()
-            fun visit(directory: File, relative: String, depth: Int) {
-                if (depth > maxDepth || Files.isSymbolicLink(directory.toPath())) return
-                val entries = directory.listFiles()?.sortedBy { it.name.lowercase(Locale.ROOT) } ?: return
-                val regularFiles = entries.filter { it.isFile && !Files.isSymbolicLink(it.toPath()) }
-                if (relative.isNotEmpty() && (regularFiles.isNotEmpty() || entries.isEmpty())) result += relative
-                if (depth == maxDepth) return
-                entries.asSequence()
-                    .filter { it.isDirectory && !Files.isSymbolicLink(it.toPath()) && !it.name.startsWith('.') }
-                    .forEach { child ->
-                        val canonical = runCatching { child.canonicalFile }.getOrNull() ?: return@forEach
-                        if (!canonical.toPath().startsWith(root.toPath())) return@forEach
-                        val childRelative = if (relative.isEmpty()) child.name else "$relative/${child.name}"
-                        visit(child, childRelative, depth + 1)
-                    }
-            }
-            visit(modsDirectory, "", 0)
-            return result.sortedBy { it.lowercase(Locale.ROOT) }
+            return (modsDirectory.listFiles() ?: emptyArray())
+                .asSequence()
+                .filter { it.isDirectory && !it.name.startsWith('.') && !Files.isSymbolicLink(it.toPath()) }
+                .filter { child ->
+                    runCatching { child.canonicalFile.toPath().startsWith(root.toPath()) }.getOrDefault(false)
+                }
+                .map { it.name }
+                .distinctBy { it.lowercase(Locale.ROOT) }
+                .sortedBy { it.lowercase(Locale.ROOT) }
+                .toList()
         }
         private fun readString(value: String): String {
             if (value.startsWith('\'')) {
@@ -174,7 +166,9 @@ internal object LauncherConfigPublisher {
     @JvmStatic
     @Throws(IOException::class)
     fun publish(filesDirectory: File, contents: String) {
-        val parent = filesDirectory.toPath()
+        val configDirectory = File(filesDirectory, "Config")
+        if (!configDirectory.isDirectory && !configDirectory.mkdirs()) throw IOException("Cannot create Config folder")
+        val parent = configDirectory.toPath()
         val temporary = Files.createTempFile(parent, ".config-selection-", ".tmp")
         try {
             FileOutputStream(temporary.toFile()).use { output ->
@@ -183,7 +177,7 @@ internal object LauncherConfigPublisher {
             }
             Files.move(
                 temporary,
-                File(filesDirectory, "config.toml").toPath(),
+                File(configDirectory, "config.toml").toPath(),
                 StandardCopyOption.ATOMIC_MOVE,
                 StandardCopyOption.REPLACE_EXISTING,
             )

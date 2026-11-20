@@ -18,14 +18,16 @@ public class DiagnosticLogArchiveTest {
 
     @Test public void exportsCompleteCurrentRolledAndPanicLogsWithoutOtherPrivateFiles() throws Exception {
         File files = temporary.newFolder("files");
-        File logs = new File(files, "logs");
+        File logs = new File(files, "Logs");
         assertTrue(logs.mkdir());
         byte[] current = new byte[2 * 1024 * 1024 + 37];
         for (int i = 0; i < current.length; i++) current[i] = (byte) (i * 31);
         Files.write(new File(logs, "ra2.log").toPath(), current);
         Files.write(new File(logs, "ra2.log.1").toPath(), "previous-session".getBytes());
         Files.write(new File(files, "except.txt").toPath(), "panic backtrace".getBytes());
-        Files.write(new File(files, "config.toml").toPath(), "private config".getBytes());
+        File config = new File(files, "Config");
+        assertTrue(config.mkdir());
+        Files.write(new File(config, "config.toml").toPath(), "private config".getBytes());
 
         DiagnosticLogArchive.ExportBundle bundle = DiagnosticLogArchive.create(
                 files, temporary.newFolder("cache"), "device summary", "app-uid logcat");

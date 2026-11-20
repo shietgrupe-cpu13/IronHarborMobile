@@ -359,6 +359,16 @@ fn version_serves(current: &str, needs: &str) -> bool {
 /// spelling and its path. A name that is not one plain folder name (empty, a
 /// path, `..`) names nothing.
 fn find_folder(mods_dir: &Path, name: &str) -> Option<(String, PathBuf)> {
+    let selected = Path::new(name);
+    if selected.is_absolute() {
+        let metadata = std::fs::symlink_metadata(selected).ok()?;
+        if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+            return None;
+        }
+        let dir = std::fs::canonicalize(selected).ok()?;
+        let folder = dir.file_name()?.to_str()?.to_owned();
+        return Some((folder, dir));
+    }
     let mut components = Path::new(name).components();
     let plain = matches!(components.next(), Some(std::path::Component::Normal(_)))
         && components.next().is_none()
@@ -861,6 +871,20 @@ mod tests {
             .unwrap()
             .paths;
         (root, paths)
+    }
+
+    #[test]
+    fn resolves_an_absolute_mod_folder_without_copying_it_under_mods() {
+        let root = std::env::temp_dir().join(format!("vera-external-mod-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let external = root.join("selected location").join("Community Mod");
+        std::fs::create_dir_all(&external).unwrap();
+        let mods = root.join("managed Mods");
+        let (folder, resolved) = find_folder(&mods, external.to_str().unwrap()).unwrap();
+        assert_eq!(folder, "Community Mod");
+        assert_eq!(resolved, external.canonicalize().unwrap());
+        assert!(!mods.exists());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

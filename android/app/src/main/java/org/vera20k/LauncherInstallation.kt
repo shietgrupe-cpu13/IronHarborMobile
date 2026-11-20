@@ -15,7 +15,7 @@ internal data class LauncherInstallation(
         private val valuePattern = Regex("""^\s*ra2_dir\s*=\s*"(.*)"\s*(?:#.*)?$""")
 
         fun read(filesDirectory: File): LauncherInstallation {
-            val config = File(filesDirectory, "config.toml")
+            val config = File(filesDirectory, "Config/config.toml")
             if (!config.isFile) return LauncherInstallation(null, requiredArchives)
             val configured = runCatching {
                 var inPaths = false
@@ -32,13 +32,17 @@ internal data class LauncherInstallation(
                 }
             }.getOrNull()?.let(::unquotePath)?.let(::File)?.absoluteFile
 
-            val present = configured?.listFiles()
+            return LauncherInstallation(configured, missingRequiredArchives(configured))
+        }
+
+        fun missingRequiredArchives(directory: File?): List<String> {
+            val present = directory?.takeIf(File::isDirectory)?.listFiles()
                 ?.asSequence()
                 ?.filter(File::isFile)
                 ?.map { it.name.lowercase(Locale.ROOT) }
                 ?.toSet()
                 .orEmpty()
-            return LauncherInstallation(configured, requiredArchives.filterNot(present::contains))
+            return requiredArchives.filterNot(present::contains)
         }
 
         private fun unquotePath(value: String): String = value

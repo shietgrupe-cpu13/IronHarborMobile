@@ -14,6 +14,7 @@ import android.os.Bundle
 import android.os.Debug
 import android.os.SystemClock
 import android.os.Environment
+import android.util.Log
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.provider.Settings
@@ -35,6 +36,7 @@ import android.widget.ArrayAdapter
 import android.widget.TextView
 import android.widget.Toast
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import java.util.Locale
 
@@ -44,9 +46,14 @@ import java.util.Locale
  * `:game` process means a launcher return never creates a second winit loop.
  */
 class LauncherActivity : Activity() {
-    private enum class Page(val title: String) {
-        HOME("HOME"), FILES("GAME FILES"), SETTINGS("SETTINGS"),
-        TOUCH("TOUCH"), MODS("MODS"), MAPS("MAPS"), DIAGNOSTICS("DIAGNOSTICS"),
+    private enum class Page(val title: String, val icon: Int) {
+        HOME("Home", R.drawable.ic_ih_home),
+        FILES("Game files", R.drawable.ic_ih_files),
+        SETTINGS("Settings", R.drawable.ic_ih_settings),
+        TOUCH("Touch", R.drawable.ic_ih_touch),
+        MODS("Mods", R.drawable.ic_ih_mods),
+        MAPS("Maps", R.drawable.ic_ih_maps),
+        DIAGNOSTICS("Diagnostics", R.drawable.ic_ih_diagnostics),
     }
 
     private companion object {
@@ -73,13 +80,10 @@ class LauncherActivity : Activity() {
     private var sharedModNames: List<String> = emptyList()
     private var sharedModScanGeneration = 0
     private var sharedModCatalogLoading = false
-    private var mirroringSelectedMod = false
-    private var aresSetting = "Auto"
+        private var aresSetting = "Auto"
     private var downloadingAres = false
     private var modSelectionNote: String? = null
     private var modImporting = false
-    private var modCopiedBytes = 0L
-    private var modReportedBytes = 0L
     private var modImportNote: String? = null
     private var mapImporting = false
     private var mapCopiedCount = 0
@@ -92,6 +96,8 @@ class LauncherActivity : Activity() {
     private var exportingDiagnostics = false
     private lateinit var pageBody: LinearLayout
     private lateinit var tabs: LinearLayout
+    private lateinit var pageScroll: ScrollView
+    private var lastRenderedPage: Page? = null
     private lateinit var playButton: TextView
     private lateinit var importButton: TextView
     private var importNote: String? = null
@@ -115,6 +121,7 @@ class LauncherActivity : Activity() {
         page = savedInstanceState?.getString("launcher_page")?.let { value ->
             Page.entries.firstOrNull { it.name == value }
         } ?: Page.HOME
+        updateEngineDataRoot()
         buildShell()
         refreshInstallation()
         showSupportPromptForBuild()
@@ -128,10 +135,8 @@ class LauncherActivity : Activity() {
     override fun onResume() {
         super.onResume()
         launchGate.returnedToLauncher()
-        if (gameWasLaunched) {
-            gameWasLaunched = false
-            publishRuntimeData()
-        }
+        updateEngineDataRoot()
+        if (gameWasLaunched) gameWasLaunched = false
         if (::pageBody.isInitialized) {
             refreshInstallation()
             refreshSharedModCatalogAsync()
@@ -152,7 +157,8 @@ class LauncherActivity : Activity() {
                     contentResolver.takePersistableUriPermission(tree, flags)
                     SharedDataStorage.setTree(this, tree)
                     SharedDataStorage(this).ensureLayout()
-                    storageNote = "Documents/RA2IRONHARBOR is ready. Checking for existing app data to move there…"
+                    updateEngineDataRoot()
+                    storageNote = "Documents/RA2Harbor is ready. Checking existing app data without replacing files..."
                     migrateExistingDataToDocuments()
                 } catch (error: Exception) {
                     storageNote = "Cannot use that Documents folder: ${error.message ?: error.javaClass.simpleName}"
@@ -185,8 +191,7 @@ class LauncherActivity : Activity() {
                 runCatching {
                     val flags = (data?.flags ?: 0) and Intent.FLAG_GRANT_READ_URI_PERMISSION
                     contentResolver.takePersistableUriPermission(source, flags)
-                    val name = SharedDataStorage(this).copyDocumentFile("AresSupport", source)
-                    SharedDataStorage(this).mirrorFolder("AresSupport", File(filesDir, "AresSupport"))
+                    val name = SharedDataStorage(this).copyDocumentFile("Mods/AresSupport", source)
                     modImportNote = "Imported $name into the shared Ares support folder. It is used only with a selected mod."
                 }.onFailure { error ->
                     modImportNote = "Ares archive was not installed: ${error.message ?: error.javaClass.simpleName}"
@@ -230,18 +235,17 @@ class LauncherActivity : Activity() {
             renderPage()
             return
         }
-        val retainGameSource = try {
+        try {
             contentResolver.takePersistableUriPermission(
                 tree,
                 Intent.FLAG_GRANT_READ_URI_PERMISSION,
             )
-            true
         } catch (_: SecurityException) {
-            // A one-time provider grant still permits this copy, but cannot be
-            // reused to synchronize the selected source on later launches.
-            false
+            importNote = "Android did not grant persistent access. Select a local shared-storage folder again."
+            renderPage()
+            return
         }
-        importGame(tree, retainGameSource)
+        importGame(tree)
     }
 
     private fun buildShell() {
@@ -263,7 +267,7 @@ class LauncherActivity : Activity() {
             setPadding(dp(4), dp(2), dp(4), dp(8))
         }
         val logo = ImageView(this).apply {
-            setImageResource(R.mipmap.ic_launcher_ironharbor)
+            setImageResource(R.mipmap.iron_harbor_beacon_logo)
             scaleType = ImageView.ScaleType.FIT_CENTER
             contentDescription = "Iron Harbor Mobile app icon"
         }
@@ -273,20 +277,27 @@ class LauncherActivity : Activity() {
             setPadding(dp(12), 0, dp(8), 0)
         }
         brand.addView(text("IRON HARBOR", 18, R.color.launcher_text, bold = true, tracking = 0.08f))
-        brand.addView(text("MOBILE COMMAND  ·  ${appVersion()}", 10, R.color.launcher_muted, tracking = 0.06f))
+        brand.addView(text("MOBILE COMMAND   /   ${appVersion()}", 10, R.color.launcher_muted, tracking = 0.06f))
         header.addView(brand, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         header.addView(text("GPLv3", 11, R.color.launcher_accent, bold = true, tracking = 0.08f))
         root.addView(header)
 
+        val compactNavigation = resources.configuration.screenWidthDp < 600
         val navScroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             clipToPadding = false
+            isFillViewport = compactNavigation
         }
-        tabs = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        navScroll.addView(tabs)
-        root.addView(navScroll, LinearLayout.LayoutParams(-1, dp(48)))
+        tabs = LinearLayout(this).apply {
+            orientation = if (compactNavigation) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
+        }
+        navScroll.addView(
+            tabs,
+            ViewGroup.LayoutParams(if (compactNavigation) -1 else -2, -2),
+        )
+        root.addView(navScroll, LinearLayout.LayoutParams(-1, dp(if (compactNavigation) 100 else 48)))
 
-        val scroll = ScrollView(this).apply {
+        pageScroll = ScrollView(this).apply {
             isFillViewport = true
             clipToPadding = false
             setPadding(0, dp(8), 0, dp(12))
@@ -298,14 +309,15 @@ class LauncherActivity : Activity() {
         }
         val maxWidth = minOf(dp(960), resources.displayMetrics.widthPixels - dp(44))
         centered.addView(pageBody, FrameLayout.LayoutParams(maxWidth, -2, Gravity.TOP or Gravity.CENTER_HORIZONTAL))
-        scroll.addView(centered)
-        root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        pageScroll.addView(centered)
+        root.addView(pageScroll, LinearLayout.LayoutParams(-1, 0, 1f))
         setContentView(root)
         renderPage()
     }
 
     private fun renderPage() {
         if (!::pageBody.isInitialized) return
+        val pageChanged = lastRenderedPage != page
         renderTabs()
         pageBody.animate().cancel()
         pageBody.alpha = 0.72f
@@ -319,21 +331,31 @@ class LauncherActivity : Activity() {
             Page.MAPS -> renderMaps()
             Page.DIAGNOSTICS -> renderDiagnostics()
         }
+        lastRenderedPage = page
+        if (pageChanged) pageScroll.post { pageScroll.scrollTo(0, 0) }
         pageBody.animate().alpha(1f).setDuration(140).start()
     }
 
     private fun renderTabs() {
         tabs.removeAllViews()
-        Page.entries.forEach { item ->
+        val compactNavigation = resources.configuration.screenWidthDp < 600
+        tabs.orientation = if (compactNavigation) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
+        fun createTab(item: Page): TextView {
             val selected = item == page
-            val tab = TextView(this).apply {
+            return TextView(this).apply {
                 text = item.title
-                textSize = 11f
+                textSize = if (compactNavigation) 9f else 11f
                 typeface = Typeface.DEFAULT_BOLD
-                letterSpacing = 0.08f
+                letterSpacing = if (compactNavigation) 0f else 0.015f
                 gravity = Gravity.CENTER
                 setTextColor(color(if (selected) R.color.launcher_accent else R.color.launcher_muted))
-                setPadding(dp(15), 0, dp(15), 0)
+                setPadding(dp(if (compactNavigation) 3 else 13), dp(2), dp(if (compactNavigation) 3 else 13), dp(2))
+                compoundDrawablePadding = dp(if (compactNavigation) 1 else 7)
+                val glyph = getDrawable(item.icon)?.mutate()?.apply {
+                    setTint(color(if (selected) R.color.launcher_accent else R.color.launcher_muted))
+                }
+                if (compactNavigation) setCompoundDrawablesWithIntrinsicBounds(null, glyph, null, null)
+                else setCompoundDrawablesRelativeWithIntrinsicBounds(glyph, null, null, null)
                 background = rounded(
                     if (selected) color(R.color.launcher_surface_alt) else color(R.color.launcher_background),
                     if (selected) color(R.color.launcher_accent_dark) else color(R.color.launcher_background),
@@ -341,11 +363,28 @@ class LauncherActivity : Activity() {
                 )
                 isFocusable = true
                 isClickable = true
+                isSelected = selected
+                contentDescription = item.title
                 setOnClickListener { page = item; renderPage() }
             }
-            val params = LinearLayout.LayoutParams(-2, dp(42))
-            params.setMargins(0, 0, dp(6), 0)
-            tabs.addView(tab, params)
+        }
+        if (compactNavigation) {
+            Page.entries.chunked(4).forEach { pageRow ->
+                val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                pageRow.forEach { item ->
+                    row.addView(createTab(item), LinearLayout.LayoutParams(0, dp(48), 1f))
+                }
+                repeat(4 - pageRow.size) {
+                    row.addView(View(this), LinearLayout.LayoutParams(0, dp(48), 1f))
+                }
+                tabs.addView(row, LinearLayout.LayoutParams(-1, dp(50)))
+            }
+        } else {
+            Page.entries.forEach { item ->
+                val params = LinearLayout.LayoutParams(-2, dp(42))
+                params.setMargins(0, 0, dp(6), 0)
+                tabs.addView(createTab(item), params)
+            }
         }
     }
 
@@ -368,9 +407,9 @@ class LauncherActivity : Activity() {
         heroCopy.addView(text("Based on YuriPlanet VERA20K", 13, R.color.launcher_muted), margin(top = 6))
         hero.addView(heroCopy, LinearLayout.LayoutParams(0, -2, 1f))
         hero.addView(ImageView(this).apply {
-            setImageResource(R.mipmap.ic_launcher_ironharbor)
+            setImageResource(R.mipmap.iron_harbor_beacon_logo)
             scaleType = ImageView.ScaleType.FIT_CENTER
-            contentDescription = "Original Iron Harbor radar and harbor emblem"
+            contentDescription = "Iron Harbor beacon and harbor gate emblem"
         }, LinearLayout.LayoutParams(dp(92), dp(92)))
         pageBody.addView(hero, margin(bottom = 14))
         pageBody.addView(text(
@@ -395,7 +434,7 @@ class LauncherActivity : Activity() {
             R.color.launcher_muted,
         ), margin(top = 5))
         stateCard.addView(text(
-            "Play will use: ${modCatalog.selectedMod ?: "Vanilla Yuri's Revenge"} · ${modCatalog.profile.title} profile",
+            "Play will use: ${modCatalog.selectedMod ?: "Vanilla Yuri's Revenge"}  /  ${modCatalog.profile.title} profile",
             13,
             if (modCatalog.containsSelectedMod()) R.color.launcher_accent else R.color.launcher_warning,
             bold = true,
@@ -409,17 +448,17 @@ class LauncherActivity : Activity() {
         }
         pageBody.addView(stateCard, margin(bottom = 12))
 
-        playButton = actionButton(if (validatingLaunch) "CHECKING GAME FILES…" else "START GAME", primary = true) {
+        playButton = actionButton(if (validatingLaunch) "CHECKING GAME FILES..." else "START GAME", primary = true) {
             if (validatingLaunch) return@actionButton
             if (installation.ready) launchGame() else {
-                importNote = "Import your game folder before launching."
+                importNote = "Locate your game folder before launching."
                 page = Page.FILES
                 renderPage()
             }
         }
         playButton.isEnabled = installation.ready && !importing && !validatingLaunch && !launchGate.isPending
         pageBody.addView(playButton, margin(bottom = 10))
-        pageBody.addView(actionButton("GAME FILES  ·  IMPORT OR CHANGE", primary = false) {
+        pageBody.addView(actionButton("GAME FILES   /   IMPORT OR CHANGE", primary = false) {
             page = Page.FILES
             renderPage()
         }, margin(bottom = 17))
@@ -428,7 +467,7 @@ class LauncherActivity : Activity() {
         engine.addView(kicker("ENGINE STATUS"))
         infoRow(engine, "Engine", "VERA20K ${appVersion()}")
         infoRow(engine, "Renderer", "Vulkan required by this build")
-        infoRow(engine, "Attribution", "YuriPlanet / VERA20K · GPLv3")
+        infoRow(engine, "Attribution", "YuriPlanet / VERA20K  /  GPLv3")
         pageBody.addView(engine)
         pageBody.addView(text(
             "Unofficial community fork. Not affiliated with or endorsed by Electronic Arts.",
@@ -441,7 +480,7 @@ class LauncherActivity : Activity() {
         pageBody.addView(kicker("GAME LIBRARY"))
         pageBody.addView(text("Game files", 30, R.color.launcher_text, bold = true))
         pageBody.addView(text(
-            "Locate your own Yuri's Revenge folder. Iron Harbor leaves that source in place and keeps saves, maps, mods and logs under Documents/IronHarborRA2YR.",
+            "Select your game folder in place. Save, map, mod, log and config data stays in Documents/RA2Harbor.",
             14,
             R.color.launcher_muted,
         ), margin(bottom = 15))
@@ -449,24 +488,20 @@ class LauncherActivity : Activity() {
         val storageCard = card()
         storageCard.addView(kicker("USER-MANAGED STORAGE"))
         val sharedStorage = SharedDataStorage(this)
-        val storageLocation = if (sharedStorage.treeUri() == null) {
-            "Documents/IronHarborRA2YR"
-        } else {
-            sharedStorage.displayLocation()
-        }
+        val storageLocation = sharedStorage.displayLocation()
         storageCard.addView(text(storageLocation, 16, R.color.launcher_text, bold = true))
         storageCard.addView(text(
-            if (sharedStorage.treeUri() == null) "Choose Documents in the folder picker; Iron Harbor creates IronHarborRA2YR for Mods, Maps, Saves and Logs. Your selected game installation stays at its source location."
-            else "Mods, Maps, Saves and Logs are managed under $storageLocation. The selected game installation is not copied into this folder.",
+            if (sharedStorage.treeUri() == null) "Game files stay in their selected source folder. Saves, maps, mods, logs and configuration use $storageLocation automatically."
+            else "Game files stay in their selected source folder. Saves, maps, mods, logs and configuration use $storageLocation.",
             13,
             R.color.launcher_muted,
         ), margin(top = 6))
         storageCard.addView(actionButton("CHOOSE DOCUMENTS FOLDER", primary = false) { chooseStorageLocation() }, margin(top = 8))
         val allFilesAccess = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && Environment.isExternalStorageManager()
         storageCard.addView(text(
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) "All files access is not needed on this Android version."
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) "In-place engine access requires Android 11 or newer in this build. SAF-only providers cannot be passed to the Rust filesystem."
             else if (allFilesAccess) "All files access: granted. Android still protects other apps' private folders."
-            else "All files access: not granted. SAF folder selection works without it; grant this only for broader shared-storage access.",
+            else "All files access: not granted. Grant it so the engine can read game/mod folders directly and keep saves, maps, logs and configuration in Documents/RA2Harbor without private copies.",
             12,
             if (allFilesAccess) R.color.launcher_accent else R.color.launcher_muted,
         ), margin(top = 9))
@@ -474,7 +509,7 @@ class LauncherActivity : Activity() {
             storageCard.addView(actionButton("GRANT ALL FILES ACCESS", primary = false) {
                 AlertDialog.Builder(this)
                     .setTitle("Allow access to shared storage?")
-                    .setMessage("Android will open its special app-access screen. If granted, Iron Harbor can manage files in shared storage. You can revoke access in Settings at any time.")
+                    .setMessage("Android will open its special app-access screen. This lets VERA20K read your selected game/mod folders directly and write user data under Documents/RA2Harbor. It does not grant access to other apps? private folders. You can revoke access in Settings.")
                     .setNegativeButton("NOT NOW", null)
                     .setPositiveButton("OPEN SETTINGS") { _, _ -> openAllFilesAccessSettings() }
                     .show()
@@ -495,8 +530,8 @@ class LauncherActivity : Activity() {
         val shared = SharedDataStorage(this)
         val gameSource = shared.gameSourceName()
         val sharedGame = shared.activeGameFolder()
-        val location = gameSource?.let { "Selected source: $it (kept in place; engine cache is private)" }
-            ?: sharedGame?.let { "Documents/IronHarborRA2YR/Game/$it (legacy source)" }
+        val location = gameSource?.let { "Selected source: $it (read in place)" }
+            ?: sharedGame?.let { "Documents/RA2Harbor (legacy shared data)" }
             ?: installation.configuredDirectory?.absolutePath
             ?: "No configured game folder"
         status.addView(text(location, 12, R.color.launcher_muted), margin(top = 6))
@@ -513,7 +548,7 @@ class LauncherActivity : Activity() {
         if (importing) {
             val progressCard = card()
             progressCard.addView(kicker("PREPARING GAME FILES"))
-            progressCard.addView(text(importNote ?: "Copying game files…", 15, R.color.launcher_text))
+            progressCard.addView(text(importNote ?: "Copying game files...", 15, R.color.launcher_text))
             progressCard.addView(ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
                 isIndeterminate = true
             }, margin(top = 10, bottom = 8))
@@ -532,7 +567,7 @@ class LauncherActivity : Activity() {
         val guide = card()
         guide.addView(kicker("WHAT THE CHECKER USES"))
         infoRow(guide, "Required", "ra2.mix and ra2md.mix")
-        infoRow(guide, "Storage", "Original game folder stays in place; one private engine-readable copy is maintained")
+        infoRow(guide, "Storage", "Original game folder is read in place; no game copy is made")
         infoRow(guide, "Game data", "Not bundled with this app")
         pageBody.addView(guide)
     }
@@ -546,10 +581,11 @@ class LauncherActivity : Activity() {
         infoRow(display, "Orientation", "Landscape-first Android window")
         infoRow(display, "Renderer", "Vulkan; required by the current engine")
         infoRow(display, "Display", "Physical Android resolution stays unchanged")
-        display.addView(text("World render scale", 17, R.color.launcher_text, bold = true), margin(top = 8))
-        display.addView(text("The battlefield renders to a scaled world target and is upscaled. Menus, HUD, and touchscreen controls keep the surface resolution. Saved settings apply on the next game launch.", 13, R.color.launcher_muted), margin(top = 4, bottom = 6))
+        display.addView(text("EXPERIMENTAL BETA", 12, R.color.launcher_accent, bold = true), margin(top = 8))
+        display.addView(text("World render scale", 17, R.color.launcher_text, bold = true), margin(top = 2))
+        display.addView(text("Keep this at 100% for normal play. Lower scales are experimental and may offset the movement indicator or omit building textures. They apply on the next launch, and no FPS gain is established; the scale does not reduce CPU world-draw preparation.", 13, R.color.launcher_muted), margin(top = 4, bottom = 6))
         val renderOptions = try {
-            nativeGetRenderOptions(filesDir.absolutePath).split(',').let { values ->
+            nativeGetRenderOptions(engineDataDirectory().absolutePath).split(',').let { values ->
                 require(values.size == 2)
                 values[0].toInt() to values[1].toInt()
             }
@@ -575,7 +611,7 @@ class LauncherActivity : Activity() {
             override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
         })
         val presets = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        listOf("Quality" to 100, "Balanced" to 75, "Performance" to 60, "Ultra Low" to 50).forEach { (name, percent) ->
+        listOf("100% Native" to 100, "75% Beta" to 75, "60% Beta" to 60, "50% Beta" to 50).forEach { (name, percent) ->
             presets.addView(actionButton(name, primary = false) {
                 renderPercent = percent
                 renderSeek.progress = (percent - 50) / 5
@@ -595,9 +631,10 @@ class LauncherActivity : Activity() {
         display.addView(text("Frame limiting affects presentation only; simulation/network tick pacing is unchanged. 120 FPS is subject to display refresh and engine pacing. Adaptive resolution is not available.", 12, R.color.launcher_muted), margin(top = 3))
         display.addView(actionButton("SAVE GRAPHICS SETTINGS", primary = true) {
             try {
+                val dataDirectory = requireSharedDataDirectory()
                 val fps = fpsValues[fpsSpinner.selectedItemPosition.coerceIn(fpsValues.indices)]
-                val contents = nativeConfigForRenderOptions(renderPercent, fps, filesDir.absolutePath)
-                LauncherConfigPublisher.publish(filesDir, contents)
+                val contents = nativeConfigForRenderOptions(renderPercent, fps, dataDirectory.absolutePath)
+                LauncherConfigPublisher.publish(dataDirectory, contents)
                 Toast.makeText(this, "Graphics settings saved; they apply the next time you start the game", Toast.LENGTH_LONG).show()
             } catch (error: Exception) {
                 Toast.makeText(this, "Could not save graphics settings: ${error.message ?: error.javaClass.simpleName}", Toast.LENGTH_LONG).show()
@@ -608,10 +645,10 @@ class LauncherActivity : Activity() {
         val camera = card()
         camera.addView(kicker("CAMERA & ZOOM"))
         camera.addView(text("Tactical camera range", 19, R.color.launcher_text, bold = true))
-        camera.addView(text("Applies to pinch and mouse-wheel zoom. The engine scale supports 0.25×–4.0×. Changes save in config.toml, apply to an active game when its event loop is available, and otherwise take effect next launch.", 13, R.color.launcher_muted), margin(top = 5, bottom = 7))
+        camera.addView(text("Applies to pinch and mouse-wheel zoom. The engine scale supports 0.25x to 4.0x. Changes save in config.toml, apply to an active game when its event loop is available, and otherwise take effect next launch.", 13, R.color.launcher_muted), margin(top = 5, bottom = 7))
 
         val limits = try {
-            nativeGetCameraZoomLimits(filesDir.absolutePath).split(',').let { values ->
+            nativeGetCameraZoomLimits(engineDataDirectory().absolutePath).split(',').let { values ->
                 require(values.size == 2)
                 values[0].toFloat() to values[1].toFloat()
             }
@@ -621,7 +658,7 @@ class LauncherActivity : Activity() {
         }
         var minimumValue = limits.first.coerceIn(0.25f, 4.0f)
         var maximumValue = limits.second.coerceIn(minimumValue, 4.0f)
-        fun formatZoom(value: Float) = String.format(Locale.US, "%.2f×", value)
+        fun formatZoom(value: Float) = String.format(Locale.US, "%.2fx", value)
         val minimumLabel = text("Minimum zoom  /  ${formatZoom(minimumValue)}", 14, R.color.launcher_text)
         camera.addView(minimumLabel, margin(top = 7))
         val minimumSeek = SeekBar(this).apply {
@@ -668,8 +705,9 @@ class LauncherActivity : Activity() {
         })
         camera.addView(actionButton("SAVE AND APPLY CAMERA LIMITS", primary = true) {
             try {
-                val contents = nativeConfigForCameraZoomLimits(minimumValue, maximumValue, filesDir.absolutePath)
-                LauncherConfigPublisher.publish(filesDir, contents)
+                val dataDirectory = requireSharedDataDirectory()
+                val contents = nativeConfigForCameraZoomLimits(minimumValue, maximumValue, dataDirectory.absolutePath)
+                LauncherConfigPublisher.publish(dataDirectory, contents)
                 startService(Intent(this, CameraZoomSettingsService::class.java).apply {
                     putExtra(CameraZoomSettingsService.EXTRA_MINIMUM, minimumValue)
                     putExtra(CameraZoomSettingsService.EXTRA_MAXIMUM, maximumValue)
@@ -779,7 +817,7 @@ class LauncherActivity : Activity() {
         choices.forEach { action ->
             val check = CheckBox(this).apply {
                 val bound = prefs.contains("key_${action.id}") || action.defaultKeyCode != KeyEvent.KEYCODE_UNKNOWN
-                text = if (bound) action.label else "${action.label}  ·  assign an existing game key first"
+                text = if (bound) action.label else "${action.label}   /   assign an existing game key first"
                 setTextColor(color(R.color.launcher_text))
                 isChecked = action.id in visible
             }
@@ -881,8 +919,26 @@ class LauncherActivity : Activity() {
             }
         }, margin(top = 7, bottom = 6))
         val backupButtons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val export = Button(this).apply { text = "EXPORT HUD" }
-        val import = Button(this).apply { text = "IMPORT HUD" }
+        val export = Button(this).apply {
+            text = "Export HUD"
+            isAllCaps = false
+            minHeight = dp(48)
+            compoundDrawablePadding = dp(8)
+            setCompoundDrawablesRelativeWithIntrinsicBounds(
+                getDrawable(R.drawable.ic_ih_download)?.mutate()?.apply { setTint(color(R.color.launcher_accent)) },
+                null, null, null,
+            )
+        }
+        val import = Button(this).apply {
+            text = "Import HUD"
+            isAllCaps = false
+            minHeight = dp(48)
+            compoundDrawablePadding = dp(8)
+            setCompoundDrawablesRelativeWithIntrinsicBounds(
+                getDrawable(R.drawable.ic_ih_files)?.mutate()?.apply { setTint(color(R.color.launcher_accent)) },
+                null, null, null,
+            )
+        }
         backupButtons.addView(export, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         backupButtons.addView(import, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         root.addView(backupButtons)
@@ -1088,7 +1144,7 @@ class LauncherActivity : Activity() {
         profiles.addView(kicker("SUPPORTED INI ROOT PROFILES"))
         listOf(LauncherIniProfile.YR, LauncherIniProfile.MO, LauncherIniProfile.AUTO).forEach { profile ->
             profiles.addView(actionButton(
-                if (modCatalog.profile == profile) "✓  ${profile.title.uppercase()}  ·  SELECTED" else profile.title.uppercase(),
+                if (modCatalog.profile == profile) "  ${profile.title.uppercase()}   /   SELECTED" else profile.title.uppercase(),
                 primary = modCatalog.profile == profile,
             ) { applyModSelection(modCatalog.selectedMod, profile) }, margin(top = 7))
         }
@@ -1104,40 +1160,31 @@ class LauncherActivity : Activity() {
         val installed = card()
         installed.addView(kicker("INSTALLED DATA MODS"))
         installed.addView(actionButton(
-            if (modImporting) "IMPORTING MOD…" else "IMPORT MOD FOLDER",
+            if (modImporting) "IMPORTING MOD..." else "IMPORT MOD FOLDER",
             primary = false,
         ) { if (!modImporting) chooseModFolder() }, margin(top = 7))
-        if (modImporting) {
-            installed.addView(text(
-                "Copying ${modCopiedBytes / (1024 * 1024)} MB into Documents/IronHarborRA2YR/Mods and preparing the engine cache. The source folder is unchanged.",
-                13,
-                R.color.launcher_muted,
-            ), margin(top = 7))
-            installed.addView(actionButton("CANCEL MOD IMPORT", primary = false) {
-                if (ModImportJob.cancelActive()) {
-                    modImportNote = "Cancelling mod import; temporary files will be cleaned up."
-                    renderPage()
-                }
-            }, margin(top = 7))
-        }
+        if (modImporting) installed.addView(text(
+            "Validating the selected folder in place. The source files are not copied or moved.",
+            13, R.color.launcher_muted,
+        ), margin(top = 7))
         installed.addView(text(
-            "Import stores your managed mod under Documents/IronHarborRA2YR/Mods. You can also copy folders there yourself, including inside a wrapper folder; the launcher scans nested folders and mirrors only the selected mod for the engine. DLL or executable patches are not run by VERA20K.",
+            "Select a mod folder from local shared storage. Mods under Documents/RA2Harbor/Mods are discovered automatically; other selected folders can be used in place. The launcher does not duplicate mod files. DLL or executable patches are not run by VERA20K.",
             13,
             R.color.launcher_muted,
         ), margin(top = 8))
         installed.addView(actionButton(
-            if (modCatalog.selectedMod == null) "✓  VANILLA YURI'S REVENGE  ·  SELECTED" else "USE VANILLA YURI'S REVENGE",
+            if (modCatalog.selectedMod == null) "  VANILLA YURI'S REVENGE   /   SELECTED" else "USE VANILLA YURI'S REVENGE",
             primary = modCatalog.selectedMod == null,
         ) { applyModSelection(null, null) }, margin(top = 10))
-        if (mirroringSelectedMod) installed.addView(text("Preparing the selected Documents mod for engine validation…", 13, R.color.launcher_muted), margin(top = 8))
-        if (sharedModCatalogLoading) installed.addView(text("Checking Documents/IronHarborRA2YR/Mods for new or nested mod folders…", 13, R.color.launcher_muted), margin(top = 8))
+        if (sharedModCatalogLoading) installed.addView(text("Checking Documents/RA2Harbor/Mods for new or nested mod folders...", 13, R.color.launcher_muted), margin(top = 8))
         if (modCatalog.installedMods.isEmpty() && !sharedModCatalogLoading) {
-            installed.addView(text("No mod folders found under Documents/IronHarborRA2YR/Mods or app storage.", 13, R.color.launcher_muted), margin(top = 8))
+            installed.addView(text("No mod folders found under Documents/RA2Harbor/Mods.", 13, R.color.launcher_muted), margin(top = 8))
         }
         modCatalog.installedMods.forEach { folder ->
-            installed.addView(text(folder, 15, R.color.launcher_text, bold = true), margin(top = 13))
+            val folderLabel = File(folder).name.takeIf { it.isNotBlank() } ?: folder
+            installed.addView(text(folderLabel, 15, R.color.launcher_text, bold = true), margin(top = 13))
             installed.addView(actionButton(
-                if (folder.equals(modCatalog.selectedMod, ignoreCase = true)) "✓  SELECTED FOR NEXT LAUNCH" else "USE THIS MOD",
+                if (folder.equals(modCatalog.selectedMod, ignoreCase = true)) "  SELECTED FOR NEXT LAUNCH" else "USE THIS MOD",
                 primary = folder.equals(modCatalog.selectedMod, ignoreCase = true),
             ) { applyModSelection(folder, null) }, margin(top = 5))
         }
@@ -1146,14 +1193,14 @@ class LauncherActivity : Activity() {
         val ares = card()
         ares.addView(kicker("SHARED ARES SUPPORT"))
         ares.addView(text("One archive folder for selected mods", 18, R.color.launcher_text, bold = true))
-        val archive = File(filesDir, "AresSupport/ares.mix")
+        val archive = File(engineDataDirectory(), "Mods/AresSupport/ares.mix")
         ares.addView(text(
-            if (archive.isFile) "ares.mix is ready · ${archive.length() / 1024} KB" else "No ares.mix installed",
+            if (archive.isFile) "ares.mix is ready  /  ${archive.length() / 1024} KB" else "No ares.mix installed",
             14,
             if (archive.isFile) R.color.launcher_accent else R.color.launcher_muted,
         ), margin(top = 5))
         ares.addView(text(
-            "Import the Ares archive version required by your mod. The launcher keeps one shared copy in Documents/RA2IRONHARBOR/AresSupport; the engine reads it for a selected mod only. A mod's own ares.mix takes priority. Vanilla Yuri's Revenge ignores this folder.",
+            "Add an optional shared Ares archive under Documents/RA2Harbor/Mods/AresSupport. It is used only for a selected mod; that mod's own ares.mix takes priority. Vanilla Yuri's Revenge ignores it.",
             13,
             R.color.launcher_muted,
         ), margin(top = 8))
@@ -1164,16 +1211,16 @@ class LauncherActivity : Activity() {
             }, REQUEST_PICK_ARES)
         }, margin(top = 8))
         ares.addView(actionButton(
-            if (downloadingAres) "DOWNLOADING OFFICIAL ARES…" else "DOWNLOAD OFFICIAL ARES ARCHIVE",
+            if (downloadingAres) "DOWNLOADING OFFICIAL ARES..." else "DOWNLOAD OFFICIAL ARES ARCHIVE",
             primary = false,
         ) { if (!downloadingAres) downloadOfficialAresArchive() }, margin(top = 6))
         if (modCatalog.selectedMod == null) {
             ares.addView(text("Select a mod to enable Ares controls. Vanilla stays isolated.", 13, R.color.launcher_muted), margin(top = 8))
         } else {
-            ares.addView(text("Ares mode: $aresSetting · saved for the next game launch", 14, R.color.launcher_text, bold = true), margin(top = 9))
+            ares.addView(text("Ares mode: $aresSetting  /  saved for the next game launch", 14, R.color.launcher_text, bold = true), margin(top = 9))
             listOf("Auto", "On", "Off").forEach { setting ->
                 ares.addView(actionButton(
-                    if (aresSetting.equals(setting, ignoreCase = true)) "✓  ARES $setting  ·  SELECTED" else "ARES $setting",
+                    if (aresSetting.equals(setting, ignoreCase = true)) "  ARES $setting   /   SELECTED" else "ARES $setting",
                     primary = aresSetting.equals(setting, ignoreCase = true),
                 ) { applyAresSetting(setting) }, margin(top = 6))
             }
@@ -1197,12 +1244,12 @@ class LauncherActivity : Activity() {
             R.color.launcher_muted,
         ), margin(bottom = 14))
 
-        val location = runCatching { File(nativeMapsDirectory(filesDir.absolutePath)).canonicalFile }
+        val location = runCatching { File(nativeMapsDirectory(engineDataDirectory().absolutePath)).canonicalFile }
         val mapDirectory = location.getOrNull()
         val card = card()
         card.addView(kicker("ENGINE MAP LIBRARY"))
         card.addView(text(mapDirectory?.absolutePath ?: "Engine map folder unavailable", 12, R.color.launcher_muted))
-        card.addView(text("Editable folder: Documents/RA2IRONHARBOR/Maps", 12, R.color.launcher_accent), margin(top = 6))
+        card.addView(text("Editable folder: Documents/RA2Harbor/Maps", 12, R.color.launcher_accent), margin(top = 6))
         if (mapDirectory == null) {
             card.addView(text(
                 "The current config.toml could not be resolved. Fix the engine configuration before importing maps.",
@@ -1227,7 +1274,7 @@ class LauncherActivity : Activity() {
         if (mapImporting) {
             val progress = card()
             progress.addView(kicker("IMPORT IN PROGRESS"))
-            progress.addView(text("Imported $mapCopiedCount map file${if (mapCopiedCount == 1) "" else "s"}…", 14, R.color.launcher_text))
+            progress.addView(text("Imported $mapCopiedCount map file${if (mapCopiedCount == 1) "" else "s"}...", 14, R.color.launcher_text))
             progress.addView(ProgressBar(this).apply { isIndeterminate = true }, margin(top = 9, bottom = 8))
             progress.addView(actionButton("CANCEL MAP IMPORT", primary = false) {
                 MapImportJob.cancelActive()
@@ -1270,7 +1317,7 @@ class LauncherActivity : Activity() {
         page = Page.MAPS
         mapImporting = true
         mapCopiedCount = 0
-        mapImportNote = "Preparing selected map files…"
+        mapImportNote = "Preparing selected map files..."
         renderPage()
         Thread({
             var result: String
@@ -1295,7 +1342,8 @@ class LauncherActivity : Activity() {
                         } ?: throw IOException("Cannot read $name")
                     }
                 }
-                val mapsDirectory = File(nativeMapsDirectory(filesDir.absolutePath))
+                val dataDirectory = requireSharedDataDirectory()
+                val mapsDirectory = File(nativeMapsDirectory(dataDirectory.absolutePath))
                 val imported = job.run(mapsDirectory, sources) { count ->
                     completedCount = count
                     runOnUiThread {
@@ -1303,12 +1351,11 @@ class LauncherActivity : Activity() {
                         if (page == Page.MAPS) renderPage()
                     }
                 }
-                val shared = SharedDataStorage(this)
-                imported.forEach { shared.copyLocalFile("Maps", it) }
-                result = "Imported ${imported.size} map file${if (imported.size == 1) "" else "s"} into Documents/RA2IRONHARBOR/Maps. The engine refreshes its mirror before launch."
+                result = "Imported ${imported.size} map file${if (imported.size == 1) "" else "s"} into Documents/RA2Harbor/Maps. The engine reads maps from this folder directly."
             } catch (_: MapImportJob.Cancelled) {
                 result = "Map import cancelled. $completedCount completed file${if (completedCount == 1) " remains" else "s remain"}; existing files were not replaced."
             } catch (error: Throwable) {
+                Log.e("IronHarborImport", "Custom map import failed", error)
                 result = "Map import stopped: ${error.message ?: error.javaClass.simpleName}. $completedCount completed file${if (completedCount == 1) " remains" else "s remain"}."
             } finally {
                 job.close()
@@ -1330,18 +1377,18 @@ class LauncherActivity : Activity() {
         val device = card()
         device.addView(kicker("COMPATIBILITY SNAPSHOT"))
         infoRow(device, "Device", "${Build.MANUFACTURER} ${Build.MODEL}")
-        infoRow(device, "Android", "${Build.VERSION.RELEASE} · API ${Build.VERSION.SDK_INT}")
+        infoRow(device, "Android", "${Build.VERSION.RELEASE}  /  API ${Build.VERSION.SDK_INT}")
         infoRow(device, "ABI", Build.SUPPORTED_ABIS.joinToString())
         infoRow(device, "Vulkan", "Required by package; live adapter not queried here")
-        infoRow(device, "Memory", "${memory.availMem / (1024 * 1024)} MB available · native heap ${Debug.getNativeHeapAllocatedSize() / (1024 * 1024)} MB")
+        infoRow(device, "Memory", "${memory.availMem / (1024 * 1024)} MB available  /  native heap ${Debug.getNativeHeapAllocatedSize() / (1024 * 1024)} MB")
         infoRow(device, "Performance profile", "In-game Options > Performance Stats shows frame/tick rate, CPU phases, core load and GPU timing")
-        val preflight = File(filesDir, "launcher-preflight-latest.txt")
-        infoRow(device, "File/launch timing", if (preflight.isFile) preflight.readLines().take(5).joinToString(" · ") else "Recorded after the next Play preflight")
+        val preflight = File(engineDataDirectory(), "Logs/launcher-preflight-latest.txt")
+        infoRow(device, "File/launch timing", if (preflight.isFile) preflight.readLines().take(5).joinToString("  /  ") else "Recorded after the next Play preflight")
         infoRow(device, "FPS comparison", "Use the in-game CPU/GPU overlay and matching workloads; the diagnostics ZIP does not yet record live frame samples")
         infoRow(device, "Log export", "Full retained engine logs and crash report in a ZIP")
         pageBody.addView(device, margin(bottom = 12))
         pageBody.addView(actionButton(
-            if (exportingDiagnostics) "PREPARING DIAGNOSTICS ZIP…" else "EXPORT FULL DIAGNOSTICS ZIP",
+            if (exportingDiagnostics) "PREPARING DIAGNOSTICS ZIP..." else "EXPORT FULL DIAGNOSTICS ZIP",
             primary = false,
         ) {
             shareDiagnostics(memory)
@@ -1360,8 +1407,8 @@ class LauncherActivity : Activity() {
             appendLine("Available memory: ${memory.availMem / (1024 * 1024)} MB")
             appendLine("Native heap: ${Debug.getNativeHeapAllocatedSize() / (1024 * 1024)} MB")
             appendLine("Installation configured: ${installation.configuredDirectory?.absolutePath ?: "no"}")
-            appendLine("Engine logs: ${File(filesDir, "logs").absolutePath}")
-            val preflight = File(filesDir, "launcher-preflight-latest.txt")
+            appendLine("Engine logs: ${File(engineDataDirectory(), "Logs").absolutePath}")
+            val preflight = File(engineDataDirectory(), "Logs/launcher-preflight-latest.txt")
             if (preflight.isFile) {
                 appendLine("Last game-file/mod preflight timings:")
                 appendLine(preflight.readText().take(16_384))
@@ -1374,11 +1421,11 @@ class LauncherActivity : Activity() {
         }
         exportingDiagnostics = true
         renderPage()
-        Toast.makeText(this, "Preparing the full diagnostics ZIP…", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Preparing the full diagnostics ZIP...", Toast.LENGTH_SHORT).show()
         Thread({
             try {
                 val logcat = AndroidLogcatCapture.capture(android.os.Process.myUid(), cacheDir)
-                val bundle = DiagnosticLogArchive.create(filesDir, cacheDir, report, logcat)
+                val bundle = DiagnosticLogArchive.create(engineDataDirectory(), cacheDir, report, logcat)
                 runCatching { SharedDataStorage(this).copyLocalFile("Logs", bundle.file) }
                 val uri = Uri.Builder()
                     .scheme("content")
@@ -1418,10 +1465,85 @@ class LauncherActivity : Activity() {
     }
 
     private fun refreshInstallation() {
-        installation = LauncherInstallation.read(filesDir)
-        modCatalog = LauncherModCatalog.read(filesDir).withAdditionalMods(sharedModNames)
-        aresSetting = runCatching { nativeGetAresSetting(filesDir.absolutePath) }.getOrDefault("Auto")
+        val data = engineDataDirectory()
+        installation = LauncherInstallation.read(data)
+        modCatalog = readModCatalog(data)
+        aresSetting = runCatching { nativeGetAresSetting(data.absolutePath) }.getOrDefault("Auto")
         renderPage()
+    }
+
+    private fun engineDataDirectory(): File = SharedDataStorage(this).directRootPath() ?: filesDir
+
+    private fun readModCatalog(directory: File): LauncherModCatalog {
+        val externalMod = SharedDataStorage(this).externalModPath()
+        return LauncherModCatalog.read(directory)
+            .withAdditionalMods(sharedModNames + listOfNotNull(externalMod))
+    }
+
+    private fun requireSharedDataDirectory(): File = SharedDataStorage(this).directRootPath()
+        ?: throw IOException("Grant All files access to use Documents/RA2Harbor.")
+
+    /** Point NativeActivity at the same public data directory the launcher edits. */
+    private fun updateEngineDataRoot() {
+        val pointer = File(filesDir, "launcher-data-root.txt")
+        val target = SharedDataStorage(this).directRootPath()
+        if (target == null) {
+            pointer.delete()
+            return
+        }
+        runCatching {
+            migratePrivateUserData(target)
+            val value = target.canonicalPath
+            if (!pointer.isFile || pointer.readText() != value) {
+                val temporary = File(filesDir, ".launcher-data-root.tmp")
+                FileOutputStream(temporary).use { output ->
+                    output.write(value.toByteArray(Charsets.UTF_8))
+                    output.fd.sync()
+                }
+                java.nio.file.Files.move(
+                    temporary.toPath(), pointer.toPath(),
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                )
+            }
+        }.onFailure { error ->
+            storageNote = "Shared data folder is not ready: ${error.message ?: error.javaClass.simpleName}"
+            pointer.delete()
+        }
+    }
+
+    /** Merge old app-owned user data once by copying only missing names; retain every source. */
+    private fun migratePrivateUserData(target: File) {
+        val roots = listOf("Mods", "Maps", "Saves", "saves", "Logs", "logs", "AresSupport")
+        for (name in roots) {
+            val destination = when (name) {
+                "saves" -> "Saves"
+                "logs" -> "Logs"
+                "AresSupport" -> "Mods/AresSupport"
+                else -> name
+            }
+            copyMissingTree(File(filesDir, name), File(target, destination))
+        }
+        for (name in listOf("config.toml", "VERA.INI")) {
+            val source = File(filesDir, name)
+            val destination = File(target, if (name == "config.toml") "Config/config.toml" else "Config/VERA.INI")
+            if (source.isFile && !destination.exists()) {
+                destination.parentFile?.mkdirs()
+                runCatching { source.copyTo(destination, overwrite = false) }
+            }
+        }
+    }
+
+    private fun copyMissingTree(source: File, destination: File) {
+        if (!source.isDirectory || java.nio.file.Files.isSymbolicLink(source.toPath()) || source.canonicalFile == destination.canonicalFile) return
+        if (!destination.exists() && !destination.mkdirs()) return
+        source.listFiles()?.forEach { entry ->
+            if (java.nio.file.Files.isSymbolicLink(entry.toPath())) return@forEach
+            val target = File(destination, entry.name)
+            if (target.exists()) return@forEach
+            if (entry.isDirectory) copyMissingTree(entry, target)
+            else if (entry.isFile) runCatching { entry.copyTo(target, overwrite = false) }
+        }
     }
 
     /** Scan only SAF metadata in the background; do not copy every installed mod just to list it. */
@@ -1435,7 +1557,7 @@ class LauncherActivity : Activity() {
                 if (generation != sharedModScanGeneration || isFinishing || isDestroyed) return@runOnUiThread
                 sharedModCatalogLoading = false
                 sharedModNames = result.getOrElse { emptyList() }
-                modCatalog = LauncherModCatalog.read(filesDir).withAdditionalMods(sharedModNames)
+                modCatalog = readModCatalog(engineDataDirectory())
                 renderPage()
             }
         }, "ironharbor-mod-catalog-scan").start()
@@ -1443,7 +1565,7 @@ class LauncherActivity : Activity() {
     private fun applyAresSetting(setting: String) {
         if (modCatalog.selectedMod == null) return
         try {
-            aresSetting = nativeSetAresSetting(setting, filesDir.absolutePath)
+            aresSetting = nativeSetAresSetting(setting, requireSharedDataDirectory().absolutePath)
             modSelectionNote = "Saved Ares $aresSetting. The engine reads it next launch; the running game was not changed."
             renderPage()
         } catch (error: Exception) {
@@ -1453,13 +1575,13 @@ class LauncherActivity : Activity() {
     }
 
     private fun downloadOfficialAresArchive() {
-        if (File(filesDir, "AresSupport/ares.mix").isFile) {
-            modImportNote = "A shared ares.mix is already installed. Remove it from Documents/RA2IRONHARBOR/AresSupport before importing or downloading a replacement; no file was overwritten."
+        if (File(engineDataDirectory(), "Mods/AresSupport/ares.mix").isFile) {
+            modImportNote = "A shared ares.mix is already installed. Remove it from Documents/RA2Harbor/Mods/AresSupport before importing or downloading a replacement; no file was overwritten."
             renderPage()
             return
         }
         downloadingAres = true
-        modImportNote = "Downloading the pinned Ares release and checking its SHA-256…"
+        modImportNote = "Downloading the pinned Ares release and checking its SHA-256..."
         renderPage()
         Thread({
             val temporaryDirectory = File(cacheDir, "ares-download-${System.nanoTime()}")
@@ -1478,8 +1600,7 @@ class LauncherActivity : Activity() {
                     .joinToString("") { "%02x".format(it) }
                 if (digest != ARES_RELEASE_SHA256) throw IOException("The downloaded Ares archive failed its integrity check")
                 val storage = SharedDataStorage(this)
-                storage.copyLocalFile("AresSupport", temporaryFile)
-                storage.mirrorFolder("AresSupport", File(filesDir, "AresSupport"))
+                storage.copyLocalFile("Mods/AresSupport", temporaryFile)
                 "Official Ares archive downloaded and verified. Confirm that this release matches the selected mod."
             }
             temporaryDirectory.deleteRecursively()
@@ -1536,33 +1657,8 @@ class LauncherActivity : Activity() {
     }
 
     private fun applyModSelection(modName: String?, profile: LauncherIniProfile?) {
-        if (modName != null) {
-            val engineFolder = File(filesDir, "Mods/$modName")
-            if (!engineFolder.isDirectory && sharedModNames.any { it.equals(modName, ignoreCase = true) }) {
-                if (mirroringSelectedMod) return
-                mirroringSelectedMod = true
-                modSelectionNote = "Preparing only $modName from Documents for engine validation…"
-                renderPage()
-                Thread({
-                    val outcome = runCatching {
-                        SharedDataStorage(this).mirrorRelativeFolder("Mods", modName, engineFolder)
-                    }
-                    runOnUiThread {
-                        mirroringSelectedMod = false
-                        outcome.onSuccess {
-                            refreshInstallation()
-                            applyModSelection(modName, profile)
-                        }.onFailure {
-                            modSelectionNote = "Could not prepare $modName: ${it.message ?: it.javaClass.simpleName}"
-                            renderPage()
-                        }
-                    }
-                }, "ironharbor-selected-mod-mirror").start()
-                return
-            }
-        }
         if (!installation.ready) {
-            modSelectionNote = "Import a valid game installation before changing a mod or INI profile."
+            modSelectionNote = "Locate and verify a game installation before changing the mod or INI profile."
             renderPage()
             return
         }
@@ -1572,24 +1668,25 @@ class LauncherActivity : Activity() {
             return
         }
         if (modName != null && modCatalog.installedMods.none { it == modName }) {
-            modSelectionNote = "That mod folder is no longer available. Refresh the launcher and try again."
+            modSelectionNote = "That mod folder is no longer available or accessible. No copy was made."
             refreshInstallation()
             return
         }
         try {
+            val dataDirectory = requireSharedDataDirectory()
             val contents = if (profile == null && LauncherModCatalog.requiresMoProfile(modName.orEmpty())) {
-                nativeConfigForSelection(modName.orEmpty(), LauncherIniProfile.MO.configValue, filesDir.absolutePath)
+                nativeConfigForSelection(modName.orEmpty(), LauncherIniProfile.MO.configValue, dataDirectory.absolutePath)
             } else if (profile == null) {
-                nativeConfigForMod(modName.orEmpty(), filesDir.absolutePath)
+                nativeConfigForMod(modName.orEmpty(), dataDirectory.absolutePath)
             } else {
-                nativeConfigForSelection(modName.orEmpty(), profile.configValue, filesDir.absolutePath)
+                nativeConfigForSelection(modName.orEmpty(), profile.configValue, dataDirectory.absolutePath)
             }
-            LauncherConfigPublisher.publish(filesDir, contents)
-            modSelectionNote = if (profile == null) {
-                "Saved. The engine selected a complete INI root profile for ${modName ?: "Vanilla Yuri's Revenge"}; it takes effect next launch."
-            } else {
-                "Saved. ${modName ?: "Vanilla Yuri's Revenge"} with ${profile.title} will be read at the next game launch."
+            LauncherConfigPublisher.publish(dataDirectory, contents)
+            val externalPath = modName?.takeIf {
+                File(it).isAbsolute && AndroidSharedStoragePath.relativeFolderName(File(dataDirectory, "Mods"), File(it)) == null
             }
+            SharedDataStorage(this).setExternalModPath(externalPath)
+            modSelectionNote = "Saved. The engine validated the selected mod/profile in place; it takes effect on the next launch."
             refreshInstallation()
         } catch (error: Exception) {
             modSelectionNote = "Selection was not applied: ${error.message ?: error.javaClass.simpleName}"
@@ -1605,105 +1702,102 @@ class LauncherActivity : Activity() {
     }
 
     private fun ensureSharedStorage(): Boolean {
-        if (SharedDataStorage(this).treeUri() != null) return true
-        storageNote = "First choose Documents. The launcher will create IronHarborRA2YR and its Mods/Maps/Saves/Logs folders."
+        val storage = SharedDataStorage(this)
+        if (storage.directRootPath() != null) {
+            updateEngineDataRoot()
+            return true
+        }
+        storageNote = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
+            "Grant All files access first. Iron Harbor will then create Documents/RA2Harbor automatically; no extra folder import is needed."
+        } else {
+            "The selected Documents folder is no longer accessible. Choose Documents again; existing files will be retained."
+        }
         page = Page.FILES
         renderPage()
-        chooseStorageLocation()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) openAllFilesAccessSettings()
         return false
     }
 
     private fun chooseGameFolder() {
-        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-        }
-        startActivityForResult(intent, REQUEST_PICK_GAME)
+        if (!ensureSharedStorage()) return
+        val root = Environment.getExternalStorageDirectory()
+        val current = installation.configuredDirectory?.takeIf { it.isDirectory } ?: root
+        LocalFolderPicker.show(
+            this, root, current, "SELECT YURI'S REVENGE GAME FOLDER",
+            canUse = { LauncherInstallation.missingRequiredArchives(it).isEmpty() },
+            onSelected = ::importGameDirectory,
+        )
     }
 
     private fun chooseModFolder() {
         if (!ensureSharedStorage()) return
-        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-        }
-        startActivityForResult(intent, REQUEST_PICK_MOD)
+        val root = Environment.getExternalStorageDirectory()
+        val current = SharedDataStorage(this).externalModPath()?.let(::File)?.takeIf { it.isDirectory }
+            ?: File(root, "Documents")
+        LocalFolderPicker.show(
+            this, root, current, "SELECT MOD FOLDER",
+            canUse = { it.isDirectory },
+            onSelected = ::importModDirectory,
+        )
     }
 
     private fun importMod(tree: Uri) {
-        val job = ModImportJob.begin()
-        if (job == null) {
-            modImportNote = "Another mod import is already running."
+        val storage = SharedDataStorage(this)
+        val modDirectory = storage.directPathForTree(tree)
+        if (modDirectory == null) {
+            modImportNote = "Choose a local mod folder on shared storage. Cloud providers cannot provide a direct path to the Rust engine."
+            renderPage()
+            return
+        }
+        importModDirectory(modDirectory)
+    }
+
+    private fun importModDirectory(modDirectory: File) {
+        val storage = SharedDataStorage(this)
+        val dataDirectory = storage.directRootPath()
+        val modsDirectory = dataDirectory?.let { File(it, "Mods").canonicalFile }
+        val relativeName = if (modsDirectory != null) {
+            AndroidSharedStoragePath.relativeFolderName(modsDirectory, modDirectory.canonicalFile)
+        } else null
+        val selectedName = relativeName ?: runCatching { modDirectory.canonicalPath }.getOrNull()
+        if (!modDirectory.isDirectory || dataDirectory == null || selectedName.isNullOrBlank()) {
+            modImportNote = "Could not access the selected mod folder or Documents/RA2Harbor. Grant All files access; source mod files are never copied."
+            renderPage()
+            return
+        }
+        if (!installation.ready) {
+            modImportNote = "Locate and verify the game folder before selecting a mod. No files were changed."
             renderPage()
             return
         }
         modImporting = true
-        modCopiedBytes = 0
-        modReportedBytes = 0
-        modImportNote = "Checking the selected mod folder…"
-        page = Page.MODS
+        modImportNote = "Validating ${modDirectory.name} in place..."
         renderPage()
         Thread({
-            var activation: ImportedModSelection? = null
-            val result = try {
-                val name = selectedTreeName(tree)
-                val gameReady = installation.ready
-                val destination = job.run(
-                    filesDir,
-                    name,
-                    { staging ->
-                        val count = copyModTree(tree, staging, job)
-                        if (count == 0) throw IOException("The selected folder contains no files")
-                    },
-                    { staging ->
-                        // Defer checks until a base game exists. Otherwise ask
-                        // the engine to inspect this exact staging tree before
-                        // it can appear as an installed, selectable mod.
-                        if (gameReady) {
-                            if (LauncherModCatalog.requiresMoProfile(name)) {
-                                nativeConfigForSelection(
-                                    staging.name,
-                                    LauncherIniProfile.MO.configValue,
-                                    filesDir.absolutePath,
-                                )
-                            } else {
-                                nativeConfigForMod(staging.name, filesDir.absolutePath)
-                            }
-                        }
-                        SharedDataStorage(this).copyLocalDirectory("Mods", staging, name)
-                    },
-                )
-                if (gameReady) {
-                    activation = ImportedModSelection.afterEngineValidation(name)
-                    "Imported and engine-validated $name (${modCopiedBytes / (1024 * 1024)} MB) to Documents/IronHarborRA2YR/Mods/$name. It will be selected for the next launch."
+            val result = runCatching {
+                val config = if (LauncherModCatalog.requiresMoProfile(selectedName)) {
+                    nativeConfigForSelection(selectedName, LauncherIniProfile.MO.configValue, dataDirectory.absolutePath)
                 } else {
-                    "Imported $name (${modCopiedBytes / (1024 * 1024)} MB) to Documents/IronHarborRA2YR/Mods/$name. Profile validation and selection are pending until a game installation is ready."
+                    nativeConfigForMod(selectedName, dataDirectory.absolutePath)
                 }
-            } catch (_: ModImportJob.Cancelled) {
-                "Mod import cancelled. The selected mod folder was not changed."
-            } catch (error: Throwable) {
-                "Mod import failed: ${error.message ?: error.javaClass.simpleName}"
-            } finally {
-                job.close()
-                runCatching {
-                    contentResolver.releasePersistableUriPermission(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                }
+                LauncherConfigPublisher.publish(dataDirectory, config)
+                storage.setExternalModPath(if (relativeName == null) selectedName else null)
+                selectedName
             }
+            result.onFailure { Log.e("IronHarborImport", "Mod selection failed for ${modDirectory.name}", it) }
             runOnUiThread {
                 modImporting = false
-                modImportNote = result
-                refreshInstallation()
-                activation?.let { imported ->
-                    applyModSelection(imported.modName, imported.profile)
-                    modImportNote = if (modCatalog.selectedMod.equals(imported.modName, ignoreCase = true)) {
-                        "${imported.modName} is active for the next launch (${modCatalog.profile.title} profile)."
-                    } else {
-                        "${imported.modName} was imported, but could not be activated. See the selection error above."
-                    }
+                result.onSuccess { name ->
+                    refreshInstallation()
+                    applyModSelection(name, if (LauncherModCatalog.requiresMoProfile(name)) LauncherIniProfile.MO else null)
+                    modImportNote = "$name was validated and selected in place. Its source files were not copied."
+                }.onFailure { error ->
+                    modImportNote = "Could not use the selected mod in place: ${error.message ?: error.javaClass.simpleName}"
                     renderPage()
                 }
             }
-        }, "vera20k-mod-import").start()
+        }, "vera20k-direct-mod-selection").start()
     }
-
     private fun openAllFilesAccessSettings() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
         val appSettings = Intent(
@@ -1722,231 +1816,52 @@ class LauncherActivity : Activity() {
         }
     }
 
-    private fun selectedTreeName(tree: Uri): String {
-        val id = DocumentsContract.getTreeDocumentId(tree)
-        val document = DocumentsContract.buildDocumentUriUsingTree(tree, id)
-        return contentResolver.query(
-            document,
-            arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
-            null,
-            null,
-            null,
-        )?.use { cursor ->
-            if (cursor.moveToFirst()) cursor.getString(0) else null
-        }?.takeIf { it.isNotBlank() } ?: throw IOException("Cannot read the selected folder name")
-    }
-
-    private fun copyModTree(tree: Uri, directory: File, job: ModImportJob): Int =
-        copyModChildren(tree, DocumentsContract.getTreeDocumentId(tree), directory, job)
-
-    private fun copyModChildren(tree: Uri, documentId: String, directory: File, job: ModImportJob): Int {
-        job.checkCancelled()
-        val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, documentId)
-        val columns = arrayOf(
-            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-            DocumentsContract.Document.COLUMN_MIME_TYPE,
-        )
-        var copiedFiles = 0
-        contentResolver.query(children, columns, null, null, null)?.use { cursor ->
-            while (cursor.moveToNext()) {
-                job.checkCancelled()
-                val id = cursor.getString(0)
-                val name = cursor.getString(1) ?: continue
-                val mime = cursor.getString(2)
-                val destination = AssetImportJob.child(directory, name)
-                if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
-                    if (!destination.mkdir()) throw IOException("Cannot create folder $name")
-                    copiedFiles += copyModChildren(tree, id, destination, job)
-                } else {
-                    val uri = DocumentsContract.buildDocumentUriUsingTree(tree, id)
-                    contentResolver.openInputStream(uri)?.use { input ->
-                        destination.outputStream().use { output ->
-                            val buffer = ByteArray(1 shl 16)
-                            while (true) {
-                                job.checkCancelled()
-                                val count = input.read(buffer)
-                                if (count < 0) break
-                                output.write(buffer, 0, count)
-                                modCopiedBytes += count
-                            }
-                        }
-                    } ?: throw IOException("Cannot read $name")
-                    copiedFiles++
-                    if (modCopiedBytes - modReportedBytes >= PROGRESS_STEP_BYTES) {
-                        val megabytes = modCopiedBytes / (1024 * 1024)
-                        runOnUiThread {
-                            modImportNote = "Copying mod files · $megabytes MB"
-                            if (page == Page.MODS) renderPage()
-                        }
-                        modReportedBytes = modCopiedBytes
-                    }
-                }
-            }
-        } ?: throw IOException("Cannot list the selected mod folder")
-        return copiedFiles
-    }
-
-    private fun importGame(tree: Uri, retainGameSource: Boolean) {
+    private fun importGame(tree: Uri) {
         val storage = SharedDataStorage(this)
-        val directGameDirectory = storage.directPathForTree(tree)
-        if (directGameDirectory != null) {
-            importing = true
-            importNote = "Checking the selected game folder in place…"
-            page = Page.FILES
+        val gameDirectory = storage.directPathForTree(tree)
+        if (gameDirectory == null) {
+            runCatching { contentResolver.releasePersistableUriPermission(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+            importing = false
+            importNote = "Choose a local game folder on shared storage. Cloud providers cannot provide a direct path to the Rust engine."
             renderPage()
-            Thread({
-                var sourceSaved = false
-                val result = try {
-                    val missing = missingRequiredArchives(tree)
-                    if (missing.isNotEmpty()) throw IOException("Selected folder is missing ${missing.joinToString()}")
-                    val contents = nativeConfigForImport(directGameDirectory.absolutePath, filesDir.absolutePath)
-                    LauncherConfigPublisher.publish(filesDir, contents)
-                    // Retain the URI as the identity of this direct folder even
-                    // when only all-files permission, not a persistable SAF
-                    // grant, authorizes the engine's filesystem access.
-                    storage.setGameSource(tree, selectedTreeName(tree))
-                    sourceSaved = true
-                    "Using ${directGameDirectory.absolutePath} directly. Game files stay in place; saves and launcher data remain under Documents/IronHarborRA2YR."
-                } catch (error: Throwable) {
-                    "Could not use the selected folder directly: ${error.message ?: error.javaClass.simpleName}"
-                } finally {
-                    if (!sourceSaved) runCatching {
-                        contentResolver.releasePersistableUriPermission(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    }
-                }
-                runOnUiThread {
-                    importing = false
-                    importNote = result
-                    refreshInstallation()
-                }
-            }, "vera20k-direct-game-selection").start()
             return
         }
+        importGameDirectory(gameDirectory)
+    }
 
-        val job = AssetImportJob.begin()
-        if (job == null) {
-            importNote = "Another import is already running."
+    private fun importGameDirectory(selectedDirectory: File) {
+        val storage = SharedDataStorage(this)
+        val gameDirectory = runCatching { selectedDirectory.canonicalFile }.getOrNull()
+        val dataDirectory = storage.directRootPath()
+        if (gameDirectory == null || !gameDirectory.isDirectory || dataDirectory == null) {
+            importNote = "Could not access that local folder or Documents/RA2Harbor. Check All files access and try again."
+            Log.e("IronHarborImport", "Game folder selection unavailable; sharedDataReady=${dataDirectory != null}")
             renderPage()
             return
         }
         importing = true
-        copiedBytes = 0
-        reportedBytes = 0
-        importNote = "Preparing the private engine copy…"
+        importNote = "Verifying the selected game folder in place..."
         page = Page.FILES
         renderPage()
         Thread({
-            var sourceSaved = false
             val result = try {
-                val free = filesDir.usableSpace
-                if (free < REQUIRED_FREE_BYTES) {
-                    throw IOException("${free shr 20} MB free; at least ${REQUIRED_FREE_BYTES shr 20} MB is required")
-                }
-                val missing = missingRequiredArchives(tree)
-                if (missing.isNotEmpty()) {
-                    throw IOException("Selected folder is missing ${missing.joinToString()}")
-                }
-                val sharedGameName = selectedTreeName(tree)
-                job.run(
-                    filesDir,
-                    { staging -> copyTree(tree, staging, job) },
-                    { staging ->
-                        nativeConfigForImport(staging.absolutePath, filesDir.absolutePath)
-                    },
-                )
-                if (retainGameSource) {
-                    SharedDataStorage(this).setGameSource(tree, sharedGameName)
-                } else {
-                    SharedDataStorage(this).clearGameSource()
-                }
-                sourceSaved = true
-                if (retainGameSource) {
-                    "Using $sharedGameName as the source. The original stays in place; one private engine copy is synchronized before play. Saves and logs use Documents/IronHarborRA2YR."
-                } else {
-                    "Prepared $sharedGameName as a private engine copy. This folder provider did not allow persistent access, so later source edits will not sync. Saves and logs use Documents/IronHarborRA2YR."
-                }
-            } catch (_: AssetImportJob.Cancelled) {
-                "Import cancelled. The previous installation remains active."
+                val missing = LauncherInstallation.missingRequiredArchives(gameDirectory)
+                if (missing.isNotEmpty()) throw IOException("Selected folder is missing ${missing.joinToString()}")
+                val contents = nativeConfigForImport(gameDirectory.absolutePath, dataDirectory.absolutePath)
+                LauncherConfigPublisher.publish(dataDirectory, contents)
+                storage.setGameSourcePath(gameDirectory)
+                updateEngineDataRoot()
+                "Using ${gameDirectory.absolutePath} directly. No game files were copied or moved."
             } catch (error: Throwable) {
-                "Import failed: ${error.message ?: error.javaClass.simpleName}"
-            } finally {
-                job.close()
-                if (!sourceSaved) runCatching {
-                    contentResolver.releasePersistableUriPermission(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                }
+                Log.e("IronHarborImport", "Game folder validation/configuration failed for ${gameDirectory.name}", error)
+                "Could not use the selected folder in place: ${error.message ?: error.javaClass.simpleName}"
             }
             runOnUiThread {
                 importing = false
                 importNote = result
                 refreshInstallation()
             }
-        }, "vera20k-game-import").start()
-    }
-
-    private fun missingRequiredArchives(tree: Uri): List<String> {
-        val rootId = DocumentsContract.getTreeDocumentId(tree)
-        val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, rootId)
-        val present = mutableSetOf<String>()
-        contentResolver.query(
-            children,
-            arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
-            null,
-            null,
-            null,
-        )?.use { cursor ->
-            while (cursor.moveToNext()) cursor.getString(0)?.let { present += it.lowercase(Locale.ROOT) }
-        } ?: throw IOException("Cannot read the selected folder")
-        return listOf("ra2.mix", "ra2md.mix").filterNot(present::contains)
-    }
-
-    private fun copyTree(tree: Uri, directory: File, job: AssetImportJob) {
-        copyChildren(tree, DocumentsContract.getTreeDocumentId(tree), directory, job)
-    }
-
-    private fun copyChildren(tree: Uri, documentId: String, directory: File, job: AssetImportJob) {
-        job.checkCancelled()
-        val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, documentId)
-        val columns = arrayOf(
-            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-            DocumentsContract.Document.COLUMN_MIME_TYPE,
-        )
-        var listed = false
-        contentResolver.query(children, columns, null, null, null)?.use { cursor ->
-            listed = true
-            while (cursor.moveToNext()) {
-                job.checkCancelled()
-                val id = cursor.getString(0)
-                val name = cursor.getString(1) ?: continue
-                val mime = cursor.getString(2)
-                val destination = AssetImportJob.child(directory, name)
-                if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
-                    if (!destination.mkdir()) throw IOException("Cannot create folder $name")
-                    copyChildren(tree, id, destination, job)
-                } else {
-                    val uri = DocumentsContract.buildDocumentUriUsingTree(tree, id)
-                    contentResolver.openInputStream(uri)?.use { input ->
-                        destination.outputStream().use { output ->
-                            val buffer = ByteArray(1 shl 16)
-                            while (true) {
-                                job.checkCancelled()
-                                val count = input.read(buffer)
-                                if (count < 0) break
-                                output.write(buffer, 0, count)
-                                copiedBytes += count
-                            }
-                        }
-                    } ?: throw IOException("Cannot read $name")
-                    if (copiedBytes - reportedBytes >= PROGRESS_STEP_BYTES) {
-                        val megabytes = copiedBytes / (1024 * 1024)
-                        runOnUiThread { importNote = "Copying game files · $megabytes MB"; if (page == Page.FILES) renderPage() }
-                        reportedBytes = copiedBytes
-                    }
-                }
-            }
-        }
-        if (!listed) throw IOException("Cannot list the selected folder")
+        }, "vera20k-direct-game-selection").start()
     }
 
     private fun launchGame() {
@@ -1969,7 +1884,7 @@ class LauncherActivity : Activity() {
             val validation = runCatching {
                 syncUserManagedData(measure)
                 measure("engine_selection_validation") {
-                    nativeValidateCurrentSelection(filesDir.absolutePath)
+                    nativeValidateCurrentSelection(engineDataDirectory().absolutePath)
                 }
             }
             val status = validation.exceptionOrNull()?.let { "failed: ${it.message ?: it.javaClass.simpleName}" } ?: "passed"
@@ -1983,8 +1898,8 @@ class LauncherActivity : Activity() {
                 stages.forEach(::appendLine)
             }
             runCatching {
-                val target = File(filesDir, "launcher-preflight-latest.txt")
-                val temporary = File(filesDir, ".launcher-preflight.tmp")
+                val target = File(engineDataDirectory(), "Logs/launcher-preflight-latest.txt")
+                val temporary = File(engineDataDirectory(), "Logs/.launcher-preflight.tmp")
                 java.io.FileOutputStream(temporary).use { output ->
                     output.write(trace.toByteArray(Charsets.UTF_8))
                     output.fd.sync()
@@ -2016,7 +1931,7 @@ class LauncherActivity : Activity() {
                     onFailure = { error ->
                         launchGate.completedWithoutLaunch()
                         modSelectionNote = "Cannot launch this game/mod selection: ${error.message ?: error.javaClass.simpleName}. Choose a profile whose required roots are available."
-                        modCatalog = LauncherModCatalog.read(filesDir).withAdditionalMods(sharedModNames)
+                        modCatalog = readModCatalog(engineDataDirectory())
                         page = Page.MODS
                         renderPage()
                     },
@@ -2025,104 +1940,49 @@ class LauncherActivity : Activity() {
         }, "vera20k-launch-preflight").start()
     }
 
-    /** SAF documents are mirrored to app-private paths because Rust consumes filesystem paths. */
+    /** Check the direct filesystem roots consumed by Rust; never mirror user assets. */
     private fun syncUserManagedData(measure: (String, () -> Unit) -> Unit) {
         val storage = SharedDataStorage(this)
-        val sourceTree = storage.gameSourceTree()
-        measure("game_source_sync") {
-            if (sourceTree != null) {
-                val engineGameDirectory = installation.configuredDirectory
-                    ?: throw IOException("No engine game directory is configured")
-                if (storage.primaryGameSourceMatches(engineGameDirectory)) {
-                    if (!storage.hasDirectSharedStorageAccess()) {
-                        throw IOException("Android shared-storage access was revoked. Grant All Files Access again, or locate the game folder again to make a private copy.")
-                    }
-                } else {
-                    storage.mirrorGameSource(engineGameDirectory)
-                }
+        measure("shared_storage_access_check") {
+            val root = storage.directRootPath()
+                ?: throw IOException("Grant Android All files access to use Documents/RA2Harbor. The engine reads game and mod files in place; it does not make private copies.")
+            if (root.canonicalFile != engineDataDirectory().canonicalFile) {
+                throw IOException("The shared data folder is not active. Return to the launcher and select Documents again.")
             }
         }
-        if (storage.treeUri() == null) return // Keep installations launchable if Documents access was revoked.
         measure("documents_layout_check") { storage.ensureLayout() }
-        if (sourceTree == null) {
-            val gameFolder = storage.activeGameFolder()
-            if (gameFolder != null) {
-                measure("legacy_game_source_sync") {
-                    val engineGameDirectory = installation.configuredDirectory
-                        ?: throw IOException("No engine game directory is configured")
-                    storage.mirrorChildFolder("Game", gameFolder, engineGameDirectory)
+        val gameSourcePath = storage.gameSourcePath()
+        if (gameSourcePath != null) {
+            measure("game_source_check") {
+                if (!gameSourcePath.isDirectory || installation.configuredDirectory?.canonicalFile != gameSourcePath.canonicalFile) {
+                    throw IOException("The configured game path no longer matches the selected source folder.")
                 }
             }
-        }
-        val selectedMod = modCatalog.selectedMod
-        if (selectedMod != null) {
-            measure("selected_mod_sync") {
-                val engineMod = File(filesDir, "Mods/$selectedMod")
-                try {
-                    // Resolve this path directly in SAF so launch does not wait for
-                    // a recursive copy or scan of every installed mod.
-                    storage.mirrorRelativeFolder("Mods", selectedMod, engineMod)
-                } catch (error: IOException) {
-                    // Older/private-only installs remain usable when this folder
-                    // is absent from the Documents tree; access failures still surface.
-                    if (!error.message.orEmpty().contains("is missing") || !engineMod.isDirectory) throw error
+        } else storage.gameSourceTree()?.let { gameSource ->
+            measure("game_source_check") {
+                val direct = storage.directPathForTree(gameSource)
+                    ?: throw IOException("The selected game source is no longer accessible. Grant access or select it again.")
+                if (installation.configuredDirectory?.canonicalFile != direct.canonicalFile) {
+                    throw IOException("The configured game path no longer matches the selected source folder.")
                 }
             }
-        }
-        if (selectedMod != null) {
-            measure("ares_support_sync") {
-                storage.mirrorFolder("AresSupport", File(filesDir, "AresSupport"))
-            }
-        }
-        measure("maps_sync") {
-            storage.mirrorFolder("Maps", File(nativeMapsDirectory(filesDir.absolutePath)))
-        }
-        measure("saves_sync") {
-            storage.mirrorFolder("Saves", File(filesDir, "saves"))
         }
     }
-    private fun publishRuntimeData() {
-        val storage = SharedDataStorage(this)
-        if (storage.treeUri() == null) return
-        Thread({
-            val outcome = runCatching {
-                storage.ensureLayout()
-                storage.publishLocalFolder("Saves", File(filesDir, "saves"))
-                storage.publishLocalFolder("Logs", File(filesDir, "logs"))
-            }
-            outcome.exceptionOrNull()?.let { error ->
-                runOnUiThread {
-                    storageNote = "Could not update shared saves/logs: ${error.message ?: error.javaClass.simpleName}"
-                    if (!isFinishing && !isDestroyed && page == Page.FILES) renderPage()
-                }
-            }
-        }, "ironharbor-publish-runtime-data").start()
-    }
-
     private fun migrateExistingDataToDocuments() {
         Thread({
             val storage = SharedDataStorage(this)
-            val notes = mutableListOf<String>()
-            File(filesDir, "Mods").listFiles()?.filter { it.isDirectory && !it.name.startsWith(".") }?.forEach { mod ->
-                runCatching { storage.copyLocalDirectory("Mods", mod, mod.name) }
-                    .onFailure { notes += "${mod.name} left in private storage (${it.message})" }
-            }
-            runCatching {
-                val maps = File(nativeMapsDirectory(filesDir.absolutePath))
-                maps.listFiles()?.filter { it.isFile && it.extension.lowercase(Locale.ROOT) in setOf("mmx", "yro", "map", "mpr", "yrm") }
-                    ?.forEach { map -> runCatching { storage.copyLocalFile("Maps", map) } }
-            }
-            runCatching { storage.publishLocalFolder("Saves", File(filesDir, "saves")) }
-                .onFailure { notes += "some saves could not be copied (${it.message})" }
-            runCatching { storage.publishLocalFolder("Logs", File(filesDir, "logs")) }
-                .onFailure { notes += "some logs could not be copied (${it.message})" }
+            val notes = if (storage.directRootPath() == null) {
+                listOf("Grant All files access to use Documents/RA2Harbor directly; existing data remains in place")
+            } else emptyList()
+            val retainedLegacy = storage.retainedLegacyRoots()
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
-                storageNote = if (notes.isEmpty()) {
-                    "${storage.displayLocation()} is ready. Game files remain in their selected folder; runtime data is kept in Documents."
-                } else {
-                    "Documents storage is ready. ${notes.joinToString("; ")}. Existing files were not overwritten."
-                }
+                updateEngineDataRoot()
+                val retained = retainedLegacy.takeIf { it.isNotEmpty() }
+                    ?.joinToString(prefix = " Old folders left untouched: ")
+                    .orEmpty()
+                storageNote = if (notes.isEmpty()) "${storage.displayLocation()} is ready. Engine data now uses this folder directly; existing source data was retained.$retained"
+                else "${storage.displayLocation()} is selected. ${notes.joinToString("; ")}. Existing data was not deleted.$retained"
                 refreshInstallation()
             }
         }, "ironharbor-documents-migration").start()
@@ -2174,15 +2034,57 @@ class LauncherActivity : Activity() {
         setLineSpacing(dp(2).toFloat(), 1f)
     }
 
+    private fun iconForAction(label: String): Int {
+        val key = label.lowercase(Locale.ROOT)
+        return when {
+            "start game" in key || key == "play" || "launch game" in key -> R.drawable.ic_ih_play
+            "cancel" in key || "close" in key -> R.drawable.ic_ih_close
+            "keyboard" in key || "key bind" in key -> R.drawable.ic_ih_keyboard
+            "visit" in key -> R.drawable.ic_ih_external
+            "diagnostic" in key || "log" in key || "report" in key -> R.drawable.ic_ih_diagnostics
+            "map" in key -> R.drawable.ic_ih_maps
+            "hud" in key || "touch" in key || "control" in key -> R.drawable.ic_ih_touch
+            "download" in key -> R.drawable.ic_ih_download
+            "game file" in key || "folder" in key || "storage" in key || "verify" in key -> R.drawable.ic_ih_files
+            "selected" in key || "save" in key || "done" in key -> R.drawable.ic_ih_selected
+            "mod" in key || "ares" in key || "profile" in key || "vanilla" in key -> R.drawable.ic_ih_mods
+            "import" in key -> R.drawable.ic_ih_download
+            "use this" in key -> R.drawable.ic_ih_selected
+            "setting" in key || "zoom" in key || "camera" in key || "graphics" in key || "audio" in key || "fps" in key || "custom" in key -> R.drawable.ic_ih_settings
+            "key" in key || "remap" in key -> R.drawable.ic_ih_keyboard
+            else -> R.drawable.ic_ih_list
+        }
+    }
+
+    private fun presentActionLabel(label: String): String = label.trim().lowercase(Locale.ROOT)
+        .split(Regex("\\s+"))
+        .joinToString(" ") { word ->
+            when (word) {
+                "yr" -> "YR"
+                "ini" -> "INI"
+                "fps" -> "FPS"
+                "hud" -> "HUD"
+                "apk" -> "APK"
+                "mo" -> "MO"
+                "vulkan" -> "Vulkan"
+                else -> if (word.matches(Regex("c\\d+"))) word.uppercase(Locale.ROOT)
+                    else word.replaceFirstChar { it.titlecase(Locale.ROOT) }
+            }
+        }
+
     private fun actionButton(label: String, primary: Boolean, action: () -> Unit): TextView = TextView(this).apply {
-        text = label
+        text = presentActionLabel(label)
         textSize = if (primary) 16f else 13f
         typeface = Typeface.DEFAULT_BOLD
-        letterSpacing = 0.045f
+        letterSpacing = 0.012f
         gravity = Gravity.CENTER
         minHeight = dp(if (primary) 62 else 54)
-        setPadding(dp(14), dp(10), dp(14), dp(10))
+        setPadding(dp(16), dp(10), dp(16), dp(10))
         setTextColor(color(if (primary) R.color.launcher_background else R.color.launcher_text))
+        compoundDrawablePadding = dp(10)
+        val tint = color(if (primary) R.color.launcher_background else R.color.launcher_accent)
+        val icon = getDrawable(iconForAction(label))?.mutate()?.apply { setTint(tint) }
+        setCompoundDrawablesRelativeWithIntrinsicBounds(icon, null, null, null)
         background = rounded(
             color(if (primary) R.color.launcher_accent else R.color.launcher_surface_alt),
             color(if (primary) R.color.launcher_accent_dark else R.color.launcher_border),
@@ -2191,7 +2093,7 @@ class LauncherActivity : Activity() {
         isFocusable = true
         isClickable = true
         setOnClickListener { action() }
-        contentDescription = label
+        contentDescription = presentActionLabel(label)
     }
 
     private fun rounded(fill: Int, stroke: Int, radius: Int): GradientDrawable = GradientDrawable().apply {

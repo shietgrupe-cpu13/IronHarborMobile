@@ -88,7 +88,24 @@ impl PathsConfig {
     /// random-map dialog's files, so nothing is written into the retail
     /// installation (`map::source::keep_received_map`, `random_map_dir`).
     pub fn downloaded_maps_dir(&self) -> PathBuf {
-        self.settings_dir.join("Maps")
+        self.user_data_root().join("Maps")
+    }
+
+    /// Shared folders beside Android's Config directory; desktop installs keep
+    /// the historical settings-root layout.
+    pub fn user_data_root(&self) -> PathBuf {
+        #[cfg(target_os = "android")]
+        if self.settings_dir.file_name().is_some_and(|name| name == "Config") {
+            if let Some(parent) = self.settings_dir.parent() {
+                return parent.to_path_buf();
+            }
+        }
+        self.settings_dir.clone()
+    }
+
+    /// Shared Ares archive support belongs alongside managed mod folders.
+    pub fn ares_support_dir(&self) -> PathBuf {
+        self.user_data_root().join("Mods").join("AresSupport")
     }
 
     /// VERA's folder of mods, one subfolder each (docs/modding.md).
@@ -103,7 +120,7 @@ impl PathsConfig {
         )) {
             return PathBuf::from(WEB_MODS_DIR);
         }
-        self.settings_dir.join("Mods")
+        self.user_data_root().join("Mods")
     }
 
     /// The mod folder's name this launch asks for; `None` is the original game.
@@ -114,6 +131,9 @@ impl PathsConfig {
     /// VERA's own pictures of maps for the setup screens' previews, by each
     /// map's SHA-256 (`app::map_picture`).
     pub fn map_pictures_dir(&self) -> PathBuf {
+        #[cfg(target_os = "android")]
+        return self.user_data_root().join("Maps").join(".previews");
+        #[cfg(not(target_os = "android"))]
         self.settings_dir.join("MapPreviews")
     }
 
@@ -954,6 +974,12 @@ impl std::fmt::Display for ConfigFileError {
 /// working directory, then beside the executable.
 fn config_candidates(working_dir: &Path, executable: &Path) -> Result<[PathBuf; 2]> {
     let root = retail_asset_root_from_executable(executable)?;
+    #[cfg(target_os = "android")]
+    return Ok([
+        working_dir.join("Config").join(CONFIG_FILE_NAME),
+        root.join("Config").join(CONFIG_FILE_NAME),
+    ]);
+    #[cfg(not(target_os = "android"))]
     Ok([
         working_dir.join(CONFIG_FILE_NAME),
         root.join(CONFIG_FILE_NAME),

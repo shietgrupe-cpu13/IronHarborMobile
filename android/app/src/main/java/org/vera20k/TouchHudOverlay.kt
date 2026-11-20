@@ -221,7 +221,7 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
     /** A transparent full-screen layer keeps the live match visible as the edit canvas. */
     private fun addEditSurface(manager: WindowManager) {
         val banner = TextView(activity).apply {
-            text = "HUD EDIT MODE   ·   DRAG CONTROLS   ·   TAP DONE TO FINISH"
+            text = "HUD EDIT MODE    /    DRAG CONTROLS    /    TAP DONE TO FINISH"
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
             textSize = 13f

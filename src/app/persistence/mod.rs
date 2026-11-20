@@ -30,8 +30,13 @@ use crate::sim::snapshot::{
 };
 use crate::sim::world::Simulation;
 
-#[cfg(not(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown")))]
+#[cfg(all(
+    not(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown")),
+    not(target_os = "android")
+))]
 const DEFAULT_SAVES_DIRECTORY: &str = "saves";
+#[cfg(target_os = "android")]
+const DEFAULT_SAVES_DIRECTORY: &str = "Saves";
 #[cfg(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown"))]
 const DEFAULT_SAVES_DIRECTORY: &str = "/saves";
 

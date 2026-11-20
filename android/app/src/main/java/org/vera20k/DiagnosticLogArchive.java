@@ -16,7 +16,7 @@ import java.util.Locale;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
-/** Builds a shareable archive from the app-private engine logs. */
+/** Builds a shareable archive from the user-managed engine logs. */
 final class DiagnosticLogArchive {
     private static final String EXPORT_DIRECTORY = "diagnostic-exports";
 
@@ -33,7 +33,7 @@ final class DiagnosticLogArchive {
             throw new IOException("Could not create diagnostic export directory");
         }
 
-        List<File> logs = regularDirectChildren(new File(filesDir, "logs"));
+        List<File> logs = regularDirectChildren(new File(filesDir, "Logs"));
         File panicReport = regularFile(new File(filesDir, "except.txt"));
         String fileName = String.format(
                 Locale.ROOT,
@@ -116,7 +116,7 @@ final class DiagnosticLogArchive {
 
     private static String contentsReport(List<File> logs, File panicReport) {
         StringBuilder contents = new StringBuilder(
-                "Included app-private diagnostic files and best-effort Android logs:\n"
+                "Included Documents/RA2Harbor diagnostic files and best-effort Android logs:\n"
                         + "android-logcat.txt (filtered to this app UID; capture may be unavailable)\n");
         if (logs.isEmpty() && panicReport == null) {
             contents.append("No saved engine logs or panic report were present.\n");
