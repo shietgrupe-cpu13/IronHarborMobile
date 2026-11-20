@@ -35,16 +35,23 @@ internal object TouchHudSettings {
     const val LAYOUT_TWO_THUMB = 1
     const val LAYOUT_YURI = 2
 
-    data class Button(val id: String, val label: String, val defaultKeyCode: Int, val groupNumber: Int? = null)
+    data class Button(
+        val id: String,
+        val label: String,
+        val defaultKeyCode: Int,
+        val groupNumber: Int? = null,
+        val shortcutLabel: String? = null,
+    )
 
-    // Android KeyEvent values for S, A, D and W match winit's physical keys.
-    // These are the stock VERA/RA2 Hotkey values; players can bind each action
-    // to another key that already has the desired engine command.
+    // Android KeyEvent values match winit's physical keys. Defaults below use
+    // Yuri's Revenge hotkeys for actions with a direct one-key equivalent.
+    // Modifier-plus-click commands remain unbound; a one-shot key cannot
+    // faithfully perform those interactions.
     private val commandButtons = listOf(
         Button("STOP", "STOP", 47),
-        Button("GUARD", "GUARD", 29),
+        Button("GUARD", "GUARD", 35),
         Button("DEPLOY", "DEPLOY", 32),
-        Button("SCATTER", "SCATTER", 51),
+        Button("SCATTER", "SCATTER", 52),
     ) + listOf(
         "FIRE" to "Force fire", "MOVE" to "Attack move", "ADD" to "Add selection",
         "MORE" to "More commands", "BOX" to "Box selection", "ROUTE" to "Waypoint route",
@@ -54,11 +61,22 @@ internal object TouchHudSettings {
         "REVEAL" to "Psychic Reveal", "DOMINATOR" to "Psychic Dominator",
         "MUTATOR" to "Genetic Mutator", "BUILD" to "Build / confirm placement",
         "PATROL" to "Patrol between two points",
-    ).map { (id, label) -> Button(id, label, 0) }
+    ).map { (id, label) ->
+        val keyCode = when (id) {
+            "TYPE" -> 48 // T: select matching unit type
+            "NEXT" -> 41 // M: next unit
+            "PREV" -> 42 // N: previous selection
+            "EVENT" -> 62 // Space: last radar event
+            "FOLLOW" -> 34 // F: follow selection
+            "HOME" -> 36 // H: center on home/base
+            else -> 0 // No direct single-key equivalent for this HUD action.
+        }
+        Button(id, label, keyCode)
+    }
 
     private val groupButtons = (1..10).map { number ->
         val digit = if (number == 10) 0 else number
-        Button("C$number", "C$number", if (digit == 0) 7 else 7 + digit, number)
+        Button("C$number", "C$number", 7 + digit, number, "Ctrl+$digit")
     }
 
     val setSelectorButtons = listOf(

@@ -113,13 +113,30 @@ class TouchHudSettingsTest {
         ).getValue(TouchHudSettings.HUD_TEXT))
     }
 
-    @Test fun commandButtonsUseStockAndroidPhysicalKeyCodes() {
+    @Test fun commandButtonsUseYurisRevengeHotkeyDefaultsWhereActionsMatch() {
         assertEquals(47, TouchHudSettings.buttons.first { it.id == "STOP" }.defaultKeyCode) // S
-        assertEquals(29, TouchHudSettings.buttons.first { it.id == "GUARD" }.defaultKeyCode) // A
+        assertEquals(35, TouchHudSettings.buttons.first { it.id == "GUARD" }.defaultKeyCode) // G
         assertEquals(32, TouchHudSettings.buttons.first { it.id == "DEPLOY" }.defaultKeyCode) // D
-        assertEquals(51, TouchHudSettings.buttons.first { it.id == "SCATTER" }.defaultKeyCode) // W
+        assertEquals(52, TouchHudSettings.buttons.first { it.id == "SCATTER" }.defaultKeyCode) // X
+        assertEquals(48, TouchHudSettings.buttons.first { it.id == "TYPE" }.defaultKeyCode) // T
+        assertEquals(41, TouchHudSettings.buttons.first { it.id == "NEXT" }.defaultKeyCode) // M
+        assertEquals(42, TouchHudSettings.buttons.first { it.id == "PREV" }.defaultKeyCode) // N
+        assertEquals(62, TouchHudSettings.buttons.first { it.id == "EVENT" }.defaultKeyCode) // Space
+        assertEquals(34, TouchHudSettings.buttons.first { it.id == "FOLLOW" }.defaultKeyCode) // F
+        assertEquals(36, TouchHudSettings.buttons.first { it.id == "HOME" }.defaultKeyCode) // H
         assertEquals(24, TouchHudSettings.remappableActions.size)
         assertEquals(0, TouchHudSettings.remappableActions.first { it.id == "FIRE" }.defaultKeyCode) // Unknown until bound to an existing game key.
+    }
+
+    @Test fun controlGroupButtonsMapToTheVanillaCtrlDigitTeams() {
+        val groups = TouchHudSettings.buttons.filter { it.groupNumber != null }
+        assertEquals(10, groups.size)
+        for (group in groups) {
+            val digit = group.groupNumber!! % 10
+            assertEquals("C${group.groupNumber}", group.id)
+            assertEquals(7 + digit, group.defaultKeyCode) // Ctrl+1..Ctrl+9; Ctrl+0 for C10
+            assertEquals("Ctrl+$digit", group.shortcutLabel)
+        }
     }
 
     @Test fun ra2InspiredPresetPositionsKeepControlsInsideNormalizedScreen() {

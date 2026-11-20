@@ -110,7 +110,8 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
                 TouchHudSettings.HUD_EDIT -> if (editing) "Finish moving game controls" else "Edit floating game controls"
                 TouchHudSettings.HUD_TOGGLE -> if (hidden) "Show floating game controls" else "Hide floating game controls"
                 TouchHudSettings.HUD_TEXT -> "Open text entry for the focused game field"
-                else -> if (action.groupNumber == null) "${action.label} command" else "${action.label} control group; tap to assign empty/select set, hold to add or clear"
+                else -> if (action.groupNumber == null) "${action.label} command" else
+                    "${action.label} control group; keyboard shortcut ${action.shortcutLabel}; tap to assign empty/select set, hold to add or clear"
             }
             isFocusable = false
             isClickable = true
