@@ -13,7 +13,7 @@ publish = false
 # asset tools and the game binary). The core manifest sits in `src/`, so rustc
 # still names every source file `src/...`.
 [workspace]
-members = ["src", "services/relay-protocol", "services/relay", "android"]
+members = ["src", "services/relay-protocol", "services/relay", "android", "tools/vendor/android-activity-0.6.0"]
 # Plain `cargo build`/`cargo test --lib` cover both crates.
 default-members = [".", "src"]
 
@@ -380,3 +380,9 @@ opt-level = "s"
 lto = "fat"
 codegen-units = 1
 strip = true
+
+# NativeActivity uses runtime lookup for the API 33-only action-button NDK
+# symbol, preserving the app's API 26 minimum while retaining mouse buttons
+# on newer Android versions.
+[patch.crates-io]
+android-activity = { path = "tools/vendor/android-activity-0.6.0" }
