@@ -8640,7 +8640,7 @@ impl RuleSet {
             b"phobos-super-availability-v1".hash(&mut hasher);
             self.phobos_super_weapon_metadata.hash(&mut hasher);
         }
-        if self.phobos {
+        if self.phobos || !self.parallel_ai_queues.allows_parallel() {
             self.parallel_ai_queues.hash_into(&mut hasher);
         }
         if self.ares {
@@ -11220,6 +11220,15 @@ impl RuleSet {
     /// Each hook of that chain does nothing otherwise.
     pub fn parallel_ai_queues_act(&self) -> bool {
         self.phobos && self.parallel_ai_queues.allows_parallel()
+    }
+
+    /// Ares 3.0 `[GlobalControls] AllowParallelAIQueues=no`: the computer
+    /// house's serial production mode, where only one factory per production
+    /// class may start at a time. This is independent of Phobos; `=yes`
+    /// restores stock clone production, after which Phobos may apply its
+    /// narrower `ForbidParallelAIQueues` rules.
+    pub fn ares_serial_ai_queues(&self) -> bool {
+        !self.parallel_ai_queues.allows_parallel()
     }
 
     /// A superweapon type's `SuperWeaponTypeClass` array index (its

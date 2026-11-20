@@ -555,6 +555,35 @@ fn disable_parallel_ai_queues_serializes_war_factory_production() {
     );
 }
 
+/// Ares 3.0 `AllowParallelAIQueues=no` selects the same serial production
+/// behavior in shipping builds, where the optional NPatch feature is absent.
+#[test]
+fn ares_allow_parallel_ai_queues_no_serializes_and_releases_war_factory_production() {
+    let (mut f, weap_1, weap_2) =
+        ai_limit_fixture("\n[GlobalControls]\nAllowParallelAIQueues=no", "");
+    assert!(f.rules.ares_serial_ai_queues());
+    ai_limit_visit(&mut f, weap_1);
+    assert!(ai_limit_holds(&f, weap_1));
+    ai_limit_visit(&mut f, weap_2);
+    assert!(!ai_limit_holds(&f, weap_2), "second factory waits");
+
+    abandon_production(
+        &mut f.sim,
+        &f.rules,
+        FactoryHolder::Building(weap_1),
+        f.owner,
+        crate::sim::world::FrameEffects::default(),
+    );
+    f.sim
+        .houses
+        .get_mut(&f.owner)
+        .unwrap()
+        .ai_unit_choices_mut()
+        .set(crate::sim::ai_unit_choice::UnitChoiceKind::Unit, 0);
+    ai_limit_visit(&mut f, weap_2);
+    assert!(ai_limit_holds(&f, weap_2), "abandonment releases the Ares reservation");
+}
+
 /// Phobos `ForbidParallelAIQueues`: inert under `AllowParallelAIQueues=no`;
 /// under the default gate the category forbid blocks a second war factory,
 /// and abandoning the first releases the slot.

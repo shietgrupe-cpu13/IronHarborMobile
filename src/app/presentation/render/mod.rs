@@ -106,6 +106,9 @@ impl GameRenderInstanceCounts {
 pub(crate) struct RenderPhases {
     /// Phase 1 — terrain, overlays, entities.
     pub world: Duration,
+    /// `world` split into setup/picking, instance generation, and finalization.
+    /// These are diagnostic-only detail spans; their sum equals `world`.
+    pub world_detail: [Duration; 3],
     /// Phase 2 — pathgrid / cell grid / heightmap overlays.
     pub debug: Duration,
     /// Phase 3 — shroud ABuffer rebuild (CPU blit + upload).
@@ -325,8 +328,10 @@ pub(crate) fn render_game(
             )
         })
     });
+    let world_build_started = render_started.map(|_| Instant::now());
     let mut world =
         build_instances::build_world_instances(state, vsw, vsh, bracket_palette, &cursor_targets);
+    let world_build_finished = render_started.map(|_| Instant::now());
     for layer in &mut world.object_layers {
         object_extras::defer_health_to_frame(layer, world_camera.camera_pos, z);
     }
@@ -826,6 +831,17 @@ pub(crate) fn render_game(
     let submitted = state.renderer.terrain_draw_renderer.frame_submit_time();
     let phases = render_started.map(|render_started| RenderPhases {
         world: after_world.unwrap().duration_since(phase1_started.unwrap()),
+        world_detail: [
+            world_build_started
+                .unwrap()
+                .duration_since(phase1_started.unwrap()),
+            world_build_finished
+                .unwrap()
+                .duration_since(world_build_started.unwrap()),
+            after_world
+                .unwrap()
+                .duration_since(world_build_finished.unwrap()),
+        ],
         debug: after_debug.unwrap().duration_since(after_world.unwrap()),
         shroud: after_shroud.unwrap().duration_since(after_debug.unwrap()),
         ui: after_ui.unwrap().duration_since(after_shroud.unwrap()),

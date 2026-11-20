@@ -8,6 +8,17 @@
 
 use rayon::prelude::*;
 
+/// Set the global Rayon pool size before its first use. Android profiling APKs
+/// use this for controlled worker-count comparisons; ordinary builds leave
+/// Rayon to choose the process's available parallelism.
+pub fn configure_worker_count(
+    workers: std::num::NonZeroUsize,
+) -> Result<(), rayon::ThreadPoolBuildError> {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers.get())
+        .build_global()
+}
+
 /// `work` over every item, results in item order. Workers steal items from
 /// each other, so slower cores (efficiency cores, a busy host) take fewer.
 /// A worker's panic resumes on the caller.

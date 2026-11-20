@@ -113,6 +113,8 @@ pub(super) struct Shown {
     pub(super) loop_rates: Option<LoopRates>,
     /// The GPU's mean time on each of VERA's frames, in milliseconds.
     pub(super) gpu_ms: Option<f32>,
+    /// Sum of world target/setup, instance-build, and finalization time.
+    pub(super) world_detail: Option<[Duration; 3]>,
 }
 
 /// The open window. Reset while the panel is hidden, so showing it measures
@@ -152,7 +154,9 @@ impl PanelStats {
             .window_start
             .replace(now)
             .map(|start| now.duration_since(start));
-        let render = std::mem::take(&mut self.render).totals();
+        let render_meter = std::mem::take(&mut self.render);
+        let render = render_meter.totals();
+        let world_detail = render_meter.world_detail_means();
         let sim_spans = sample
             .zip(self.sim_baseline)
             .and_then(|(sample, before)| profile_delta(before, sample.profile));
@@ -173,6 +177,7 @@ impl PanelStats {
                 .zip(loop_counts)
                 .and_then(|(wall, counts)| loop_rates(wall, counts)),
             gpu_ms,
+            world_detail,
         };
     }
 }
@@ -359,6 +364,10 @@ pub(super) fn format_sample(shown: &Shown) -> String {
         .units
         .map(|units| units.to_string())
         .unwrap_or_else(|| "na".to_owned());
+    let rayon_workers = shown
+        .units
+        .map(|_| rayon::current_num_threads().to_string())
+        .unwrap_or_else(|| "na".to_owned());
     let gpu_ms = shown
         .gpu_ms
         .filter(|ms| ms.is_finite())
@@ -399,8 +408,18 @@ pub(super) fn format_sample(shown: &Shown) -> String {
             )
         })
         .unwrap_or_else(|| "na".to_owned());
+    let world_detail = shown
+        .world_detail
+        .map(|spans| {
+            let ms = spans.map(|span| span.as_secs_f64() * 1000.0);
+            format!(
+                "setup={:.2},instances={:.2},finalize={:.2}",
+                ms[0], ms[1], ms[2]
+            )
+        })
+        .unwrap_or_else(|| "na".to_owned());
     format!(
-        "fps={fps} frame_ms={frame_ms} sim_tps={sim_tps} units={units} gpu_ms={gpu_ms} cpu_areas=[{cpu_areas}] core_loads=[{core_loads}] thread_loads=[{thread_loads}] loop_rates=[{loop_rates}]"
+        "fps={fps} frame_ms={frame_ms} sim_tps={sim_tps} units={units} gpu_ms={gpu_ms} rayon_workers={rayon_workers} cpu_areas=[{cpu_areas}] world_subphases_ms=[{world_detail}] core_loads=[{core_loads}] thread_loads=[{thread_loads}] loop_rates=[{loop_rates}]"
     )
 }
 
@@ -521,6 +540,11 @@ mod tests {
             tps: Some(30.0),
             units: Some(122),
             areas: vec![("VERA:CpuDrawWorld", 38.0), ("VERA:CpuTargeting", 7.0)],
+            world_detail: Some([
+                Duration::from_millis(1),
+                Duration::from_millis(20),
+                Duration::from_millis(2),
+            ]),
             gpu_ms: Some(8.5),
             core_loads: Some(vec![80.0, 40.0]),
             threads: Some(ThreadLoads {
@@ -536,9 +560,42 @@ mod tests {
             ..Shown::default()
         };
 
+        let rayon_workers = rayon::current_num_threads();
         assert_eq!(
             format_sample(&shown),
-            "fps=50.0 frame_ms=20.00 sim_tps=30.0 units=122 gpu_ms=8.50 cpu_areas=[VERA:CpuDrawWorld=38.0%,VERA:CpuTargeting=7.0%] core_loads=[80%,40%] thread_loads=[main=72%,sim=24%,other=18%] loop_rates=[main=30.0,sim=0.0,turns=60.0]"
+            format!("fps=50.0 frame_ms=20.00 sim_tps=30.0 units=122 gpu_ms=8.50 rayon_workers={rayon_workers} cpu_areas=[VERA:CpuDrawWorld=38.0%,VERA:CpuTargeting=7.0%] world_subphases_ms=[setup=1.00,instances=20.00,finalize=2.00] core_loads=[80%,40%] thread_loads=[main=72%,sim=24%,other=18%] loop_rates=[main=30.0,sim=0.0,turns=60.0]")
+        );
+    }
+
+    #[test]
+    fn world_render_subphases_are_reported_as_per_frame_means() {
+        let mut meter = RenderTimingMeter::default();
+        assert_eq!(meter.world_detail_means(), None);
+
+        meter.record(RenderPhases {
+            world_detail: [
+                Duration::from_millis(2),
+                Duration::from_millis(8),
+                Duration::from_millis(4),
+            ],
+            ..RenderPhases::default()
+        });
+        meter.record(RenderPhases {
+            world_detail: [
+                Duration::from_millis(4),
+                Duration::from_millis(12),
+                Duration::from_millis(6),
+            ],
+            ..RenderPhases::default()
+        });
+
+        assert_eq!(
+            meter.world_detail_means(),
+            Some([
+                Duration::from_millis(3),
+                Duration::from_millis(10),
+                Duration::from_millis(5),
+            ])
         );
     }
 

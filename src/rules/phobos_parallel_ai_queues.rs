@@ -5,10 +5,11 @@
 //! constructor default of true (`src/Ext/Rules/Body.h`), and Ares documents
 //! `=no` as the switch that stops AI cloning, so the gate defaults on. Phobos
 //! adds per-category and per-TechnoType forbids that only narrow it; with the
-//! gate off they do nothing. VERA has no Ares serial mode, so `=no` keeps
-//! stock parallel production.
+//! gate off they do nothing. Ares' `=no` serial mode is modeled separately by
+//! `RuleSet::ares_serial_ai_queues`; `=yes` leaves stock parallel production
+//! in place and permits Phobos' narrower rules to act.
 //!
-//! They play only when Phobos does (`RuleSet::phobos`): a
+//! The Phobos forbids play only when Phobos does (`RuleSet::phobos`): a
 //! `ForbidParallelAIQueues` key turns Phobos on (`rules::phobos_switch`);
 //! `AllowParallelAIQueues`, which Ares reads too, turns neither extension
 //! on.

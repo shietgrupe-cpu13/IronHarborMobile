@@ -938,6 +938,7 @@ fn keep_screen_on(app: &AndroidApp) {
 /// `android-activity` turns into an `AndroidApp`.
 #[unsafe(no_mangle)]
 fn android_main(app: AndroidApp) {
+    let profiled_rayon_workers = configure_profiled_rayon_workers();
     keep_screen_on(&app);
     vera20k::util::folder_picker::install(request_folder_picker, cancel_import);
     // The launcher icon is a compiled resource, so the VERA Icon box's choice
@@ -971,6 +972,9 @@ fn android_main(app: AndroidApp) {
 
     let log_path = vera20k::entry::init_logging();
     vera20k::entry::log_banner(log_path.as_deref());
+    if let Some(workers) = profiled_rayon_workers {
+        log::info!("Android profiling build selected Rayon worker count: {workers}");
+    }
     // Bind the picker's callback before the player can reach the button, and say
     // whether it took: a silent failure here is what turned a missing folder
     // picker into an `UnsatisfiedLinkError` at the worst moment.
@@ -1022,6 +1026,24 @@ fn android_main(app: AndroidApp) {
     // from a clean slate: the event loop above cannot be rebuilt, so a cached
     // process would serve the new activity nothing but its splash.
     std::process::exit(0);
+}
+
+/// Profiling-only compile-time override. Normal APKs omit the environment
+/// variable and preserve Rayon’s automatic Android CPU-set selection.
+fn configure_profiled_rayon_workers() -> Option<usize> {
+    let requested = option_env!("VERA20K_ANDROID_RAYON_THREADS")?;
+    let workers = requested
+        .parse::<usize>()
+        .ok()
+        .and_then(std::num::NonZeroUsize::new)
+        .filter(|workers| matches!(workers.get(), 2 | 4 | 6))?;
+    match vera20k::sim::parallel::configure_worker_count(workers) {
+        Ok(()) => Some(workers.get()),
+        Err(error) => {
+            eprintln!("could not set profiled Rayon worker count: {error}");
+            None
+        }
+    }
 }
 
 fn android_user_data_root(internal_dir: &std::path::Path) -> Option<std::path::PathBuf> {

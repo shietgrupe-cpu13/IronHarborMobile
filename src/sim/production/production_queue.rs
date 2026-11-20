@@ -325,7 +325,6 @@ pub(in crate::sim) fn exit_produced_object(
             // NPSE 2.0 C2EF95 (aircraft), C3395E/C3397F (vehicle),
             // C2F184 (infantry): release at this prefix, before later
             // placement/FreeRadio retries can leave the object held.
-            #[cfg(feature = "npatch")]
             house
                 .ai_production_mut()
                 .release_parallel(product_type.category, producer_type.naval);

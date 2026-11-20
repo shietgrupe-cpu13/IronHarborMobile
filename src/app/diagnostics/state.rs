@@ -19,6 +19,7 @@ const FRAME_TIMER_WINDOW: usize = 60;
 pub(crate) struct RenderTimingMeter {
     frames: u32,
     sums: [Duration; RenderPhases::COUNT],
+    world_detail_sums: [Duration; 3],
 }
 
 impl RenderTimingMeter {
@@ -28,11 +29,19 @@ impl RenderTimingMeter {
         for (sum, span) in self.sums.iter_mut().zip(phases.spans()) {
             *sum += span;
         }
+        for (sum, span) in self.world_detail_sums.iter_mut().zip(phases.world_detail) {
+            *sum += span;
+        }
     }
 
     /// Each phase's summed span, in `RenderPhases::spans` order.
     pub(crate) fn totals(&self) -> [Duration; RenderPhases::COUNT] {
         self.sums
+    }
+
+    /// Mean setup/build/finalization spans, or `None` before the first render.
+    pub(crate) fn world_detail_means(&self) -> Option<[Duration; 3]> {
+        (self.frames > 0).then(|| self.world_detail_sums.map(|sum| sum / self.frames))
     }
 
     /// Mean span of each phase in milliseconds, or `None` before the first

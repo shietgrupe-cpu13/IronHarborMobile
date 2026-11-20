@@ -67,7 +67,7 @@ fn core_loads(previous: &[CoreTicks], now: &[CoreTicks]) -> Option<Vec<f32>> {
 /// softirq and steal, in USER_HZ ticks. Busy is all but idle and iowait;
 /// guest time is already inside user, so the sum stops at steal.
 /// https://man7.org/linux/man-pages/man5/proc_stat.5.html
-#[cfg(any(test, target_os = "linux"))]
+#[cfg(any(test, target_os = "linux", target_os = "android"))]
 fn core_ticks_from_proc_stat(stat: &str) -> Option<Vec<CoreTicks>> {
     let cores: Vec<CoreTicks> = stat
         .lines()
@@ -182,7 +182,7 @@ mod platform {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 mod platform {
     pub(super) fn core_ticks() -> Option<Vec<super::CoreTicks>> {
         super::core_ticks_from_proc_stat(&std::fs::read_to_string("/proc/stat").ok()?)
@@ -247,7 +247,12 @@ mod platform {
     }
 }
 
-#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(
+    windows,
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos"
+)))]
 mod platform {
     pub(super) fn core_ticks() -> Option<Vec<super::CoreTicks>> {
         None
