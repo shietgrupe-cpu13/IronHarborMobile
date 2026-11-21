@@ -10,6 +10,11 @@ import android.view.WindowManager
 /** Applies system-bar policy only to the NativeActivity that owns the game surface. */
 internal object GameImmersiveMode {
     fun apply(window: Window, enabled: Boolean) {
+        // NativeActivity invokes this before super.onCreate so the Rust window
+        // sees the requested bounds at startup. Accessing Window.insetsController
+        // at that point can dereference PhoneWindow's not-yet-created DecorView.
+        // Materialize the decor first and obtain the controller from that View.
+        val decorView = window.decorView
         applyCutoutPolicy(window, enabled)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -17,7 +22,7 @@ internal object GameImmersiveMode {
             // keep gameplay edge-to-edge and let visible bars overlay the game
             // when the player disables immersive mode.
             window.setDecorFitsSystemWindows(!enabled)
-            val controller = window.insetsController
+            val controller = decorView.windowInsetsController
             if (controller != null) {
                 if (enabled) {
                     controller.systemBarsBehavior =
@@ -30,9 +35,9 @@ internal object GameImmersiveMode {
             }
         }
 
-        // API 26–29 fallback. IMMERSIVE_STICKY lets edge swipes reveal the
-        // transient status/navigation bars without removing the game surface.
-        window.decorView.systemUiVisibility = if (enabled) {
+        // API 26–29 fallback, also used if a modern controller is not attached
+        // yet. IMMERSIVE_STICKY lets edge swipes reveal transient system bars.
+        decorView.systemUiVisibility = if (enabled) {
             View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
                 View.SYSTEM_UI_FLAG_FULLSCREEN or
                 View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or

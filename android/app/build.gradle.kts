@@ -23,8 +23,8 @@ val veraVersionName: String = rootProject.file("../Cargo.toml")
     .first { it.trimStart().startsWith("version = ") }
     .substringAfter('"')
     .substringBefore('"')
-val veraVersionCode = 250
-val veraBuildLabel = "B43"
+val veraVersionCode = 252
+val veraBuildLabel = "B45"
 val sideBySideDebug = providers.gradleProperty("ironHarborSideBySideDebug").orNull == "true"
 val releaseStoreFile = System.getenv("ANDROID_RELEASE_STORE_FILE")
 val releaseStorePassword = System.getenv("ANDROID_RELEASE_STORE_PASSWORD")

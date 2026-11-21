@@ -991,7 +991,9 @@ fn android_main(app: AndroidApp) {
     if !claim_event_loop() {
         log::error!("android_main called again; ending this process for a cold relaunch");
         log::logger().flush();
-        std::process::exit(0);
+        // Returning lets android-activity finish this NativeActivity cleanly.
+        // VeraActivity.onDestroy() then ends the process after Java teardown.
+        return;
     }
 
     let event_loop: winit::event_loop::EventLoop<()> = match winit::event_loop::EventLoop::builder()
@@ -1021,11 +1023,10 @@ fn android_main(app: AndroidApp) {
     }
     log::logger().flush();
 
-    // One process runs one game. Exiting here (rather than returning and letting
-    // Android cache the process) is what makes the launcher's next tap start
-    // from a clean slate: the event loop above cannot be rebuilt, so a cached
-    // process would serve the new activity nothing but its splash.
-    std::process::exit(0);
+    // Return through android-activity so it can finish the NativeActivity and
+    // detach its JNI thread. VeraActivity.onDestroy() ends a finishing game
+    // process after super.onDestroy(), keeping the next launch a cold start
+    // without bypassing Android's native-window and RenderThread teardown.
 }
 
 /// Profiling-only compile-time override. Normal APKs omit the environment
