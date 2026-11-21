@@ -253,8 +253,6 @@ class LauncherActivity : Activity() {
     }
 
     private fun buildShell() {
-        showLauncherSystemBars()
-
         val baseLeft = dp(20)
         val baseTop = dp(12)
         val baseRight = dp(20)
@@ -340,6 +338,10 @@ class LauncherActivity : Activity() {
         pageScroll.addView(centered)
         root.addView(pageScroll, LinearLayout.LayoutParams(-1, 0, 1f))
         setContentView(root)
+        // Accessing Window.insetsController before setContentView can dereference
+        // a missing DecorView on Android 16. The launcher must first install its
+        // root so the window controller exists before we request visible bars.
+        showLauncherSystemBars()
         root.requestApplyInsets()
         renderPage()
     }
@@ -2071,14 +2073,17 @@ class LauncherActivity : Activity() {
         }, "ironharbor-documents-migration").start()
     }
 
-    private fun appVersion(): String = runCatching {
-        if (Build.VERSION.SDK_INT >= 33) {
-            packageManager.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(0)).versionName
-        } else {
-            @Suppress("DEPRECATION")
-            packageManager.getPackageInfo(packageName, 0).versionName
-        }
-    }.getOrNull() ?: "Android"
+    private fun appVersion(): String {
+        val versionName = runCatching {
+            if (Build.VERSION.SDK_INT >= 33) {
+                packageManager.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(0)).versionName
+            } else {
+                @Suppress("DEPRECATION")
+                packageManager.getPackageInfo(packageName, 0).versionName
+            }
+        }.getOrNull() ?: "Android"
+        return "$versionName ${getString(R.string.app_build_label)}"
+    }
 
     private fun card(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL

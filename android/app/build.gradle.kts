@@ -23,7 +23,8 @@ val veraVersionName: String = rootProject.file("../Cargo.toml")
     .first { it.trimStart().startsWith("version = ") }
     .substringAfter('"')
     .substringBefore('"')
-val veraVersionCode = 249
+val veraVersionCode = 250
+val veraBuildLabel = "B43"
 val sideBySideDebug = providers.gradleProperty("ironHarborSideBySideDebug").orNull == "true"
 val releaseStoreFile = System.getenv("ANDROID_RELEASE_STORE_FILE")
 val releaseStorePassword = System.getenv("ANDROID_RELEASE_STORE_PASSWORD")
@@ -67,6 +68,7 @@ android {
         targetSdk = 36
         versionCode = veraVersionCode
         versionName = veraVersionName
+        resValue("string", "app_build_label", veraBuildLabel)
 
         // This build packages the shipping ARM64 Rust library. Do not advertise
         // x86_64 unless its native library is built and packaged as well.
