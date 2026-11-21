@@ -23,4 +23,6 @@ Unofficial Android ARM64 fork of VERA20K. This changelog covers changes since th
 - B42 debug APK signature verification, APK 16 KB ZIP alignment, and native ELF LOAD segment alignment (`0x4000`) passed.
 - The B42 debug APK includes the ARM64 native library and no game installation files.
 - No Android device was connected. Physical gameplay and fullscreen behavior are unverified.
-- A release build must use the existing signing identity; the B42 release artifact is still pending build and verification.
+- Optimized ARM64 shipping Rust build completed; Gradle signed release packaging succeeded. The B42 APK signature matches the published B39 release certificate (SHA-256 `7440ad6a732f410f570b55b8d7e0138b0a9ab318ce5553afc02e8e0527ce1711`). APK ZIP alignment and all native ELF LOAD segments meet 16 KB alignment. No game files are bundled.
+- Release APK SHA-256: `860173DDA32BA4BD7906506E489A3803E44A6F90B1EE39CFF2FB2D61656F8E4B`.
+- Device validation was not performed; no Android device was connected.
