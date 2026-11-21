@@ -22,6 +22,7 @@ import android.view.KeyEvent
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowInsets
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.FrameLayout
@@ -252,16 +253,40 @@ class LauncherActivity : Activity() {
     }
 
     private fun buildShell() {
-        window.decorView.systemUiVisibility = (
-            View.SYSTEM_UI_FLAG_FULLSCREEN or
-                View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
-                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-            )
+        showLauncherSystemBars()
 
+        val baseLeft = dp(20)
+        val baseTop = dp(12)
+        val baseRight = dp(20)
+        val baseBottom = dp(8)
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(color(R.color.launcher_background))
-            setPadding(dp(20), dp(12), dp(20), dp(8))
+            setPadding(baseLeft, baseTop, baseRight, baseBottom)
+        }
+        root.setOnApplyWindowInsetsListener { view, insets ->
+            val safeInsets = android.graphics.Rect()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val bars = insets.getInsets(
+                    WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout(),
+                )
+                safeInsets.set(bars.left, bars.top, bars.right, bars.bottom)
+            } else {
+                val cutout = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) insets.displayCutout else null
+                safeInsets.set(
+                    maxOf(insets.systemWindowInsetLeft, cutout?.safeInsetLeft ?: 0),
+                    maxOf(insets.systemWindowInsetTop, cutout?.safeInsetTop ?: 0),
+                    maxOf(insets.systemWindowInsetRight, cutout?.safeInsetRight ?: 0),
+                    maxOf(insets.systemWindowInsetBottom, cutout?.safeInsetBottom ?: 0),
+                )
+            }
+            view.setPadding(
+                baseLeft + safeInsets.left,
+                baseTop + safeInsets.top,
+                baseRight + safeInsets.right,
+                baseBottom + safeInsets.bottom,
+            )
+            insets
         }
 
         val header = LinearLayout(this).apply {
@@ -315,7 +340,19 @@ class LauncherActivity : Activity() {
         pageScroll.addView(centered)
         root.addView(pageScroll, LinearLayout.LayoutParams(-1, 0, 1f))
         setContentView(root)
+        root.requestApplyInsets()
         renderPage()
+    }
+
+    private fun showLauncherSystemBars() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // Target SDK 36 is edge-to-edge on Android 15+, so the root view
+            // applies insets while both system bars remain visible.
+            window.setDecorFitsSystemWindows(false)
+            window.insetsController?.show(WindowInsets.Type.systemBars())
+        } else {
+            window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
+        }
     }
 
     private fun renderPage() {
@@ -581,6 +618,36 @@ class LauncherActivity : Activity() {
         pageBody.addView(text("Presentation controls use the engine configuration and remain separate from deterministic simulation settings.", 14, R.color.launcher_muted), margin(bottom = 14))
         val display = card()
         display.addView(kicker("DISPLAY & GRAPHICS"))
+        val displayPreferences = getSharedPreferences(
+            ImmersiveFullscreenSettings.PREFERENCES,
+            MODE_PRIVATE,
+        )
+        val immersiveFullscreen = CheckBox(this).apply {
+            text = "Immersive fullscreen gameplay"
+            setTextColor(color(R.color.launcher_text))
+            contentDescription = "Hide Android status and navigation bars during gameplay"
+            isChecked = displayPreferences.getBoolean(
+                ImmersiveFullscreenSettings.ENABLED,
+                ImmersiveFullscreenSettings.DEFAULT_ENABLED,
+            )
+        }
+        display.addView(immersiveFullscreen, margin(top = 7))
+        display.addView(text(
+            "When enabled, gameplay hides the system bars. Swipe from an edge to reveal them temporarily. The launcher and Android file picker keep their normal system bars.",
+            12,
+            R.color.launcher_muted,
+        ), margin(top = 2, bottom = 7))
+        immersiveFullscreen.setOnCheckedChangeListener { _, checked ->
+            displayPreferences.edit()
+                .putBoolean(ImmersiveFullscreenSettings.ENABLED, checked)
+                .apply()
+            Toast.makeText(
+                this,
+                if (checked) "Immersive fullscreen applies the next time gameplay starts"
+                else "System bars will remain visible during gameplay after the next launch",
+                Toast.LENGTH_SHORT,
+            ).show()
+        }
         infoRow(display, "Orientation", "Landscape-first Android window")
         infoRow(display, "Renderer", "Vulkan; required by the current engine")
         infoRow(display, "Display", "Physical Android resolution stays unchanged")
@@ -1927,7 +1994,16 @@ class LauncherActivity : Activity() {
                     onSuccess = {
                         try {
                             gameWasLaunched = true
-                            startActivity(Intent(this, VeraActivity::class.java))
+                            val immersiveFullscreen = getSharedPreferences(
+                                ImmersiveFullscreenSettings.PREFERENCES,
+                                MODE_PRIVATE,
+                            ).getBoolean(
+                                ImmersiveFullscreenSettings.ENABLED,
+                                ImmersiveFullscreenSettings.DEFAULT_ENABLED,
+                            )
+                            startActivity(Intent(this, VeraActivity::class.java).apply {
+                                putExtra(ImmersiveFullscreenSettings.INTENT_EXTRA, immersiveFullscreen)
+                            })
                         } catch (error: Exception) {
                             gameWasLaunched = false
                             launchGate.completedWithoutLaunch()

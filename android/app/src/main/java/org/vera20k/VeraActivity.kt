@@ -22,6 +22,7 @@ import android.system.Os
 import android.text.InputType
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
+import android.view.WindowInsets
 import android.widget.EditText
 import java.io.File
 import java.io.IOException
@@ -56,8 +57,22 @@ class VeraActivity : NativeActivity() {
     }
 
     private var touchHud: TouchHudOverlay? = null
+    private var immersiveFullscreen = ImmersiveFullscreenSettings.DEFAULT_ENABLED
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        val launchPreference = if (intent.hasExtra(ImmersiveFullscreenSettings.INTENT_EXTRA)) {
+            intent.getBooleanExtra(
+                ImmersiveFullscreenSettings.INTENT_EXTRA,
+                ImmersiveFullscreenSettings.DEFAULT_ENABLED,
+            )
+        } else {
+            null
+        }
+        immersiveFullscreen = ImmersiveFullscreenSettings.resolveLaunchValue(launchPreference)
+        // Apply before NativeActivity creates its surface so winit observes the
+        // chosen drawable bounds from the first window-size event.
+        GameImmersiveMode.apply(window, immersiveFullscreen)
+
         val requestedMode = TouchHudSettings.parseControlMode(
             getSharedPreferences(TouchHudSettings.PREFS, MODE_PRIVATE)
                 .getString(TouchHudSettings.CONTROL_MODE, null),
@@ -72,13 +87,41 @@ class VeraActivity : NativeActivity() {
             android.util.Log.e("IronHarborInput", "Could not set native input mode", error)
         }
         super.onCreate(savedInstanceState)
+        GameImmersiveMode.apply(window, immersiveFullscreen)
+        window.decorView.setOnApplyWindowInsetsListener { _, insets ->
+            touchHud?.updateWindowInsets(insets)
+            insets
+        }
+        window.decorView.requestApplyInsets()
         if (appliedMode != TouchHudSettings.MODE_EXTERNAL) {
             window.decorView.post {
                 if (!isFinishing && !isDestroyed) {
-                    touchHud = TouchHudOverlay(this).also { it.attach() }
+                    touchHud = TouchHudOverlay(this, immersiveFullscreen).also { it.attach() }
                 }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        applyGameplayWindowMode()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            // Only reapply on lifecycle/focus regain. Transient swipe-revealed
+            // bars are left alone while the user interacts with system UI.
+            window.decorView.post {
+                if (hasWindowFocus() && !isFinishing && !isDestroyed) {
+                    applyGameplayWindowMode()
+                }
+            }
+        }
+    }
+
+    private fun applyGameplayWindowMode() {
+        GameImmersiveMode.apply(window, immersiveFullscreen)
     }
 
     /**

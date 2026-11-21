@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Original Iron Harbor icon on a neutral dark background. -->
-    <style name="Theme.IronHarbor.Game" parent="android:Theme.Black.NoTitleBar.Fullscreen">
+    <style name="Theme.IronHarbor.Game" parent="android:Theme.Black.NoTitleBar">
         <item name="android:windowBackground">@drawable/splash_background</item>
         <item name="android:windowSplashScreenBackground">@color/launcher_background</item>
         <item name="android:windowSplashScreenAnimatedIcon">@mipmap/iron_harbor_beacon_logo</item>

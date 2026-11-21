@@ -9,6 +9,7 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -38,11 +39,38 @@ internal class TouchHudLayoutEditor(private val activity: Activity) {
         opacity: Int,
         onApply: () -> Unit,
     ) {
-        val dialog = Dialog(activity, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
+        val dialog = Dialog(activity)
         val root = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.rgb(8, 18, 21))
             setPadding(dp(10), dp(8), dp(10), dp(8))
+        }
+        val basePadding = dp(10)
+        val baseTopPadding = dp(8)
+        root.setOnApplyWindowInsetsListener { view, insets ->
+            val safe = android.graphics.Rect()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val bars = insets.getInsets(
+                    android.view.WindowInsets.Type.systemBars() or
+                        android.view.WindowInsets.Type.displayCutout(),
+                )
+                safe.set(bars.left, bars.top, bars.right, bars.bottom)
+            } else {
+                val cutout = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) insets.displayCutout else null
+                safe.set(
+                    maxOf(insets.systemWindowInsetLeft, cutout?.safeInsetLeft ?: 0),
+                    maxOf(insets.systemWindowInsetTop, cutout?.safeInsetTop ?: 0),
+                    maxOf(insets.systemWindowInsetRight, cutout?.safeInsetRight ?: 0),
+                    maxOf(insets.systemWindowInsetBottom, cutout?.safeInsetBottom ?: 0),
+                )
+            }
+            view.setPadding(
+                basePadding + safe.left,
+                baseTopPadding + safe.top,
+                basePadding + safe.right,
+                baseTopPadding + safe.bottom,
+            )
+            insets
         }
         val heading = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -118,12 +146,7 @@ internal class TouchHudLayoutEditor(private val activity: Activity) {
         dialog.setOnShowListener {
             dialog.window?.apply {
                 setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-                setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN)
-                decorView.systemUiVisibility = (
-                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_FULLSCREEN or
-                        View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
-                        View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                    )
+                root.requestApplyInsets()
             }
         }
         dialog.show()
