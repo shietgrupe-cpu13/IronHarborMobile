@@ -407,7 +407,7 @@ impl App {
         personal_rules.set_terrain_deformation(options_profile.terrain_deformation);
         personal_rules.set_superweapon_limit(i32::from(options_profile.superweapon_limit));
         // The Ares setting holds for the whole launch, as the mod does.
-        let ares_setting = spawn_ares.unwrap_or(options_profile.ares);
+        let mut ares_setting = spawn_ares.unwrap_or(options_profile.ares);
         if ares_setting != crate::util::ares_launch::AresSetting::Auto {
             log::info!("Ares setting for this start: {}", ares_setting.ini_value());
         }
@@ -427,9 +427,15 @@ impl App {
         let mut mods = game_config
             .as_ref()
             .map(|config| {
-                crate::app::mods::begin(&config.paths, mod_switch, capture_dimensions.is_some())
+                crate::app::mods::begin_with_ares(
+                    &config.paths,
+                    mod_switch,
+                    capture_dimensions.is_some(),
+                    ares_setting,
+                )
             })
             .unwrap_or_default();
+        ares_setting = mods.effective_ares_setting(ares_setting);
         // The crash-recovery run omits the failed mod. Select roots from the
         // same stock installation that will actually be mounted, without
         // changing the user's saved mod or profile selection.
@@ -675,7 +681,7 @@ impl App {
         let sidebar_layout_spec = SidebarChromeLayoutSpec::stock();
         let mut startup_asset_manager = game_config.as_ref().and_then(|config| {
             startup_asset_or_error(
-                AssetManager::with_mod_and_ares_support(
+                AssetManager::with_mod_and_ares_support_and_archive_overrides(
                     &config.paths.ra2_dir,
                     mods.dir(),
                     ares_support_dir.as_deref(),
@@ -684,6 +690,7 @@ impl App {
                     crate::assets::asset_manager::ArchiveFamily::for_ini_profile(
                         startup_ini_config.profile,
                     ),
+                    mods.archive_overrides(),
                 )
                 .and_then(|assets| assets.with_ini_roots(&startup_ini_config))
                     .with_context(|| crate::i18n::tr("VERA:CannotLoadArchives")),

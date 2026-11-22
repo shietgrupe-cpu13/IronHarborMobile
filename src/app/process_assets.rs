@@ -185,10 +185,7 @@ impl ProcessAssets {
         self
     }
 
-    pub(crate) fn with_ares_support_dir(
-        mut self,
-        directory: Option<std::path::PathBuf>,
-    ) -> Self {
+    pub(crate) fn with_ares_support_dir(mut self, directory: Option<std::path::PathBuf>) -> Self {
         self.ares_support_dir = directory;
         self
     }
@@ -651,8 +648,8 @@ impl ProcessAssets {
         use crate::rules::retail_sources::{select_ini, select_mode_ini};
         let roots = assets.ini_roots();
         let theater_inis = crate::map::theater::theater_ini_names(assets);
-        // MPModesMD.ini is the mode roster: which mode INIs the hash adds.
-        let mut compared = vec![roots.rules(), roots.art(), roots.ai(), "MPModesMD.ini"];
+        // The selected modes roster names the mode INIs included in the digest.
+        let mut compared = vec![roots.rules(), roots.art(), roots.ai(), roots.modes()];
         // Match RetailRulesSources' selection: Original mode never consumes
         // the installation's optional LANGRULE, so it changes no game files.
         if assets.mod_selected() {

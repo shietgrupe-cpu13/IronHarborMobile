@@ -1,5 +1,6 @@
 package org.vera20k
 
+import android.view.KeyEvent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -119,6 +120,7 @@ class TouchHudSettingsTest {
         assertEquals(32, TouchHudSettings.buttons.first { it.id == "DEPLOY" }.defaultKeyCode) // D
         assertEquals(52, TouchHudSettings.buttons.first { it.id == "SCATTER" }.defaultKeyCode) // X
         assertEquals(48, TouchHudSettings.buttons.first { it.id == "TYPE" }.defaultKeyCode) // T
+        assertEquals(KeyEvent.KEYCODE_Z, TouchHudSettings.buttons.first { it.id == "ROUTE" }.defaultKeyCode)
         assertEquals(41, TouchHudSettings.buttons.first { it.id == "NEXT" }.defaultKeyCode) // M
         assertEquals(42, TouchHudSettings.buttons.first { it.id == "PREV" }.defaultKeyCode) // N
         assertEquals(62, TouchHudSettings.buttons.first { it.id == "EVENT" }.defaultKeyCode) // Space
@@ -126,6 +128,23 @@ class TouchHudSettingsTest {
         assertEquals(36, TouchHudSettings.buttons.first { it.id == "HOME" }.defaultKeyCode) // H
         assertEquals(24, TouchHudSettings.remappableActions.size)
         assertEquals(0, TouchHudSettings.remappableActions.first { it.id == "FIRE" }.defaultKeyCode) // Unknown until bound to an existing game key.
+    }
+
+    @Test fun waypointButtonHoldsPlanningModeAcrossClicksAndReleasesOnLifecycleExit() {
+        val events = mutableListOf<Pair<Int, Boolean>>()
+        val latch = TouchHudKeyLatch { keyCode, pressed -> events += keyCode to pressed }
+        assertTrue(latch.toggle("ROUTE", KeyEvent.KEYCODE_Z))
+        assertEquals(listOf(KeyEvent.KEYCODE_Z to true), events)
+        assertTrue(!latch.toggle("ROUTE", KeyEvent.KEYCODE_Z))
+        assertEquals(listOf(KeyEvent.KEYCODE_Z to true, KeyEvent.KEYCODE_Z to false), events)
+        latch.toggle("ROUTE", KeyEvent.KEYCODE_Z)
+        latch.releaseAll()
+        assertEquals(listOf(
+            KeyEvent.KEYCODE_Z to true,
+            KeyEvent.KEYCODE_Z to false,
+            KeyEvent.KEYCODE_Z to true,
+            KeyEvent.KEYCODE_Z to false,
+        ), events)
     }
 
     @Test fun controlGroupButtonsMapToTheVanillaCtrlDigitTeams() {

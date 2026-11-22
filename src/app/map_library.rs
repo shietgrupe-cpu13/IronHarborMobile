@@ -337,7 +337,7 @@ pub(crate) fn briefing(state: &AppState, record_index: usize) -> Option<String> 
         SkirmishScenarioSource::Online(_) => {
             crate::map::basic::briefing_text(online_header(state, record_index)?)
         }
-        SkirmishScenarioSource::LooseYrm(_) => {
+        SkirmishScenarioSource::LooseYrm(_) | SkirmishScenarioSource::LooseModMap(_) => {
             let path =
                 crate::map::source::local_map_path(state.ra2_dir()?, &record.file_name).ok()?;
             crate::map::basic::briefing_text(&crate::util::file_system::read(path).ok()?)

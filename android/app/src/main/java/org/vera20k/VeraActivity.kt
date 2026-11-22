@@ -112,6 +112,13 @@ class VeraActivity : NativeActivity() {
         applyGameplayWindowMode()
     }
 
+    override fun onPause() {
+        // A route action is a real held Planning Mode key; release it whenever
+        // Android takes the gameplay window (picker, dialog, or app switch).
+        touchHud?.releaseHeldKeys()
+        super.onPause()
+    }
+
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) {

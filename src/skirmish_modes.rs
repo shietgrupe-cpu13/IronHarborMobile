@@ -302,11 +302,13 @@ pub fn parse_mpmodes_ini(ini: &IniFile) -> Vec<SkirmishGameMode> {
 pub fn skirmish_modes_from_assets(
     assets: &AssetManager,
 ) -> Result<Vec<SkirmishGameMode>, SkirmishModeLoadError> {
+    let roster_name = assets.ini_roots().modes();
     let (data, source) = assets
-        .get_with_source("MPModesMD.ini")
+        .get_with_source(roster_name)
         .ok_or(SkirmishModeLoadError::MissingRoster)?;
     log::info!(
-        "Loading MPModesMD.ini ({} bytes) from {}",
+        "Loading {} ({} bytes) from {}",
+        roster_name,
         data.len(),
         source
     );

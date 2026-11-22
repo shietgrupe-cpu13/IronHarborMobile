@@ -9,16 +9,10 @@ import org.junit.Test;
 
 public class LauncherModCatalogTest {
     @Test
-    public void mentalOmegaFolderNameRequiresMoInsteadOfYurProfiles() {
-        assertTrue(LauncherModCatalog.requiresMoProfile("MentalOmega330Mod"));
-        assertFalse(LauncherModCatalog.requiresMoProfile("Other Community Mod"));
-    }
-
-    @Test
-    public void validatedMentalOmegaImportUsesMoProfile() {
+    public void modFolderNamesDoNotSelectAnIniProfile() {
         ImportedModSelection selection = ImportedModSelection.afterEngineValidation("MentalOmega330Mod");
         assertEquals("MentalOmega330Mod", selection.getModName());
-        assertEquals(LauncherIniProfile.MO, selection.getProfile());
+        assertNull(selection.getProfile());
     }
 
     @Test
@@ -26,6 +20,16 @@ public class LauncherModCatalogTest {
         ImportedModSelection selection = ImportedModSelection.afterEngineValidation("Other Community Mod");
         assertEquals("Other Community Mod", selection.getModName());
         assertNull(selection.getProfile());
+    }
+
+    @Test
+    public void displaysResolvedResourceFilenamesFromEngineConfig() {
+        String summary = LauncherModCatalog.resourceSummary(
+                "[ini]\nprofile = \"custom\"\nrules = \"rules-mo-custom.ini\"\nart = \"art-mo.ini\"\nai = \"ai-mo.ini\"\nmodes = \"my-modes.ini\"\nmap_catalog = \"my-maps.pkt\"\n");
+        assertTrue(summary.contains("Profile custom"));
+        assertTrue(summary.contains("rules=rules-mo-custom.ini"));
+        assertTrue(summary.contains("modes=my-modes.ini"));
+        assertTrue(summary.contains("map_catalog=my-maps.pkt"));
     }
 
     @Test

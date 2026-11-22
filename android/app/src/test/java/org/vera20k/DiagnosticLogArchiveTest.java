@@ -71,4 +71,74 @@ public class DiagnosticLogArchiveTest {
         assertThrows(FileNotFoundException.class,
                 () -> DiagnosticLogArchive.resolveShareableArchive(cache, "full-diagnostics-1-2.txt"));
     }
+
+    @Test public void repeatedExportsIgnorePreviousArchivesAndUnrecognizedFiles() throws Exception {
+        File files = temporary.newFolder("repeat-files");
+        File logs = new File(files, "Logs");
+        assertTrue(logs.mkdir());
+        StringBuilder engineText = new StringBuilder(2_816_076);
+        while (engineText.length() < 2_816_076) engineText.append("[INFO] game initialization completed\n");
+        Files.write(new File(logs, "ra2.log").toPath(), engineText.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        Files.write(new File(logs, "ra2.log.1").toPath(), "older engine session\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        Files.write(new File(logs, "launcher-preflight-latest.txt").toPath(), "mod load 41 ms\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        Files.write(new File(logs, "config.toml").toPath(), "private config".getBytes());
+        Files.write(new File(logs, "unknown.txt").toPath(), "not a recognized diagnostic".getBytes());
+        Files.write(new File(logs, "export.zip").toPath(), new byte[1024]);
+        Files.write(new File(logs, "export.zip.partial").toPath(), new byte[1024]);
+        Files.write(new File(logs, "full-diagnostics-1-2.txt").toPath(), new byte[1024]);
+        File nested = new File(logs, "old");
+        assertTrue(nested.mkdir());
+        Files.write(new File(nested, "old-diagnostic.zip").toPath(), new byte[1024]);
+
+        File cache = temporary.newFolder("repeat-cache");
+        String summary = "device summary";
+        String logcat = "Vulkan initialization completed";
+        String startup = "reason=ANR\nFATAL EXCEPTION\nnative abort stack";
+        DiagnosticLogArchive.ExportBundle first = DiagnosticLogArchive.create(
+                files, cache, summary, logcat, startup);
+        File priorExportInLogs = new File(logs, first.file.getName());
+        Files.copy(first.file.toPath(), priorExportInLogs.toPath());
+
+        DiagnosticLogArchive.ExportBundle second = DiagnosticLogArchive.create(
+                files, cache, summary, logcat, startup);
+        assertEquals(first.file.length(), second.file.length());
+        assertTrue("existing user-accessible export must not be deleted", priorExportInLogs.isFile());
+        assertTrue(second.file.length() <= DiagnosticLogArchive.MAX_ARCHIVE_BYTES);
+        try (ZipFile zip = new ZipFile(second.file)) {
+            assertNotNull(zip.getEntry("logs/ra2.log"));
+            assertNotNull(zip.getEntry("logs/ra2.log.1"));
+            assertNotNull(zip.getEntry("logs/launcher-preflight-latest.txt"));
+            assertNotNull(zip.getEntry("startup-diagnostics.txt"));
+            assertNull(zip.getEntry("logs/export.zip"));
+            assertNull(zip.getEntry("logs/export.zip.partial"));
+            assertNull(zip.getEntry("logs/full-diagnostics-1-2.txt"));
+            assertNull(zip.getEntry("logs/unknown.txt"));
+            assertNull(zip.getEntry("logs/config.toml"));
+            assertNull(zip.getEntry("logs/" + first.file.getName()));
+            assertNull(zip.getEntry("logs/old/old-diagnostic.zip"));
+            assertTrue(new String(readEntry(zip, "startup-diagnostics.txt"))
+                    .contains("native abort stack"));
+        }
+    }
+
+    @Test public void oversizedEngineLogKeepsTheLatestFatalDetails() throws Exception {
+        File files = temporary.newFolder("bounded-files");
+        File logs = new File(files, "Logs");
+        assertTrue(logs.mkdir());
+        File engineLog = new File(logs, "ra2.log");
+        byte[] oldPrefix = new byte[10 * 1024 * 1024 + 256];
+        java.util.Arrays.fill(oldPrefix, (byte) 'x');
+        Files.write(engineLog.toPath(), oldPrefix);
+        Files.write(engineLog.toPath(), "\nFATAL EXCEPTION: Vulkan device lost\n".getBytes(java.nio.charset.StandardCharsets.UTF_8), java.nio.file.StandardOpenOption.APPEND);
+
+        DiagnosticLogArchive.ExportBundle bundle = DiagnosticLogArchive.create(
+                files, temporary.newFolder("bounded-cache"), "summary", "logcat");
+        try (ZipFile zip = new ZipFile(bundle.file)) {
+            String contents = new String(readEntry(zip, "logs/ra2.log"));
+            assertTrue(contents.contains("FATAL EXCEPTION: Vulkan device lost"));
+            assertTrue(contents.startsWith("[Earlier bytes omitted;"));
+            assertTrue(readEntry(zip, "logs/ra2.log").length <= 10 * 1024 * 1024 + 256);
+        }
+        assertTrue(bundle.file.length() <= DiagnosticLogArchive.MAX_ARCHIVE_BYTES);
+    }
 }

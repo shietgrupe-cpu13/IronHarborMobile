@@ -29,6 +29,7 @@ import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ListView
 import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.SeekBar
@@ -90,6 +91,10 @@ class LauncherActivity : Activity() {
     private var mapImporting = false
     private var mapCopiedCount = 0
     private var mapImportNote: String? = null
+    private var modMapScanKey: String? = null
+    private var modMapScanGeneration = 0
+    private var modMapScanLoading = false
+    private var modMapScanResult: List<LauncherModMapCatalog.MapFile> = emptyList()
     private var validatingLaunch = false
     private val launchGate = GameLaunchGate()
     private var importing = false
@@ -1391,6 +1396,8 @@ class LauncherActivity : Activity() {
         }
         pageBody.addView(card, margin(bottom = 12))
 
+        renderActiveModMaps()
+
         if (mapImporting) {
             val progress = card()
             progress.addView(kicker("IMPORT IN PROGRESS"))
@@ -1415,6 +1422,96 @@ class LauncherActivity : Activity() {
         mapImportNote?.let { note ->
             pageBody.addView(text(note, 13, R.color.launcher_muted), margin(top = 10))
         }
+    }
+
+    /** Show the selected mod's own map tree in place; never import or flatten it. */
+    private fun renderActiveModMaps() {
+        val selected = modCatalog.selectedMod
+        val card = card()
+        card.addView(kicker("ACTIVE MOD MAPS"))
+        if (selected == null) {
+            card.addView(text("Vanilla Yuri's Revenge is selected. Select a mod to view its map files.", 13, R.color.launcher_muted))
+            pageBody.addView(card, margin(bottom = 12))
+            return
+        }
+
+        card.addView(text(selected, 14, R.color.launcher_accent, bold = true))
+        val root = selectedModDirectory(selected)
+        if (root == null) {
+            card.addView(text("The selected mod folder is not currently accessible. Its files were not copied.", 13, R.color.launcher_warning), margin(top = 6))
+            pageBody.addView(card, margin(bottom = 12))
+            return
+        }
+        val key = runCatching { root.canonicalPath }.getOrDefault(root.absolutePath)
+        if (modMapScanKey != key || modMapScanLoading) {
+            card.addView(text(if (modMapScanLoading) "Scanning the mod folder in place..." else "Map list is being refreshed...", 13, R.color.launcher_muted), margin(top = 6))
+            scheduleModMapScan(root, key)
+        } else if (modMapScanResult.isEmpty()) {
+            card.addView(text("No supported loose map files were found in this mod folder.", 13, R.color.launcher_muted), margin(top = 6))
+        } else {
+            val groups = modMapScanResult.groupingBy { it.group }.eachCount().toSortedMap(String.CASE_INSENSITIVE_ORDER)
+            card.addView(text("${modMapScanResult.size} map files found. They stay in the mod folder; nothing is imported.", 13, R.color.launcher_muted), margin(top = 6))
+            groups.forEach { (group, count) ->
+                card.addView(text("$group  ·  $count", 12, R.color.launcher_text), margin(top = 5))
+            }
+            card.addView(actionButton("VIEW MOD MAPS", primary = false) {
+                showModMapList(selected, modMapScanResult)
+            }, margin(top = 10))
+        }
+        card.addView(actionButton("REFRESH MOD MAP LIST", primary = false) {
+            modMapScanKey = null
+            modMapScanResult = emptyList()
+            renderPage()
+        }, margin(top = 8))
+        pageBody.addView(card, margin(bottom = 12))
+    }
+
+    private fun selectedModDirectory(selected: String): File? {
+        val data = engineDataDirectory()
+        val candidates = buildList {
+            add(File(selected))
+            add(File(data, selected))
+            add(File(File(data, "Mods"), selected))
+            SharedDataStorage(this@LauncherActivity).externalModPath()?.let { add(File(it)) }
+        }
+        return candidates.firstNotNullOfOrNull { candidate ->
+            runCatching { candidate.canonicalFile.takeIf { it.isDirectory } }.getOrNull()
+        }
+    }
+
+    private fun scheduleModMapScan(root: File, key: String) {
+        if (modMapScanLoading && modMapScanKey == key) return
+        val generation = ++modMapScanGeneration
+        modMapScanKey = key
+        modMapScanLoading = true
+        Thread({
+            val maps = LauncherModMapCatalog.scan(root)
+            runOnUiThread {
+                if (generation != modMapScanGeneration || isFinishing || isDestroyed) return@runOnUiThread
+                modMapScanLoading = false
+                modMapScanResult = maps
+                if (page == Page.MAPS) renderPage()
+            }
+        }, "ironharbor-mod-map-scan").start()
+    }
+
+    private fun showModMapList(modName: String, maps: List<LauncherModMapCatalog.MapFile>) {
+        val list = ListView(this).apply {
+            adapter = ArrayAdapter(
+                this@LauncherActivity,
+                android.R.layout.simple_list_item_1,
+                maps.map { "${it.group}  /  ${it.title}\n${it.relativePath}" },
+            )
+            divider = null
+            setOnItemClickListener { _, _, position, _ ->
+                Toast.makeText(this@LauncherActivity, "Map stays at ${maps[position].relativePath} in $modName.", Toast.LENGTH_LONG).show()
+            }
+        }
+        AlertDialog.Builder(this)
+            .setTitle("$modName maps (${maps.size})")
+            .setView(list)
+            .setPositiveButton("CLOSE", null)
+            .show()
     }
 
     private fun chooseMaps() {
@@ -1539,7 +1636,7 @@ class LauncherActivity : Activity() {
             } else {
                 appendLine("No launcher preflight timing has been recorded yet.")
             }
-            appendLine("The attached ZIP includes retained engine logs, except.txt when present, and a bounded best-effort Android logcat capture filtered to this app UID.")
+            appendLine("The attached ZIP includes recognized engine logs, retained crash/ANR details when available, a bounded startup diagnostic report, and recent app-UID logcat.")
             appendLine("The logcat capture cannot include system-wide logs or guarantee that entries remain available.")
             appendLine("No game assets are included in this report.")
         }
@@ -1549,8 +1646,10 @@ class LauncherActivity : Activity() {
         Thread({
             try {
                 val logcat = AndroidLogcatCapture.capture(android.os.Process.myUid(), cacheDir)
-                val bundle = DiagnosticLogArchive.create(engineDataDirectory(), cacheDir, report, logcat)
-                runCatching { SharedDataStorage(this).copyLocalFile("Logs", bundle.file) }
+                val startupDiagnostics = StartupDiagnostics.readLatest(this)
+                val bundle = DiagnosticLogArchive.create(
+                    engineDataDirectory(), cacheDir, report, logcat, startupDiagnostics,
+                )
                 val uri = Uri.Builder()
                     .scheme("content")
                     .authority("$packageName.diagnostics")
@@ -1798,9 +1897,7 @@ class LauncherActivity : Activity() {
         }
         try {
             val dataDirectory = requireSharedDataDirectory()
-            val contents = if (profile == null && LauncherModCatalog.requiresMoProfile(modName.orEmpty())) {
-                nativeConfigForSelection(modName.orEmpty(), LauncherIniProfile.MO.configValue, dataDirectory.absolutePath)
-            } else if (profile == null) {
+            val contents = if (profile == null) {
                 nativeConfigForMod(modName.orEmpty(), dataDirectory.absolutePath)
             } else {
                 nativeConfigForSelection(modName.orEmpty(), profile.configValue, dataDirectory.absolutePath)
@@ -1810,7 +1907,7 @@ class LauncherActivity : Activity() {
                 File(it).isAbsolute && AndroidSharedStoragePath.relativeFolderName(File(dataDirectory, "Mods"), File(it)) == null
             }
             SharedDataStorage(this).setExternalModPath(externalPath)
-            modSelectionNote = "Saved. The engine validated the selected mod/profile in place; it takes effect on the next launch."
+            modSelectionNote = "Saved. The engine validated the selected resources in place; they take effect on the next launch. ${LauncherModCatalog.resourceSummary(contents)}."
             refreshInstallation()
         } catch (error: Exception) {
             modSelectionNote = "Selection was not applied: ${error.message ?: error.javaClass.simpleName}"
@@ -1905,22 +2002,18 @@ class LauncherActivity : Activity() {
         renderPage()
         Thread({
             val result = runCatching {
-                val config = if (LauncherModCatalog.requiresMoProfile(selectedName)) {
-                    nativeConfigForSelection(selectedName, LauncherIniProfile.MO.configValue, dataDirectory.absolutePath)
-                } else {
-                    nativeConfigForMod(selectedName, dataDirectory.absolutePath)
-                }
+                val config = nativeConfigForMod(selectedName, dataDirectory.absolutePath)
                 LauncherConfigPublisher.publish(dataDirectory, config)
                 storage.setExternalModPath(if (relativeName == null) selectedName else null)
-                selectedName
+                selectedName to config
             }
             result.onFailure { Log.e("IronHarborImport", "Mod selection failed for ${modDirectory.name}", it) }
             runOnUiThread {
                 modImporting = false
-                result.onSuccess { name ->
+                result.onSuccess { (name, config) ->
                     refreshInstallation()
-                    applyModSelection(name, if (LauncherModCatalog.requiresMoProfile(name)) LauncherIniProfile.MO else null)
-                    modImportNote = "$name was validated and selected in place. Its source files were not copied."
+                    applyModSelection(name, null)
+                    modImportNote = "$name was validated and selected in place. Its source files were not copied. ${LauncherModCatalog.resourceSummary(config)}."
                 }.onFailure { error ->
                     modImportNote = "Could not use the selected mod in place: ${error.message ?: error.javaClass.simpleName}"
                     renderPage()

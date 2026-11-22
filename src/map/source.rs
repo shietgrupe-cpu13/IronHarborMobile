@@ -1148,6 +1148,16 @@ mod tests {
         assert_eq!(found("Lakes"), mod_dir.path().join("Lakes.map"));
         assert_eq!(found("Hills.map"), game.path().join("Hills.map"));
         assert_eq!(found("RandMap.Sed"), vera.path().join("RandMap.Sed"));
+        std::fs::create_dir_all(mod_dir.path().join("MapsMO/Standard")).unwrap();
+        std::fs::write(
+            mod_dir.path().join("MapsMO/Standard/arena.map"),
+            b"[Basic]\nName=Arena\n",
+        )
+        .unwrap();
+        assert_eq!(
+            found("MapsMO/Standard/arena.map"),
+            mod_dir.path().join("MapsMO/Standard/arena.map")
+        );
     }
     use super::*;
     use crate::assets::mix_hash::mix_hash;

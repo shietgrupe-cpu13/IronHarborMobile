@@ -46,6 +46,10 @@ pub enum SkirmishScenarioSource {
     LoosePkt(String),
     LooseYro(String),
     LooseYrm(String),
+    /// A loose map below the selected mod root. The relative path is retained
+    /// so nested maps remain addressable without copying them or colliding by
+    /// basename (`MapsMO/Standard/1.map`, for example).
+    LooseModMap(String),
     /// VERA: a map only in the lobby's online map library, by SHA-256. Its
     /// row comes from the library's copy of the map's header; Choose Map
     /// downloads the map into VERA's own Maps folder before using it.

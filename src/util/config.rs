@@ -527,6 +527,14 @@ impl GameConfig {
                 ("ini", "theater_suffix") => {
                     parse_string(value).map(|suffix| ini.theater_suffix = Some(suffix))
                 }
+                ("ini", "theme") => parse_string(value).map(|name| ini.theme = Some(name)),
+                ("ini", "battle") => parse_string(value).map(|name| ini.battle = Some(name)),
+                ("ini", "mission") => parse_string(value).map(|name| ini.mission = Some(name)),
+                ("ini", "mapsel") => parse_string(value).map(|name| ini.mapsel = Some(name)),
+                ("ini", "modes") => parse_string(value).map(|name| ini.modes = Some(name)),
+                ("ini", "map_catalog") => {
+                    parse_string(value).map(|name| ini.map_catalog = Some(name))
+                }
                 _ => Ok(()),
             };
             read.with_context(|| format!("line {line_number}: [{section}] {key}"))?;
@@ -775,6 +783,35 @@ pub fn set_ini_profile(contents: &str, profile: crate::util::ini_roots::IniProfi
             "\n"
         })
         + if contents.ends_with('\n') { "\n" } else { "" }
+}
+
+/// Persist a complete resolved INI root set without discarding other config
+/// sections. Used by the Android launcher so its preflight and engine startup
+/// consume the same names produced by a mod's `[Files]` manifest.
+pub fn set_ini_root_config(
+    contents: &str,
+    roots: &crate::util::ini_roots::IniRootConfig,
+) -> String {
+    let mut contents = set_ini_profile(contents, roots.profile);
+    for (key, value) in [
+        ("rules", roots.rules.as_deref()),
+        ("art", roots.art.as_deref()),
+        ("ai", roots.ai.as_deref()),
+        ("sound", roots.sound.as_deref()),
+        ("eva", roots.eva.as_deref()),
+        ("theater_suffix", roots.theater_suffix.as_deref()),
+        ("theme", roots.theme.as_deref()),
+        ("battle", roots.battle.as_deref()),
+        ("mission", roots.mission.as_deref()),
+        ("mapsel", roots.mapsel.as_deref()),
+        ("modes", roots.modes.as_deref()),
+        ("map_catalog", roots.map_catalog.as_deref()),
+    ] {
+        if let Some(value) = value {
+            contents = set_config_string_key(&contents, "ini", key, value);
+        }
+    }
+    contents
 }
 
 /// Set one string in a config section while keeping the other lines intact.

@@ -1,5 +1,7 @@
 package org.vera20k
 
+import android.view.KeyEvent
+
 /** Persisted Android control layout. It contains presentation/input bindings only;
  * actions are sent to the engine through the ordinary keyboard event path. */
 internal object TouchHudSettings {
@@ -63,6 +65,9 @@ internal object TouchHudSettings {
         "PATROL" to "Patrol between two points",
     ).map { (id, label) ->
         val keyCode = when (id) {
+            // Planning Mode is a held key, not a one-shot command: the player
+            // holds Z while clicking each route point, then releases it.
+            "ROUTE" -> KeyEvent.KEYCODE_Z
             "TYPE" -> 48 // T: select matching unit type
             "NEXT" -> 41 // M: next unit
             "PREV" -> 42 // N: previous selection

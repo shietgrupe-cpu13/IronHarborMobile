@@ -104,16 +104,18 @@ pub(crate) struct ActiveMod {
     /// What the player is shown: `mod.ini`'s `Name=` and `Version=`, else the
     /// folder's name.
     pub(crate) title: String,
+    /// Bounded, validated resource declarations frozen when this launch chose
+    /// the mod. Runtime consumers use the same manifest the launcher probes.
+    pub(crate) definition: crate::util::mod_definition::ModDefinition,
 }
 
 /// How a launch's mod choice came out; the app keeps it for the run.
 #[derive(Default)]
 pub(crate) struct Mods {
     pub(crate) active: Option<ActiveMod>,
-    /// The previous start died while loading this mod. This run intentionally
-    /// omits it, so its INI roots and archive family must come from the stock
-    /// game rather than files that are no longer mounted.
-    recovered_without_mod: bool,
+    /// This launch has no active mod after a refusal or failed-start recovery.
+    /// Do not leave INI roots from unavailable mod files active for vanilla.
+    stock_ini_fallback: bool,
     /// Why the mod asked for is not in use, or did not load: shown once the
     /// main menu is at rest.
     notice: Option<String>,
@@ -143,6 +145,29 @@ impl Mods {
         self.active.as_ref().map(|active| active.dir.as_path())
     }
 
+    pub(crate) fn archive_overrides(&self) -> crate::util::mod_definition::ArchiveNameOverrides {
+        self.active
+            .as_ref()
+            .map(|active| active.definition.archives.clone())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn effective_ares_setting(
+        &self,
+        setting: crate::util::ares_launch::AresSetting,
+    ) -> crate::util::ares_launch::AresSetting {
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|active| active.definition.requires_ares)
+            && setting == crate::util::ares_launch::AresSetting::Auto
+        {
+            crate::util::ares_launch::AresSetting::On
+        } else {
+            setting
+        }
+    }
+
     /// INI configuration that belongs to the files mounted for this run.
     /// A one-run failed-mod recovery must not keep roots that live only in the
     /// skipped mod. The user's persisted config is left untouched so the next
@@ -151,13 +176,16 @@ impl Mods {
         &self,
         configured: &crate::util::ini_roots::IniRootConfig,
     ) -> crate::util::ini_roots::IniRootConfig {
-        if self.recovered_without_mod {
+        if self.stock_ini_fallback {
             log::warn!(
-                "Failed-mod recovery: using stock Yuri's Revenge INI roots for this launch; saved mod and profile selection are unchanged"
+                "Mod selection unavailable: using stock Yuri's Revenge INI roots for this launch; saved settings are unchanged"
             );
             crate::util::ini_roots::IniRootConfig::default()
         } else {
-            configured.clone()
+            self.active.as_ref().map_or_else(
+                || configured.clone(),
+                |active| active.definition.ini_config(configured),
+            )
         }
     }
 
@@ -400,10 +428,11 @@ fn resolve(paths: &PathsConfig, wanted: &str) -> Result<ActiveMod, String> {
             &[("mod", &wanted), ("folder", &mods_dir.display())],
         ));
     };
-    let info = ModInfo::read(&dir);
-    let title = info.title(&folder);
+    let definition = crate::util::mod_definition::ModDefinition::read(&dir)
+        .map_err(|error| format!("Invalid mod definition for {folder}: {error}"))?;
+    let title = definition.title(&folder);
     let version = env!("CARGO_PKG_VERSION");
-    if let Some(needs) = info
+    if let Some(needs) = definition
         .needs
         .as_deref()
         .filter(|needs| !version_serves(version, needs))
@@ -414,7 +443,12 @@ fn resolve(paths: &PathsConfig, wanted: &str) -> Result<ActiveMod, String> {
             &[("mod", &title), ("needs", &needs), ("version", &version)],
         ));
     }
-    Ok(ActiveMod { folder, dir, title })
+    Ok(ActiveMod {
+        folder,
+        dir,
+        title,
+        definition,
+    })
 }
 
 /// The folder a launch asks for: its switch's, else config.toml's where
@@ -667,6 +701,20 @@ fn claim(path: &Path, folder: &str) -> std::io::Result<Claim> {
 /// reads no choice from config.toml, as it reads no VERA.INI, and uses a mod
 /// only when a switch names one.
 pub(crate) fn begin(paths: &PathsConfig, switch: Option<&ModSwitch>, hidden: bool) -> Mods {
+    begin_with_ares(
+        paths,
+        switch,
+        hidden,
+        crate::util::ares_launch::AresSetting::Auto,
+    )
+}
+
+pub(crate) fn begin_with_ares(
+    paths: &PathsConfig,
+    switch: Option<&ModSwitch>,
+    hidden: bool,
+    ares_setting: crate::util::ares_launch::AresSetting,
+) -> Mods {
     let mut mods = Mods {
         kept: paths.mod_name().map(str::to_owned),
         ..Mods::default()
@@ -681,9 +729,19 @@ pub(crate) fn begin(paths: &PathsConfig, switch: Option<&ModSwitch>, hidden: boo
         Ok(active) => active,
         Err(notice) => {
             mods.notice = Some(notice);
+            mods.stock_ini_fallback = true;
             return mods;
         }
     };
+    if active.definition.requires_ares && ares_setting == crate::util::ares_launch::AresSetting::Off
+    {
+        mods.notice = Some(format!(
+            "{} requires Ares. Set the Ares option to Auto or On, then select the mod again.",
+            active.title
+        ));
+        mods.stock_ini_fallback = true;
+        return mods;
+    }
     if !hidden && HAS_FOLDER {
         let record = paths.settings_dir().join(START_RECORD);
         match claim(&record, &active.folder) {
@@ -698,7 +756,7 @@ pub(crate) fn begin(paths: &PathsConfig, switch: Option<&ModSwitch>, hidden: boo
                     "VERA:ModSkipped",
                     &[("mod", &active.title)],
                 ));
-                mods.recovered_without_mod = true;
+                mods.stock_ini_fallback = true;
                 return mods;
             }
             // Without the record the mod still plays; only the way out of a
@@ -929,7 +987,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&record).unwrap(), "Winter War");
         let second = begin(&paths, None, false);
         assert!(second.active.is_none() && second.notice.is_some());
-        assert!(second.recovered_without_mod);
+        assert!(second.stock_ini_fallback);
         assert!(!record.exists());
         let third = begin(&paths, None, false);
         assert!(third.active.is_some());
@@ -958,7 +1016,7 @@ mod tests {
             ..IniRootConfig::default()
         };
         let recovery = Mods {
-            recovered_without_mod: true,
+            stock_ini_fallback: true,
             ..Mods::default()
         };
         let effective = recovery.startup_ini_config(&configured);
@@ -969,6 +1027,56 @@ mod tests {
 
         let ordinary = Mods::default().startup_ini_config(&configured);
         assert_eq!(ordinary, configured);
+    }
+
+    #[test]
+    fn selected_manifest_overrides_partial_ini_roots_and_aers_requirement() {
+        use crate::util::ini_roots::{IniProfile, IniRootConfig};
+
+        let (root, paths) = settings("manifest-resources");
+        let mod_dir = root.join("Mods").join("Winter War");
+        std::fs::write(
+            mod_dir.join("mod.ini"),
+            "[Mod]\nName=Manifest Mod\n[Files]\nRules=custom-rules.ini\n[Extensions]\nAres=yes\n",
+        )
+        .unwrap();
+
+        let off = begin_with_ares(
+            &paths,
+            Some(&ModSwitch::Use("Winter War".into())),
+            true,
+            crate::util::ares_launch::AresSetting::Off,
+        );
+        assert!(off.active.is_none());
+        assert!(
+            off.refusal()
+                .is_some_and(|text| text.contains("requires Ares"))
+        );
+        assert!(off.stock_ini_fallback);
+        assert_eq!(
+            off.startup_ini_config(&IniRootConfig::default()),
+            IniRootConfig::default()
+        );
+
+        let active = begin_with_ares(
+            &paths,
+            Some(&ModSwitch::Use("Winter War".into())),
+            true,
+            crate::util::ares_launch::AresSetting::Auto,
+        );
+        assert_eq!(
+            active.effective_ares_setting(crate::util::ares_launch::AresSetting::Auto),
+            crate::util::ares_launch::AresSetting::On
+        );
+        let configured = IniRootConfig {
+            profile: IniProfile::Mo,
+            ..Default::default()
+        };
+        let resolved = active.startup_ini_config(&configured);
+        assert_eq!(resolved.profile, IniProfile::Custom);
+        assert_eq!(resolved.rules.as_deref(), Some("custom-rules.ini"));
+        assert_eq!(resolved.art.as_deref(), Some("artmd.ini"));
+        assert_eq!(resolved.ai.as_deref(), Some("aimd.ini"));
     }
 
     #[test]
@@ -1008,10 +1116,13 @@ mod tests {
         )
         .unwrap();
         let told = ModSwitch::Use("Winter War".into());
-        assert_eq!(
-            begin(&paths, Some(&told), true).active.unwrap().title,
-            "冬季战争 1.2"
-        );
+        let accepted = begin(&paths, Some(&told), true);
+        let title = accepted
+            .active
+            .as_ref()
+            .map(|active| active.title.as_str())
+            .unwrap_or_else(|| panic!("{}", accepted.refusal().unwrap_or("no refusal message")));
+        assert_eq!(title, "冬季战争 1.2");
         // A name saved in another encoding is not shown as boxes.
         std::fs::write(&ini, b"[Mod]\nName=\xb6\xac\xbc\xbe\nVersion=1.2\n").unwrap();
         assert_eq!(

@@ -27,6 +27,7 @@ internal class TouchHudOverlay(
     private val prefs = activity.getSharedPreferences(TouchHudSettings.PREFS, android.content.Context.MODE_PRIVATE)
     private var windowManager: WindowManager? = null
     private val controls = linkedMapOf<String, TextView>()
+    private val heldKeys = TouchHudKeyLatch(activity::sendHudKey)
     private var editSurface: View? = null
     private var editing = false
     private var safeLeft = 0
@@ -84,6 +85,7 @@ internal class TouchHudOverlay(
     }
 
     fun detach() {
+        heldKeys.releaseAll()
         val manager = windowManager
         if (manager != null) controls.values.forEach { runCatching { manager.removeView(it) } }
         if (manager != null) editSurface?.let { runCatching { manager.removeView(it) } }
@@ -93,8 +95,11 @@ internal class TouchHudOverlay(
         editing = false
     }
 
+    fun releaseHeldKeys() = heldKeys.releaseAll()
+
     private fun populate() {
         val manager = windowManager ?: return
+        heldKeys.releaseAll()
         controls.values.forEach { runCatching { manager.removeView(it) } }
         editSurface?.let { runCatching { manager.removeView(it) } }
         editSurface = null
@@ -182,6 +187,7 @@ internal class TouchHudOverlay(
                     TouchHudSettings.HUD_TEXT -> activity.showGameTextInput()
                     TouchHudSettings.SET_ONE -> selectSet(1)
                     TouchHudSettings.SET_TWO -> selectSet(2)
+                    "ROUTE" -> heldKeys.toggle(action.id, prefs.getInt("key_${action.id}", action.defaultKeyCode))
                     else -> if (action.groupNumber != null) {
                         activity.sendHudControlGroup(action.groupNumber, held = false)
                     } else {

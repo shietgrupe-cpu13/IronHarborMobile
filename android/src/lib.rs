@@ -149,10 +149,23 @@ fn launcher_selection_config(
         &vera20k::util::config::set_paths_key(&previous, "mod", mod_name),
         profile,
     );
-    let config = vera20k::util::config::GameConfig::parse_text_at(&contents, &config_path)
+    let mut config = vera20k::util::config::GameConfig::parse_text_at(&contents, &config_path)
         .map_err(|error| {
             anyhow::anyhow!("Updated config is not accepted by the engine: {error:#}")
         })?;
+    if let Some(mod_dir) = launcher_mod_directory(&config)? {
+        let definition = vera20k::util::mod_definition::ModDefinition::read(&mod_dir)
+            .map_err(anyhow::Error::msg)?;
+        if definition.has_file_manifest() {
+            config.ini = definition.ini_config(&config.ini);
+            let contents = vera20k::util::config::set_ini_root_config(&contents, &config.ini);
+            config = vera20k::util::config::GameConfig::parse_text_at(&contents, &config_path)
+                .map_err(|error| {
+                    anyhow::anyhow!("Resolved mod configuration is invalid: {error:#}")
+                })?;
+            return Ok((contents, config));
+        }
+    }
     Ok((contents, config))
 }
 
@@ -165,7 +178,10 @@ fn launcher_mod_directory(
     let path = std::path::Path::new(name);
     if path.is_absolute() {
         let metadata = std::fs::symlink_metadata(path).map_err(|error| {
-            anyhow::anyhow!("The selected mod folder is unavailable at {}: {error}", path.display())
+            anyhow::anyhow!(
+                "The selected mod folder is unavailable at {}: {error}",
+                path.display()
+            )
         })?;
         anyhow::ensure!(
             metadata.file_type().is_dir() && !metadata.file_type().is_symlink(),
@@ -207,15 +223,35 @@ fn launcher_mod_directory(
     Ok(Some(folder))
 }
 
-fn validate_launcher_selection(config: &vera20k::util::config::GameConfig) -> anyhow::Result<()> {
+fn validate_launcher_selection(
+    config: &vera20k::util::config::GameConfig,
+) -> anyhow::Result<vera20k::util::ini_roots::IniRoots> {
     let mod_dir = launcher_mod_directory(config)?;
-    let roots = vera20k::assets::asset_manager::AssetManager::inspect_launch_ini_roots_with_ares_support(
+    let definition = mod_dir
+        .as_deref()
+        .map(vera20k::util::mod_definition::ModDefinition::read)
+        .transpose()
+        .map_err(anyhow::Error::msg)?;
+    let archive_names = definition
+        .as_ref()
+        .map(|definition| definition.archives.clone())
+        .unwrap_or_default();
+    let ares_setting = if definition
+        .as_ref()
+        .is_some_and(|definition| definition.requires_ares)
+    {
+        vera20k::util::ares_launch::AresSetting::On
+    } else {
+        vera20k::util::ares_launch::AresSetting::Auto
+    };
+    let roots = vera20k::assets::asset_manager::AssetManager::inspect_launch_ini_roots_with_resources(
         &config.paths.ra2_dir,
         mod_dir.as_deref(),
         Some(&config.paths.ares_support_dir()),
         vera20k::assets::asset_manager::MediaArchiveMode::STOCK_DIGITAL,
-        vera20k::util::ares_launch::AresSetting::Auto,
+        ares_setting,
         &config.ini,
+        archive_names,
     )
     .map_err(|error| {
         anyhow::anyhow!(
@@ -224,7 +260,7 @@ fn validate_launcher_selection(config: &vera20k::util::config::GameConfig) -> an
         )
     })?;
     log::info!("Launcher validated engine INI roots: {:?}", roots);
-    Ok(())
+    Ok(roots)
 }
 
 fn launcher_settings_directory(
@@ -667,9 +703,9 @@ pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeSetAresSetting(
     }
 }
 
-/// Infer a mod's INI profile from complete roots exposed by the engine's
-/// runtime asset provider. A mod selection prefers MO; vanilla prefers YR.
-/// The candidate config is returned only when the engine can load its roots.
+/// Resolve the selection with the same Auto and `mod.ini` resource semantics
+/// used by the engine, then persist the concrete profile the asset provider
+/// selected. Folder names do not choose profiles.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeConfigForMod(
     mut env: jni::JNIEnv,
@@ -680,30 +716,16 @@ pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeConfigForMod(
     let result = (|| -> anyhow::Result<jstring> {
         let mod_name: String = env.get_string(&mod_name)?.into();
         let files_directory: String = env.get_string(&files_directory)?.into();
-        use vera20k::util::ini_roots::IniProfile;
-        let profiles = if mod_name.is_empty() {
-            [IniProfile::Yr, IniProfile::Mo]
+        let profile = if mod_name.is_empty() {
+            vera20k::util::ini_roots::IniProfile::Yr
         } else {
-            [IniProfile::Mo, IniProfile::Yr]
+            vera20k::util::ini_roots::IniProfile::Auto
         };
-        let mut failures = Vec::new();
-        for profile in profiles {
-            match launcher_selection_config(
-                std::path::Path::new(&files_directory),
-                &mod_name,
-                profile,
-            ) {
-                Ok((contents, config)) => match validate_launcher_selection(&config) {
-                    Ok(()) => return Ok(env.new_string(contents)?.into_raw()),
-                    Err(error) => failures.push(format!("{profile:?}: {error:#}")),
-                },
-                Err(error) => failures.push(format!("{profile:?}: {error:#}")),
-            }
-        }
-        anyhow::bail!(
-            "No complete supported INI profile is available; selection was not saved. {}",
-            failures.join(" | ")
-        )
+        let (contents, config) =
+            launcher_selection_config(std::path::Path::new(&files_directory), &mod_name, profile)?;
+        let roots = validate_launcher_selection(&config)?;
+        let contents = vera20k::util::config::set_ini_profile(&contents, roots.profile());
+        Ok(env.new_string(contents)?.into_raw())
     })();
     match result {
         Ok(contents) => contents,

@@ -527,6 +527,30 @@ impl AssetManager {
                 detail,
             })?;
         log::info!("Selected INI roots: {:?}", self.ini_roots);
+        for (name, required) in [
+            (self.ini_roots.rules(), true),
+            (self.ini_roots.art(), true),
+            (self.ini_roots.ai(), true),
+            (self.ini_roots.sound(), false),
+            (self.ini_roots.eva(), false),
+            (self.ini_roots.theme(), false),
+            (self.ini_roots.battle(), false),
+            (self.ini_roots.mission(), false),
+            (self.ini_roots.mapsel(), false),
+            (self.ini_roots.modes(), false),
+            (self.ini_roots.map_catalog(), false),
+        ] {
+            if let Some(source) = self.resolve_ref(name) {
+                log::info!(
+                    "INI/resource root {name} resolved from {}",
+                    source.source_archive
+                );
+            } else if required {
+                log::warn!("Required INI root {name} has no mounted source");
+            } else {
+                log::debug!("Optional resource root {name} has no mounted source");
+            }
+        }
         Ok(self)
     }
 
@@ -674,6 +698,7 @@ impl AssetManager {
             media_mode,
             Default::default(),
             ArchiveFamily::Yr,
+            Default::default(),
             StartupArchivePolicy::OptionalWarnings,
         )?;
         // The launch's `ares.mix` answer, as below; the Ares setting is left
@@ -700,6 +725,7 @@ impl AssetManager {
             media_mode,
             ares_setting,
             family,
+            Default::default(),
             StartupArchivePolicy::OptionalWarnings,
         )?;
         // This is the game the launch plays: its `ares.mix` answer is the
@@ -727,6 +753,28 @@ impl AssetManager {
         ares_setting: crate::util::ares_launch::AresSetting,
         family: ArchiveFamily,
     ) -> Result<Self, AssetError> {
+        Self::with_mod_and_ares_support_and_archive_overrides(
+            ra2_dir,
+            mod_dir,
+            ares_support_dir,
+            media_mode,
+            ares_setting,
+            family,
+            Default::default(),
+        )
+    }
+
+    /// Android/runtime variant using validated `[Archives]` slot names from
+    /// the selected mod's frozen `mod.ini` definition.
+    pub fn with_mod_and_ares_support_and_archive_overrides(
+        ra2_dir: &Path,
+        mod_dir: Option<&Path>,
+        ares_support_dir: Option<&Path>,
+        media_mode: MediaArchiveMode,
+        ares_setting: crate::util::ares_launch::AresSetting,
+        family: ArchiveFamily,
+        archive_names: crate::util::mod_definition::ArchiveNameOverrides,
+    ) -> Result<Self, AssetError> {
         let manager = Self::open_startup_archives(
             ra2_dir,
             mod_dir,
@@ -734,6 +782,7 @@ impl AssetManager {
             media_mode,
             ares_setting,
             family,
+            archive_names,
             StartupArchivePolicy::OptionalWarnings,
         )?;
         crate::util::ares_launch::set_setting(ares_setting);
@@ -760,6 +809,7 @@ impl AssetManager {
             media_mode,
             ares_setting,
             family,
+            Default::default(),
             StartupArchivePolicy::OptionalWarnings,
         )?;
         manager.validate_ini_roots_strict(config)
@@ -775,6 +825,28 @@ impl AssetManager {
         ares_setting: crate::util::ares_launch::AresSetting,
         config: &crate::util::ini_roots::IniRootConfig,
     ) -> Result<crate::util::ini_roots::IniRoots, AssetError> {
+        Self::inspect_launch_ini_roots_with_resources(
+            ra2_dir,
+            mod_dir,
+            ares_support_dir,
+            media_mode,
+            ares_setting,
+            config,
+            Default::default(),
+        )
+    }
+
+    /// Launcher preflight with the same mod-declared archive slots used by
+    /// runtime, so it cannot approve a different set of resources.
+    pub fn inspect_launch_ini_roots_with_resources(
+        ra2_dir: &Path,
+        mod_dir: Option<&Path>,
+        ares_support_dir: Option<&Path>,
+        media_mode: MediaArchiveMode,
+        ares_setting: crate::util::ares_launch::AresSetting,
+        config: &crate::util::ini_roots::IniRootConfig,
+        archive_names: crate::util::mod_definition::ArchiveNameOverrides,
+    ) -> Result<crate::util::ini_roots::IniRoots, AssetError> {
         let family = ArchiveFamily::for_ini_profile(config.profile);
         let manager = Self::open_startup_archives(
             ra2_dir,
@@ -783,6 +855,7 @@ impl AssetManager {
             media_mode,
             ares_setting,
             family,
+            archive_names,
             StartupArchivePolicy::OptionalWarnings,
         )?;
         manager.validate_ini_roots_strict(config)
@@ -805,6 +878,7 @@ impl AssetManager {
             media_mode,
             Default::default(),
             ArchiveFamily::Yr,
+            Default::default(),
             StartupArchivePolicy::Inspect(&mut issues),
         )?;
         Ok((manager, issues))
@@ -817,6 +891,7 @@ impl AssetManager {
         media_mode: MediaArchiveMode,
         ares_setting: crate::util::ares_launch::AresSetting,
         family: ArchiveFamily,
+        archive_names: crate::util::mod_definition::ArchiveNameOverrides,
         mut policy: StartupArchivePolicy<'_>,
     ) -> Result<Self, AssetError> {
         let support_dir =
@@ -853,7 +928,7 @@ impl AssetManager {
         if !ares {
             manager.mount_language_archives(family, &mut policy)?;
         }
-        manager.mount_base_mix_files(ares, family, &mut policy)?;
+        manager.mount_base_mix_files(ares, family, &archive_names, &mut policy)?;
         if ares {
             manager.mount_language_archives(family, &mut policy)?;
         }
@@ -898,10 +973,23 @@ impl AssetManager {
         }
         manager.mount_startup_archive("cameo.mix", true, &mut policy)?;
 
-        manager.mount_startup_map_media(media_mode, family, &mut policy)?;
-        manager.mount_reported_archive(&format!("multi{tag}.mix"), &mut policy)?;
-        if family != ArchiveFamily::Ra2 {
-            manager.mount_startup_archive(&format!("theme{tag}.mix"), false, &mut policy)?;
+        manager.mount_startup_map_media(media_mode, family, &archive_names, &mut policy)?;
+        manager.mount_reported_archive(
+            archive_names
+                .multiplayer
+                .as_deref()
+                .unwrap_or(&format!("multi{tag}.mix")),
+            &mut policy,
+        )?;
+        if family != ArchiveFamily::Ra2 || archive_names.theme.is_some() {
+            manager.mount_startup_archive(
+                archive_names
+                    .theme
+                    .as_deref()
+                    .unwrap_or(&format!("theme{tag}.mix")),
+                false,
+                &mut policy,
+            )?;
         }
         // VERA presentation extension: native YR mounts THEME.MIX only when
         // THEMEMD.MIX is absent. Keep the expansion THEME first, then make
@@ -910,7 +998,7 @@ impl AssetManager {
         // Preserve this user-requested parity exception during future parity
         // work unless the user explicitly asks to change the music catalog.
         manager.mount_startup_archive("theme.mix", false, &mut policy)?;
-        manager.mount_startup_movie_media(media_mode, family, &mut policy)?;
+        manager.mount_startup_movie_media(media_mode, family, &archive_names, &mut policy)?;
 
         // Loose YRO archives are deliberately absent here. Retail registers
         // each one during SessionClass scenario enumeration, immediately
@@ -1674,16 +1762,30 @@ impl AssetManager {
 
     #[cfg(test)]
     fn mount_native_map_media(&mut self, mode: MediaArchiveMode) -> Result<(), AssetError> {
-        self.mount_startup_map_media(mode, ArchiveFamily::Yr, &mut StartupArchivePolicy::FailFast)
+        self.mount_startup_map_media(
+            mode,
+            ArchiveFamily::Yr,
+            &Default::default(),
+            &mut StartupArchivePolicy::FailFast,
+        )
     }
 
     fn mount_startup_map_media(
         &mut self,
         mode: MediaArchiveMode,
         archives: ArchiveFamily,
+        archive_names: &crate::util::mod_definition::ArchiveNameOverrides,
         policy: &mut StartupArchivePolicy<'_>,
     ) -> Result<(), AssetError> {
-        let maps = format!("maps{}", archives.tag());
+        let default_prefix = match archives {
+            ArchiveFamily::Yr => "mapsmd",
+            ArchiveFamily::Ra2 => "maps",
+            ArchiveFamily::Mo => "mapsmo",
+        };
+        let maps = archive_names
+            .map_prefix
+            .as_deref()
+            .unwrap_or(default_prefix);
         match mode {
             MediaArchiveMode::Numbered { media_index } => {
                 let number = media_index.wrapping_add(1);
@@ -1717,16 +1819,30 @@ impl AssetManager {
 
     #[cfg(test)]
     fn mount_native_movie_media(&mut self, mode: MediaArchiveMode) -> Result<(), AssetError> {
-        self.mount_startup_movie_media(mode, ArchiveFamily::Yr, &mut StartupArchivePolicy::FailFast)
+        self.mount_startup_movie_media(
+            mode,
+            ArchiveFamily::Yr,
+            &Default::default(),
+            &mut StartupArchivePolicy::FailFast,
+        )
     }
 
     fn mount_startup_movie_media(
         &mut self,
         mode: MediaArchiveMode,
         archives: ArchiveFamily,
+        archive_names: &crate::util::mod_definition::ArchiveNameOverrides,
         policy: &mut StartupArchivePolicy<'_>,
     ) -> Result<(), AssetError> {
-        let movmd = format!("mov{}", archives.tag());
+        let default_prefix = match archives {
+            ArchiveFamily::Yr => "movmd",
+            ArchiveFamily::Ra2 => "mov",
+            ArchiveFamily::Mo => "movmo",
+        };
+        let movmd = archive_names
+            .movie_prefix
+            .as_deref()
+            .unwrap_or(default_prefix);
         match mode {
             MediaArchiveMode::Numbered { media_index } => {
                 let number = media_index.wrapping_add(1);
@@ -1741,14 +1857,14 @@ impl AssetManager {
                 let (md01, md03) = (format!("{upper}01.MIX"), format!("{upper}03.MIX"));
                 let (sub01, sub03) = (format!("MIXFILES/{md01}"), format!("MIXFILES/{md03}"));
                 let mut directory = None;
-                let mut family = movmd.as_str();
+                let mut family = movmd;
                 for (probe, selected_directory, selected_family) in [
                     ("MOVIES01.MIX", None, "movies"),
                     ("MIXFILES/MOVIES01.MIX", Some("MIXFILES"), "movies"),
-                    (md01.as_str(), None, movmd.as_str()),
-                    (sub01.as_str(), Some("MIXFILES"), movmd.as_str()),
-                    (md03.as_str(), None, movmd.as_str()),
-                    (sub03.as_str(), Some("MIXFILES"), movmd.as_str()),
+                    (md01.as_str(), None, movmd),
+                    (sub01.as_str(), Some("MIXFILES"), movmd),
+                    (md03.as_str(), None, movmd),
+                    (sub03.as_str(), Some("MIXFILES"), movmd),
                 ] {
                     if self.raw_relative_file_available(probe) {
                         directory = selected_directory;
@@ -1899,11 +2015,20 @@ impl AssetManager {
         &mut self,
         ares: bool,
         family: ArchiveFamily,
+        archive_names: &crate::util::mod_definition::ArchiveNameOverrides,
         policy: &mut StartupArchivePolicy<'_>,
     ) -> Result<(), AssetError> {
-        let tag = family.tag();
+        let default_prefix = match family {
+            ArchiveFamily::Yr => "expandmd",
+            ArchiveFamily::Ra2 => "expand",
+            ArchiveFamily::Mo => "expandmo",
+        };
+        let prefix = archive_names
+            .expansion_prefix
+            .as_deref()
+            .unwrap_or(default_prefix);
         for index in (0..=99).rev() {
-            self.mount_startup_archive(&format!("expand{tag}{index:02}.mix"), false, policy)?;
+            self.mount_startup_archive(&format!("{prefix}{index:02}.mix"), false, policy)?;
         }
         // Ares Load_Bootstrap_AresMIX (hook 0x0053029E, Ares::InitOwnResources)
         // constructs ares.mix once the expansion probe ends, before the
@@ -2688,6 +2813,57 @@ mod tests {
     }
 
     #[test]
+    fn mod_expansion_prefix_keeps_descending_slot_order_and_first_winner() {
+        let install = audio_test_install("custom-expansion-prefix");
+        install.write_mix("expand_custom99.mix", "winner.bin", b"custom");
+        install.write_mix("expandmd99.mix", "winner.bin", b"stock");
+        let mut manager = empty_manager(install.path());
+        let names = crate::util::mod_definition::ArchiveNameOverrides {
+            expansion_prefix: Some("expand_custom".into()),
+            ..Default::default()
+        };
+        manager
+            .mount_base_mix_files(
+                false,
+                ArchiveFamily::Yr,
+                &names,
+                &mut StartupArchivePolicy::FailFast,
+            )
+            .expect("base MIX stack");
+        assert_eq!(manager.get_ref("winner.bin"), Some(&b"custom"[..]));
+        assert_eq!(
+            manager.loaded_archive_names().first().map(String::as_str),
+            Some("expand_custom99.mix")
+        );
+    }
+
+    #[test]
+    fn mod_map_archive_prefix_selects_custom_slot_before_stock_fallback() {
+        let directory = TestDirectory::new("custom-map-prefix");
+        directory.write_mix("CUSTOMMAP01.MIX", "custom.bin", b"custom");
+        directory.write_mix("maps01.mix", "stock.bin", b"stock");
+        let mut manager = empty_manager(directory.path());
+        let names = crate::util::mod_definition::ArchiveNameOverrides {
+            map_prefix: Some("custommap".into()),
+            ..Default::default()
+        };
+        manager
+            .mount_startup_map_media(
+                MediaArchiveMode::Numbered { media_index: 0 },
+                ArchiveFamily::Yr,
+                &names,
+                &mut StartupArchivePolicy::FailFast,
+            )
+            .expect("custom map media");
+        assert_eq!(manager.get_ref("custom.bin"), Some(&b"custom"[..]));
+        assert_eq!(manager.get_ref("stock.bin"), Some(&b"stock"[..]));
+        assert_eq!(
+            manager.loaded_archive_names(),
+            ["custommap01.mix", "maps01.mix"]
+        );
+    }
+
+    #[test]
     fn cd_map_wildcard_uses_md_family_in_native_name_order() {
         let directory = TestDirectory::new("cd-map-media");
         directory.write_mix("MAPSMD01.MIX", "one.bin", b"one");
@@ -3289,9 +3465,11 @@ mod tests {
         };
         manager.rebuild_indexes();
 
-        assert!(manager
-            .register_neutral_archives()
-            .expect("base RA2 neutral archive is available"));
+        assert!(
+            manager
+                .register_neutral_archives()
+                .expect("base RA2 neutral archive is available")
+        );
         assert_eq!(
             manager.loaded_archive_names(),
             ["ra2.mix -> neutral.mix".to_string()]

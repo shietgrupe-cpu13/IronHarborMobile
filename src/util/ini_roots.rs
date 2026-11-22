@@ -61,6 +61,13 @@ pub struct IniRootConfig {
     /// `SNOWMD.INI`. Absent keeps the profile's preset: `md` for YR/custom,
     /// `mo` for MO.
     pub theater_suffix: Option<String>,
+    /// Optional roots consumed by the theme/campaign/mode/map catalogs.
+    pub theme: Option<String>,
+    pub battle: Option<String>,
+    pub mission: Option<String>,
+    pub mapsel: Option<String>,
+    pub modes: Option<String>,
+    pub map_catalog: Option<String>,
 }
 
 /// Frozen file names, resolved once before any consumer builds game data.
@@ -78,6 +85,8 @@ pub struct IniRoots {
     battle: String,
     mission: String,
     mapsel: String,
+    modes: String,
+    map_catalog: String,
 }
 
 impl Default for IniRoots {
@@ -88,46 +97,64 @@ impl Default for IniRoots {
 
 impl IniRoots {
     fn preset(profile: IniProfile) -> Self {
-        let (rules, art, ai, sound, eva, theater_suffix, theme, battle, mission, mapsel) =
-            match profile {
-                IniProfile::Yr => (
-                    "rulesmd.ini",
-                    "artmd.ini",
-                    "aimd.ini",
-                    "soundmd.ini",
-                    "evamd.ini",
-                    "md",
-                    "thememd.ini",
-                    "BATTLEMD.INI",
-                    "MISSIONMD.INI",
-                    "MAPSELMD.INI",
-                ),
-                IniProfile::Ra2 => (
-                    "rules.ini",
-                    "art.ini",
-                    "ai.ini",
-                    "sound.ini",
-                    "eva.ini",
-                    "",
-                    "theme.ini",
-                    "BATTLE.INI",
-                    "MISSION.INI",
-                    "MAPSEL.INI",
-                ),
-                IniProfile::Mo => (
-                    "rulesmo.ini",
-                    "artmo.ini",
-                    "aimo.ini",
-                    "soundmo.ini",
-                    "evamo.ini",
-                    "mo",
-                    "thememo.ini",
-                    "BATTLEMO.INI",
-                    "MISSIONMO.INI",
-                    "MAPSELMO.INI",
-                ),
-                _ => unreachable!("only concrete built-in profiles have presets"),
-            };
+        let (
+            rules,
+            art,
+            ai,
+            sound,
+            eva,
+            theater_suffix,
+            theme,
+            battle,
+            mission,
+            mapsel,
+            modes,
+            map_catalog,
+        ) = match profile {
+            IniProfile::Yr => (
+                "rulesmd.ini",
+                "artmd.ini",
+                "aimd.ini",
+                "soundmd.ini",
+                "evamd.ini",
+                "md",
+                "thememd.ini",
+                "BATTLEMD.INI",
+                "MISSIONMD.INI",
+                "MAPSELMD.INI",
+                "MPModesMD.ini",
+                "missionsmd.pkt",
+            ),
+            IniProfile::Ra2 => (
+                "rules.ini",
+                "art.ini",
+                "ai.ini",
+                "sound.ini",
+                "eva.ini",
+                "",
+                "theme.ini",
+                "BATTLE.INI",
+                "MISSION.INI",
+                "MAPSEL.INI",
+                "MPModes.ini",
+                "missions.pkt",
+            ),
+            IniProfile::Mo => (
+                "rulesmo.ini",
+                "artmo.ini",
+                "aimo.ini",
+                "soundmo.ini",
+                "evamo.ini",
+                "mo",
+                "thememo.ini",
+                "BATTLEMO.INI",
+                "MISSIONMO.INI",
+                "MAPSELMO.INI",
+                "MPModesMD.ini",
+                "missionsmd.pkt",
+            ),
+            _ => unreachable!("only concrete built-in profiles have presets"),
+        };
         Self {
             profile,
             rules: rules.into(),
@@ -140,6 +167,8 @@ impl IniRoots {
             battle: battle.into(),
             mission: mission.into(),
             mapsel: mapsel.into(),
+            modes: modes.into(),
+            map_catalog: map_catalog.into(),
         }
     }
 
@@ -200,6 +229,14 @@ impl IniRoots {
         &self.mapsel
     }
 
+    pub fn modes(&self) -> &str {
+        &self.modes
+    }
+
+    pub fn map_catalog(&self) -> &str {
+        &self.map_catalog
+    }
+
     pub fn names(&self) -> [&str; 3] {
         [self.rules(), self.art(), self.ai()]
     }
@@ -240,6 +277,33 @@ impl IniRootConfig {
         {
             return Err(format!(
                 "theater_suffix must be letters and digits only: '{suffix}'"
+            ));
+        }
+        for (field, name) in [
+            ("theme", self.theme.as_deref()),
+            ("battle", self.battle.as_deref()),
+            ("mission", self.mission.as_deref()),
+            ("mapsel", self.mapsel.as_deref()),
+            ("modes", self.modes.as_deref()),
+        ] {
+            if let Some(name) = name {
+                validate_ini_basename(field, name)?;
+            }
+        }
+        if let Some(name) = self.map_catalog.as_deref()
+            && (!name.to_ascii_lowercase().ends_with(".pkt")
+                || name.len() <= 4
+                || name.trim() != name
+                || name.bytes().any(|c| {
+                    c < 32
+                        || matches!(
+                            c,
+                            b'/' | b'\\' | b':' | b'*' | b'?' | b'"' | b'<' | b'>' | b'|'
+                        )
+                }))
+        {
+            return Err(format!(
+                "map_catalog must be a plain .pkt filename: '{name}'"
             ));
         }
         Ok(())
@@ -341,6 +405,24 @@ impl IniRootConfig {
         }
         if let Some(suffix) = &self.theater_suffix {
             roots.theater_suffix.clone_from(suffix);
+        }
+        if let Some(name) = &self.theme {
+            roots.theme.clone_from(name);
+        }
+        if let Some(name) = &self.battle {
+            roots.battle.clone_from(name);
+        }
+        if let Some(name) = &self.mission {
+            roots.mission.clone_from(name);
+        }
+        if let Some(name) = &self.mapsel {
+            roots.mapsel.clone_from(name);
+        }
+        if let Some(name) = &self.modes {
+            roots.modes.clone_from(name);
+        }
+        if let Some(name) = &self.map_catalog {
+            roots.map_catalog.clone_from(name);
         }
     }
 }

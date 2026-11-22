@@ -42,6 +42,7 @@ final class StartupDiagnostics {
     private static final String FILE_NAME = "IronHarborMobile-startup-diagnostics.txt";
     private static final String RELATIVE_PATH = Environment.DIRECTORY_DOWNLOADS + "/";
     private static final int MAX_TRACE_BYTES = 256 * 1024;
+    private static final int MAX_STARTUP_REPORT_BYTES = 2 * 1024 * 1024;
     private static final ScheduledExecutorService WORKER = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread thread = new Thread(r, "iron-harbor-startup-diagnostics");
         thread.setDaemon(true);
@@ -99,6 +100,33 @@ final class StartupDiagnostics {
         send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         activity.startActivity(Intent.createChooser(send, "Share startup diagnostics"));
         return true;
+    }
+
+    /** Reads the existing bounded startup/crash snapshot for inclusion in the full diagnostics ZIP. */
+    static String readLatest(Context context) {
+        try {
+            InputStream input = null;
+            if (Build.VERSION.SDK_INT >= 29) {
+                Uri uri = findLatestUri(context.getContentResolver());
+                if (uri != null) input = context.getContentResolver().openInputStream(uri);
+            } else {
+                File directory = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+                if (directory == null) directory = new File(context.getFilesDir(), "Downloads");
+                File report = new File(directory, FILE_NAME);
+                if (report.isFile()) input = new FileInputStream(report);
+            }
+            if (input == null) return "";
+            try (InputStream stream = input) {
+                byte[] bytes = readBounded(stream, MAX_STARTUP_REPORT_BYTES + 1);
+                boolean truncated = bytes.length > MAX_STARTUP_REPORT_BYTES;
+                String text = new String(bytes, 0,
+                        Math.min(bytes.length, MAX_STARTUP_REPORT_BYTES), StandardCharsets.UTF_8);
+                return truncated ? text + "\n[Startup diagnostic report truncated at 2 MiB.]\n" : text;
+            }
+        } catch (Exception error) {
+            Log.w(TAG, "Could not read the latest startup diagnostic report for export", error);
+            return "";
+        }
     }
 
     static String locationDescription(Context context) {

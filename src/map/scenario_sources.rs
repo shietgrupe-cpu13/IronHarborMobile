@@ -25,7 +25,6 @@ use crate::util::native_string::decode_widened_utf8;
 /// the archived `MISSIONSMD.PKT` is already consumed as the first source, and
 /// `MISSIONS.YRO` holds campaign missions that never belong in the multiplayer
 /// chooser.
-const MISSIONS_MD_PKT_FILE_NAME: &str = "MISSIONSMD.PKT";
 const MISSIONS_YRO_FILE_NAME: &str = "MISSIONS.YRO";
 
 /// List the maps in the RA2 directory: the Skirmish scenario records' fallback
@@ -73,8 +72,9 @@ pub fn list_skirmish_scenario_records_with_assets(
 ) -> Result<Vec<SkirmishScenarioRecord>> {
     let mut records = Vec::new();
 
+    let map_catalog = assets.ini_roots().map_catalog();
     if let Some(pkt) = assets
-        .get_ref("MISSIONSMD.PKT")
+        .get_ref(map_catalog)
         .and_then(|bytes| IniFile::from_bytes(bytes).ok())
     {
         append_pkt_records(
@@ -93,8 +93,139 @@ pub fn list_skirmish_scenario_records_with_assets(
     append_loose_pkt_records(&mut records, ra2_dir, assets, csf)?;
     append_loose_yro_records(&mut records, ra2_dir, assets, csf)?;
     append_loose_yrm_records(&mut records, ra2_dir)?;
+    if let Some(mod_dir) = crate::map::source::mod_dir() {
+        append_nested_mod_map_records(&mut records, mod_dir)?;
+    }
 
     Ok(records)
+}
+
+/// Make maps stored below the selected mod root available to the same map
+/// chooser as retail and Documents maps. The filename remains relative to the
+/// mod root, matching `source::local_map_path`; no files are copied or
+/// flattened. The record's normal `[Basic] GameMode` data is therefore used
+/// by the existing Choose Map mode filter.
+fn append_nested_mod_map_records(
+    records: &mut Vec<SkirmishScenarioRecord>,
+    root: &Path,
+) -> Result<()> {
+    for (path, relative_name) in nested_mod_map_files(root)? {
+        if records
+            .iter()
+            .any(|record| record.file_name.eq_ignore_ascii_case(&relative_name))
+        {
+            continue;
+        }
+        let Some(ini) = read_map_ini_for_metadata(&path) else {
+            continue;
+        };
+        let mut record = SkirmishScenarioRecord::concrete_from_ini(
+            records.len(),
+            SkirmishScenarioSource::LooseModMap(relative_name.clone()),
+            &relative_name,
+            &ini,
+        );
+        if let Some(parent) = Path::new(&relative_name)
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .and_then(Path::to_str)
+        {
+            record.display_name = format!("{parent} / {}", record.display_name);
+        }
+        records.push(record);
+    }
+    Ok(())
+}
+
+/// Recursively enumerate playable loose map formats under one active mod.
+/// Directory names are not special-cased: different mods may keep maps in
+/// different nested layouts. Hidden directories and symlinks are skipped so
+/// a mod's source tree cannot pull unrelated or external files into the scan.
+fn nested_mod_map_files(root: &Path) -> Result<Vec<(PathBuf, String)>> {
+    #[cfg(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown"))]
+    {
+        let _ = root;
+        return Ok(Vec::new());
+    }
+
+    #[cfg(not(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown")))]
+    {
+        const MAX_DEPTH: usize = 16;
+        const MAX_MAP_FILES: usize = 10_000;
+        let root = root.canonicalize()?;
+        let mut pending = vec![(root.clone(), 0usize)];
+        let mut files = Vec::new();
+        while let Some((directory, depth)) = pending.pop() {
+            if depth >= MAX_DEPTH {
+                continue;
+            }
+            let entries = match std::fs::read_dir(&directory) {
+                Ok(entries) => entries,
+                Err(error) if directory == root => return Err(error.into()),
+                Err(_) => continue,
+            };
+            let mut children: Vec<_> = entries.filter_map(|entry| entry.ok()).collect();
+            children.sort_by_key(|entry| entry.file_name().to_string_lossy().to_ascii_lowercase());
+            for entry in children {
+                let path = entry.path();
+                let file_type = match entry.file_type() {
+                    Ok(file_type) => file_type,
+                    Err(_) => continue,
+                };
+                if file_type.is_symlink() {
+                    continue;
+                }
+                if file_type.is_dir() {
+                    if !entry.file_name().to_string_lossy().starts_with('.') {
+                        if path
+                            .canonicalize()
+                            .is_ok_and(|canonical| canonical.starts_with(&root))
+                        {
+                            pending.push((path, depth + 1));
+                        }
+                    }
+                    continue;
+                }
+                if !file_type.is_file()
+                    || !path
+                        .extension()
+                        .and_then(|extension| extension.to_str())
+                        .is_some_and(|extension| {
+                            matches!(
+                                extension.to_ascii_lowercase().as_str(),
+                                "map" | "mpr" | "mmx" | "yrm"
+                            )
+                        })
+                {
+                    continue;
+                }
+                let Ok(canonical) = path.canonicalize() else {
+                    continue;
+                };
+                if !canonical.starts_with(&root) {
+                    continue;
+                }
+                let Ok(relative) = path.strip_prefix(&root) else {
+                    continue;
+                };
+                let relative = relative.to_string_lossy().replace('\\', "/");
+                files.push((path, relative));
+                if files.len() >= MAX_MAP_FILES {
+                    log::warn!("Mod map scan reached the {MAX_MAP_FILES} file safety limit");
+                    break;
+                }
+            }
+            if files.len() >= MAX_MAP_FILES {
+                break;
+            }
+        }
+        files.sort_by(|left, right| {
+            left.1
+                .to_ascii_lowercase()
+                .cmp(&right.1.to_ascii_lowercase())
+        });
+        Ok(files)
+    }
 }
 
 fn append_loose_pkt_records(
@@ -106,7 +237,7 @@ fn append_loose_pkt_records(
     for (path, file_name) in loose_files_with_extension(&game_folders(ra2_dir), "pkt")? {
         // The wildcard scan would otherwise re-list every archived row a second
         // time from an extracted copy sitting beside the executable.
-        if file_name.eq_ignore_ascii_case(MISSIONS_MD_PKT_FILE_NAME) {
+        if file_name.eq_ignore_ascii_case(assets.ini_roots().map_catalog()) {
             continue;
         }
         let Some(pkt) = read_ini_file(&path) else {
@@ -483,6 +614,57 @@ mod tests {
             crate::map::basic::briefing_text("[Basic]\nBriefing=守住@大桥\n".as_bytes()).as_deref(),
             Some("守住\n大桥")
         );
+    }
+
+    #[test]
+    fn nested_mod_maps_keep_relative_paths_and_use_the_existing_game_mode_filter() {
+        let directory = TestDirectory::new("nested-mod-maps");
+        let standard = directory.path().join("MapsMO/Standard/arena.map");
+        let team = directory.path().join("Community/Maps/arena.map");
+        std::fs::create_dir_all(standard.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(team.parent().unwrap()).unwrap();
+        std::fs::write(
+            &standard,
+            "[Basic]\nName=Standard Arena\nGameMode=standard\n[Waypoints]\n0=100011\n1=110012\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &team,
+            "[Basic]\nName=Team Arena\nGameMode=teamgame\n[Waypoints]\n0=100011\n1=110012\n",
+        )
+        .unwrap();
+
+        let mut records = Vec::new();
+        append_nested_mod_map_records(&mut records, directory.path()).unwrap();
+
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].file_name, "Community/Maps/arena.map");
+        assert_eq!(records[0].display_name, "Community/Maps / Team Arena");
+        assert_eq!(records[1].file_name, "MapsMO/Standard/arena.map");
+        assert_eq!(records[1].display_name, "MapsMO/Standard / Standard Arena");
+
+        let modes = crate::skirmish_modes::stock_skirmish_modes();
+        let standard_mode = modes
+            .iter()
+            .find(|mode| mode.map_filter == "standard")
+            .unwrap();
+        let team_mode = modes
+            .iter()
+            .find(|mode| mode.map_filter == "teamgame")
+            .unwrap();
+        assert!(crate::map::skirmish_scenarios::record_matches_mode(
+            &records[1],
+            standard_mode
+        ));
+        assert!(!crate::map::skirmish_scenarios::record_matches_mode(
+            &records[0],
+            standard_mode
+        ));
+        assert!(crate::map::skirmish_scenarios::record_matches_mode(
+            &records[0],
+            team_mode
+        ));
+        assert!(directory.path().join(&records[1].file_name).is_file());
     }
 
     #[test]
