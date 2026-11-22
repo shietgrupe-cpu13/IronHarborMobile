@@ -82,6 +82,11 @@ class VeraActivity : NativeActivity() {
             // NativeActivity starts the Rust entry point from super.onCreate;
             // publish the input mode before that entry point reads it.
             Os.setenv("IH_CONTROL_MODE", requestedMode, true)
+            Os.setenv(
+                "IH_OPEN_CAMPAIGN_SELECTION",
+                if (intent.getBooleanExtra(LauncherCampaignProgress.INTENT_EXTRA_OPEN_SELECTION, false)) "1" else "0",
+                true,
+            )
             appliedMode = requestedMode
         } catch (error: ErrnoException) {
             android.util.Log.e("IronHarborInput", "Could not set native input mode", error)

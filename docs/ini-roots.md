@@ -23,6 +23,7 @@ profile = "mo"
 
 | Profile | Rules | Fixed Art | Standalone AI |
 | --- | --- | --- | --- |
+| `ra2` | `rules.ini` | `art.ini` | `ai.ini` |
 | `yr` (default) | `rulesmd.ini` | `artmd.ini` | `aimd.ini` |
 | `mo` | `rulesmo.ini` | `artmo.ini` | `aimo.ini` |
 | `auto` | One complete unambiguous preset triplet | Same preset | Same preset |
@@ -44,7 +45,7 @@ sound = "my-sound.ini"
 eva = "my-eva.ini"
 ```
 
-Omitted names keep the profile's pair: `soundmd.ini`/`evamd.ini` for `yr` and
+Omitted names keep `sound.ini`/`eva.ini` for `ra2`, `soundmd.ini`/`evamd.ini` for `yr` and
 `custom`, `soundmo.ini`/`evamo.ini` for `mo` (and for `auto` once its rules
 triplet selects MO). Both are unlayered presentation readers: never required,
 never part of the preset completeness or ambiguity checks, and not part of the
@@ -76,10 +77,13 @@ The profile also selects the theme and campaign files:
 
 | Profile | Theme | Campaigns | Missions | Map select |
 | --- | --- | --- | --- | --- |
+| `ra2` | `theme.ini` | `BATTLE.INI` | `MISSION.INI` | `MAPSEL.INI` |
 | `yr`, `custom` | `thememd.ini` | `BATTLEMD.INI` | `MISSIONMD.INI` | `MAPSELMD.INI` |
 | `mo` | `thememo.ini` | `BATTLEMO.INI` | `MISSIONMO.INI` | `MAPSELMO.INI` |
 
-`auto` takes the MO names once it selects MO, though it keeps the YR archive
+`auto` accepts only complete YR/MO root triplets. Base RA2 must be selected
+explicitly so the engine chooses its unsuffixed archive family before loading
+resources. `auto` takes the MO names once it selects MO, though it keeps the YR archive
 names ([Archive names](#archive-names)), so an MO folder whose files are packed
 in its archives needs an explicit `mo`. gamemd reads the MD names
 (`THEMEMD.INI`, `BATTLEMD.INI`, `MISSIONMD.INI`, `MAPSELMD.INI`); the MO names
@@ -121,7 +125,9 @@ opens them (`assets::asset_manager::ArchiveFamily`). An explicit
 in place of the `expandmd` slots, then `mapsmo##.mix`, `multimo.mix`,
 `thememo.mix` and `movmo##.mix` (`MAPSMO*.MIX` and `MOVMO*.MIX` in CD mode).
 The master, cache, local, language, audio, conquer and cameo archives keep their
-YR names. `yr`, `auto` and `custom` keep the YR names: Auto probes the roots
+YR names. Explicit `ra2` uses `ra2.mix`, `cache.mix`, `local.mix`,
+`language.mix`, and unsuffixed maps, movies, theme, and campaign roots. `yr`,
+`auto` and `custom` keep the YR names: Auto probes the roots
 only after the archives are mounted, so it cannot choose the archives it
 probes, and an MO folder needs an explicit `mo`. Archive verbs of the `asset`
 tool take `--ini-profile mo` for the same names and do not read the host

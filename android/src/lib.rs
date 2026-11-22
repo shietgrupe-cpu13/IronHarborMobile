@@ -312,6 +312,7 @@ fn profile_from_launcher_value(
     value: &str,
 ) -> anyhow::Result<vera20k::util::ini_roots::IniProfile> {
     match value {
+        "ra2" => Ok(vera20k::util::ini_roots::IniProfile::Ra2),
         "yr" => Ok(vera20k::util::ini_roots::IniProfile::Yr),
         "mo" => Ok(vera20k::util::ini_roots::IniProfile::Mo),
         "auto" => Ok(vera20k::util::ini_roots::IniProfile::Auto),
@@ -445,6 +446,16 @@ pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeConfigForImport(
                 .join("Config")
                 .to_string_lossy(),
         );
+        let contents = if std::path::Path::new(&directory).join("ra2.mix").is_file()
+            && !std::path::Path::new(&directory).join("ra2md.mix").is_file()
+        {
+            vera20k::util::config::set_ini_profile(
+                &contents,
+                vera20k::util::ini_roots::IniProfile::Ra2,
+            )
+        } else {
+            contents
+        };
         Ok(env.new_string(contents)?.into_raw())
     })();
     match result {

@@ -357,6 +357,11 @@ impl App {
         let mut main_menu_shell_error = None;
         let mut personal_rules = crate::rules::personal_rules::PersonalRules::default();
         let mut startup_problem = None;
+        #[cfg(target_os = "android")]
+        let open_campaign_selection = std::env::var("IH_OPEN_CAMPAIGN_SELECTION")
+            .is_ok_and(|value| value == "1");
+        #[cfg(not(target_os = "android"))]
+        let open_campaign_selection = false;
         let game_config = GameConfig::load()
             .and_then(|config| match replay_retail_directory {
                 Some(directory) => config.with_retail_directory(directory.to_owned()),
@@ -602,6 +607,7 @@ impl App {
                 external_launch,
                 quickplay_allowed,
                 ares_setting,
+                open_campaign_selection,
             )
         };
         #[cfg(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown"))]
@@ -631,6 +637,7 @@ impl App {
         external_launch: bool,
         quickplay_allowed: bool,
         ares_setting: crate::util::ares_launch::AresSetting,
+        open_campaign_selection: bool,
     ) -> Result<InitializationStep> {
         #[cfg(target_os = "android")]
         let ares_support_dir = game_config
@@ -1401,7 +1408,10 @@ impl App {
                 // `Init_Game` plays the logo through Play_Movie (`0x0052C5E2`),
                 // then presents the splash (`0x0052C5F3`); the frame loop
                 // starts the first-run intro once the splash hold ends.
-                if process_movies && state.frontend.screen == GameScreen::MainMenu {
+                if process_movies
+                    && !open_campaign_selection
+                    && state.frontend.screen == GameScreen::MainMenu
+                {
                     state.frontend.startup_intro_pending = play_intro;
                     if play_startup {
                         Self::start_fullscreen_movie(
@@ -1438,6 +1448,9 @@ impl App {
                 }
 
                 crate::app::mods::finish_start(&mut state, external_launch);
+                if open_campaign_selection && state.process_assets.has_native_rules() {
+                    Self::open_campaign_page(&mut state);
+                }
                 log::info!(
                     "Application initialization complete: main_menu_active={}, process_rules_loaded={}",
                     state.frontend.screen == crate::ui::game_screen::GameScreen::MainMenu,

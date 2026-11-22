@@ -35,7 +35,7 @@ public class LauncherInstallationTest {
         assertTrue(state.getMissingArchives().isEmpty());
     }
 
-    @Test public void gameFolderPickerValidationRequiresBothBaseArchivesAtFolderRoot() throws Exception {
+    @Test public void yuriFolderValidationRequiresBothBaseArchivesAtFolderRoot() throws Exception {
         File install = temporary.newFolder("picked-game");
         Files.write(install.toPath().resolve("RA2.MIX"), new byte[] {1});
         assertEquals(java.util.Collections.singletonList("ra2md.mix"),
@@ -47,6 +47,15 @@ public class LauncherInstallationTest {
         Files.write(nestedOnly.toPath().resolve("ra2.mix"), new byte[] {3});
         assertEquals(java.util.Collections.singletonList("ra2md.mix"),
                 LauncherInstallation.Companion.missingRequiredArchives(nestedOnly));
+    }
+
+    @Test public void baseRa2ProfileRequiresOnlyTheBaseGameMasterArchive() throws Exception {
+        File install = temporary.newFolder("base-ra2");
+        Files.write(install.toPath().resolve("RA2.MIX"), new byte[] {1});
+        assertTrue(LauncherInstallation.Companion.missingRequiredArchives(install, "ra2").isEmpty());
+        assertTrue(LauncherInstallation.Companion.missingRequiredArchives(install, "yr", true).isEmpty());
+        assertEquals(java.util.Collections.singletonList("ra2md.mix"),
+                LauncherInstallation.Companion.missingRequiredArchives(install, "yr"));
     }
 
     @Test public void doesNotReadARa2DirFromAnotherConfigSection() throws Exception {

@@ -95,7 +95,11 @@ impl PathsConfig {
     /// the historical settings-root layout.
     pub fn user_data_root(&self) -> PathBuf {
         #[cfg(target_os = "android")]
-        if self.settings_dir.file_name().is_some_and(|name| name == "Config") {
+        if self
+            .settings_dir
+            .file_name()
+            .is_some_and(|name| name == "Config")
+        {
             if let Some(parent) = self.settings_dir.parent() {
                 return parent.to_path_buf();
             }
@@ -733,6 +737,7 @@ pub fn camera_zoom_limits_from_text(contents: &str) -> Result<(f32, f32)> {
 pub fn set_ini_profile(contents: &str, profile: crate::util::ini_roots::IniProfile) -> String {
     let name = match profile {
         crate::util::ini_roots::IniProfile::Yr => "yr",
+        crate::util::ini_roots::IniProfile::Ra2 => "ra2",
         crate::util::ini_roots::IniProfile::Mo => "mo",
         crate::util::ini_roots::IniProfile::Auto => "auto",
         crate::util::ini_roots::IniProfile::Custom => "custom",
@@ -1010,6 +1015,13 @@ mod tests {
         assert_eq!(
             GameConfig::parse(base).unwrap().ini.profile,
             crate::util::ini_roots::IniProfile::Yr
+        );
+        assert_eq!(
+            GameConfig::parse(&format!("{base}[ini]\nprofile='ra2'\n"))
+                .unwrap()
+                .ini
+                .profile,
+            crate::util::ini_roots::IniProfile::Ra2
         );
         for (name, expected) in [
             ("mo", crate::util::ini_roots::IniProfile::Mo),

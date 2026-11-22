@@ -49,6 +49,7 @@ use crate::util::config::GameConfig;
 pub mod app_bundle;
 pub(crate) mod audio_runtime;
 pub(crate) mod campaign_defeat;
+pub(crate) mod campaign_progress;
 pub(crate) mod campaign_victory;
 pub(crate) mod chrono_screen;
 mod cncnet;

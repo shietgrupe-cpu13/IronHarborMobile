@@ -333,6 +333,9 @@ pub struct AssetManager {
     /// VERA: the player's Ares setting this game opened with
     /// (`util::ares_launch::AresSetting`).
     ares_setting: crate::util::ares_launch::AresSetting,
+    /// The launch's archive/profile family. MO selects its Ares read path even
+    /// when a trimmed installation does not contain a standalone ares.mix.
+    archive_family: ArchiveFamily,
 }
 
 /// Test fixtures open the retail install once per test process and hand each
@@ -362,6 +365,7 @@ impl Clone for AssetManager {
             ra2_dir: self.ra2_dir.clone(),
             mod_dir: self.mod_dir.clone(),
             ares_setting: self.ares_setting,
+            archive_family: self.archive_family,
         }
     }
 }
@@ -458,6 +462,7 @@ pub const MASTER_ARCHIVES: [&str; 2] = ["ra2md.mix", "ra2.mix"];
 pub enum ArchiveFamily {
     #[default]
     Yr,
+    Ra2,
     Mo,
 }
 
@@ -466,6 +471,7 @@ impl ArchiveFamily {
     /// roots after mounting and so cannot choose the archives it probes.
     pub fn for_ini_profile(profile: crate::util::ini_roots::IniProfile) -> Self {
         match profile {
+            crate::util::ini_roots::IniProfile::Ra2 => Self::Ra2,
             crate::util::ini_roots::IniProfile::Mo => Self::Mo,
             _ => Self::Yr,
         }
@@ -474,6 +480,7 @@ impl ArchiveFamily {
     fn tag(self) -> &'static str {
         match self {
             Self::Yr => "md",
+            Self::Ra2 => "",
             Self::Mo => "mo",
         }
     }
@@ -555,18 +562,17 @@ impl AssetManager {
         self.mod_dir.is_some()
     }
 
-    /// Whether this game is an Ares game (`rules::ares_switch`): the player's
-    /// Ares setting is On, or, set to Auto, the selected mod mounted Ares's
-    /// `ares.mix`, its own copy or the installation's. With no mod selected,
-    /// Auto ignores it; Off never mounts it. Such a game's files take the
-    /// forms an Ares launch gives them: the appended audio bags and the
-    /// supplemental string tables.
+    /// Whether this game is an Ares game (`rules::ares_switch`). MO uses its
+    /// Ares extension set under Auto; other profiles infer it from a selected
+    /// mod's mounted `ares.mix`. On and Off remain explicit overrides.
     pub fn ships_ares(&self) -> bool {
         use crate::util::ares_launch::AresSetting;
         match self.ares_setting {
             AresSetting::On => true,
             AresSetting::Off => false,
-            AresSetting::Auto => self.ares_mix_mounted(),
+            AresSetting::Auto => {
+                self.archive_family == ArchiveFamily::Mo || self.ares_mix_mounted()
+            }
         }
     }
 
@@ -601,7 +607,8 @@ impl AssetManager {
         let mut loose_files = Self::open_loose_root(ra2_dir)?;
         // This opt-in root contributes only ares.mix and sits after the game
         // installation but before the selected mod in lookup priority.
-        if let Some(support_dir) = support_dir.filter(|path| crate::util::file_system::is_dir(path)) {
+        if let Some(support_dir) = support_dir.filter(|path| crate::util::file_system::is_dir(path))
+        {
             if let Some(archive) = Self::open_loose_root(support_dir)?.remove("ares.mix") {
                 loose_files.insert("ares.mix".to_owned(), archive);
             }
@@ -626,6 +633,7 @@ impl AssetManager {
             ra2_dir: ra2_dir.to_path_buf(),
             mod_dir: mod_dir.map(Path::to_path_buf),
             ares_setting: Default::default(),
+            archive_family: ArchiveFamily::Yr,
         })
     }
 
@@ -811,15 +819,15 @@ impl AssetManager {
         family: ArchiveFamily,
         mut policy: StartupArchivePolicy<'_>,
     ) -> Result<Self, AssetError> {
-        let support_dir = if mod_dir.is_some()
-            && ares_setting != crate::util::ares_launch::AresSetting::Off
-        {
-            ares_support_dir
-        } else {
-            None
-        };
+        let support_dir =
+            if mod_dir.is_some() && ares_setting != crate::util::ares_launch::AresSetting::Off {
+                ares_support_dir
+            } else {
+                None
+            };
         let mut manager = Self::from_roots_with_ares_support(ra2_dir, mod_dir, support_dir)?;
         manager.ares_setting = ares_setting;
+        manager.archive_family = family;
         let tag = family.tag();
 
         // WinMain registers the YR language archive before the RA2 fallback,
@@ -836,22 +844,27 @@ impl AssetManager {
         // with no mod selected too, and Off mounts none.
         let ares = match ares_setting {
             crate::util::ares_launch::AresSetting::Auto => {
-                manager.mod_selected() && manager.loose_path("ares.mix").is_some()
+                family == ArchiveFamily::Mo
+                    || (manager.mod_selected() && manager.loose_path("ares.mix").is_some())
             }
             crate::util::ares_launch::AresSetting::On => true,
             crate::util::ares_launch::AresSetting::Off => false,
         };
         if !ares {
-            manager.mount_language_archives(&mut policy)?;
+            manager.mount_language_archives(family, &mut policy)?;
         }
         manager.mount_base_mix_files(ares, family, &mut policy)?;
         if ares {
-            manager.mount_language_archives(&mut policy)?;
+            manager.mount_language_archives(family, &mut policy)?;
         }
 
         // AudioSystem__Init uses exactly one archive: the MD archive when
         // present, otherwise the base archive.
-        if !manager.mount_startup_archive("audiomd.mix", false, &mut policy)? {
+        if family != ArchiveFamily::Ra2
+            && manager.mount_startup_archive("audiomd.mix", false, &mut policy)?
+        {
+            // YR and MO prefer their expansion audio catalog.
+        } else {
             manager.mount_startup_archive("audio.mix", false, &mut policy)?;
         }
 
@@ -868,18 +881,28 @@ impl AssetManager {
         // Init_Mix_Files constructs only these named core archives. Optional
         // constructors are allowed to fail exactly where retail does not gate
         // startup on their result.
-        manager.mount_startup_archive("conqmd.mix", true, &mut policy)?;
-        manager.mount_startup_archive("genermd.mix", false, &mut policy)?;
+        if family != ArchiveFamily::Ra2 {
+            manager.mount_startup_archive("conqmd.mix", true, &mut policy)?;
+            manager.mount_startup_archive("genermd.mix", false, &mut policy)?;
+        } else {
+            manager.mount_startup_archive("gener.mix", false, &mut policy)?;
+        }
         manager.mount_startup_archive("generic.mix", false, &mut policy)?;
-        manager.mount_startup_archive("isogenmd.mix", false, &mut policy)?;
+        if family != ArchiveFamily::Ra2 {
+            manager.mount_startup_archive("isogenmd.mix", false, &mut policy)?;
+        }
         manager.mount_startup_archive("isogen.mix", false, &mut policy)?;
         manager.mount_startup_archive("conquer.mix", true, &mut policy)?;
-        manager.mount_startup_archive("cameomd.mix", true, &mut policy)?;
+        if family != ArchiveFamily::Ra2 {
+            manager.mount_startup_archive("cameomd.mix", true, &mut policy)?;
+        }
         manager.mount_startup_archive("cameo.mix", true, &mut policy)?;
 
         manager.mount_startup_map_media(media_mode, family, &mut policy)?;
         manager.mount_reported_archive(&format!("multi{tag}.mix"), &mut policy)?;
-        manager.mount_startup_archive(&format!("theme{tag}.mix"), false, &mut policy)?;
+        if family != ArchiveFamily::Ra2 {
+            manager.mount_startup_archive(&format!("theme{tag}.mix"), false, &mut policy)?;
+        }
         // VERA presentation extension: native YR mounts THEME.MIX only when
         // THEMEMD.MIX is absent. Keep the expansion THEME first, then make
         // original RA2 music available to the shared Theme catalog without
@@ -1206,8 +1229,13 @@ impl AssetManager {
     /// `Shell_LoadNeutralMixArchives @ 0x00534E50` constructs `NTRLMD.MIX`
     /// first and returns immediately when it is unavailable, then constructs
     /// `NEUTRAL.MIX`. Their registration order makes MD duplicates win retail's
-    /// first-match archive scan.
+    /// first-match archive scan. The base RA2 profile has no NTRLMD archive and
+    /// loads NEUTRAL.MIX directly; requiring the expansion archive there leaves
+    /// RA2's campaign/menu art inaccessible.
     pub fn register_neutral_archives(&mut self) -> Result<bool, AssetError> {
+        if self.archive_family == ArchiveFamily::Ra2 {
+            return self.mount_named_archive("neutral.mix", false);
+        }
         if !self.mount_named_archive("ntrlmd.mix", false)? {
             return Ok(false);
         }
@@ -1854,9 +1882,12 @@ impl AssetManager {
     /// WinMain's LANGMD.MIX, then the RA2 LANGUAGE.MIX fallback.
     fn mount_language_archives(
         &mut self,
+        family: ArchiveFamily,
         policy: &mut StartupArchivePolicy<'_>,
     ) -> Result<(), AssetError> {
-        self.mount_startup_archive("langmd.mix", false, policy)?;
+        if family != ArchiveFamily::Ra2 {
+            self.mount_startup_archive("langmd.mix", false, policy)?;
+        }
         self.mount_startup_archive("language.mix", false, policy)?;
         Ok(())
     }
@@ -1881,11 +1912,18 @@ impl AssetManager {
         if ares {
             self.mount_startup_archive("ares.mix", false, policy)?;
         }
-        for name in MASTER_ARCHIVES {
-            self.mount_startup_archive(name, true, policy)?;
-        }
-        for name in ["cachemd.mix", "cache.mix", "localmd.mix", "local.mix"] {
-            self.mount_startup_archive(name, true, policy)?;
+        if family == ArchiveFamily::Ra2 {
+            self.mount_startup_archive("ra2.mix", true, policy)?;
+            for name in ["cache.mix", "local.mix"] {
+                self.mount_startup_archive(name, true, policy)?;
+            }
+        } else {
+            for name in MASTER_ARCHIVES {
+                self.mount_startup_archive(name, true, policy)?;
+            }
+            for name in ["cachemd.mix", "cache.mix", "localmd.mix", "local.mix"] {
+                self.mount_startup_archive(name, true, policy)?;
+            }
         }
         Ok(())
     }
@@ -2925,6 +2963,7 @@ mod tests {
             ra2_dir: PathBuf::new(),
             mod_dir: None,
             ares_setting: Default::default(),
+            archive_family: ArchiveFamily::Yr,
         };
         manager.rebuild_indexes();
 
@@ -3010,6 +3049,7 @@ mod tests {
             ra2_dir: PathBuf::new(),
             mod_dir: None,
             ares_setting: Default::default(),
+            archive_family: ArchiveFamily::Yr,
         };
         manager.rebuild_indexes();
         manager
@@ -3085,6 +3125,7 @@ mod tests {
             ra2_dir: PathBuf::new(),
             mod_dir: None,
             ares_setting: Default::default(),
+            archive_family: ArchiveFamily::Yr,
         };
         manager.rebuild_indexes();
 
@@ -3128,6 +3169,7 @@ mod tests {
             ra2_dir: PathBuf::new(),
             mod_dir: None,
             ares_setting: Default::default(),
+            archive_family: ArchiveFamily::Yr,
         };
         manager.rebuild_indexes();
         manager.catalog_named_nested_archives();
@@ -3169,6 +3211,7 @@ mod tests {
             ra2_dir: PathBuf::new(),
             mod_dir: None,
             ares_setting: Default::default(),
+            archive_family: ArchiveFamily::Yr,
         };
         manager.rebuild_indexes();
 
@@ -3211,6 +3254,7 @@ mod tests {
             ra2_dir: PathBuf::new(),
             mod_dir: None,
             ares_setting: Default::default(),
+            archive_family: ArchiveFamily::Yr,
         };
         manager.rebuild_indexes();
 
@@ -3220,6 +3264,43 @@ mod tests {
                 .expect("missing MD archive is the native optional path")
         );
         assert!(manager.load_file_from_mix("BASE-ONLY.SHP").is_none());
+    }
+
+    #[test]
+    fn ra2_neutral_registration_does_not_require_the_yr_archive() {
+        let mut manager = AssetManager {
+            archives: Vec::new(),
+            archive_catalog: vec![NamedArchive {
+                name: "ra2.mix -> neutral.mix".to_string(),
+                archive: make_new_format_mix("sdbtnanm.shp", b"ra2-shell-art"),
+            }],
+            lookup_index: HashMap::new(),
+            mix_file_cache: Mutex::new(HashMap::new()),
+            loose_files: HashMap::new(),
+            audio_pairs: Vec::new(),
+            ini_roots: Default::default(),
+            active_theater: None,
+            active_theater_archives: Vec::new(),
+            active_sidebar_archives: Vec::new(),
+            ra2_dir: PathBuf::new(),
+            mod_dir: None,
+            ares_setting: Default::default(),
+            archive_family: ArchiveFamily::Ra2,
+        };
+        manager.rebuild_indexes();
+
+        assert!(manager
+            .register_neutral_archives()
+            .expect("base RA2 neutral archive is available"));
+        assert_eq!(
+            manager.loaded_archive_names(),
+            ["ra2.mix -> neutral.mix".to_string()]
+        );
+        let loaded = manager
+            .load_file_from_mix("SDBTNANM.SHP")
+            .expect("RA2 shell art must be visible after registration");
+        assert_eq!(&*loaded.bytes, b"ra2-shell-art");
+        assert_eq!(loaded.source_archive.as_ref(), "ra2.mix -> neutral.mix");
     }
 
     #[test]
@@ -3248,6 +3329,7 @@ mod tests {
             ra2_dir: PathBuf::new(),
             mod_dir: None,
             ares_setting: Default::default(),
+            archive_family: ArchiveFamily::Yr,
         };
         manager.rebuild_indexes();
 
@@ -3306,6 +3388,7 @@ mod tests {
             ra2_dir: PathBuf::new(),
             mod_dir: None,
             ares_setting: Default::default(),
+            archive_family: ArchiveFamily::Yr,
         };
         manager.rebuild_indexes();
 

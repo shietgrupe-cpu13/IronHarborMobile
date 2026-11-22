@@ -277,6 +277,20 @@ impl App {
                     .map(str::to_owned)
             }),
         );
+        if let (Some(config), Some(mission)) = (
+            state.platform.game_config.as_ref(),
+            sim.session().campaign_mission_counter(),
+        ) {
+            if let Err(error) = crate::app::campaign_progress::record_completed_mission(
+                &config.paths.user_data_root(),
+                config.ini.profile,
+                campaign.campaign().id(),
+                mission,
+                matches!(&branch, VictoryBranch::Credits),
+            ) {
+                log::warn!("Could not update launcher campaign progress: {error:#}");
+            }
+        }
         let then = match branch {
             VictoryBranch::Shell => VictoryEnd::Shell,
             VictoryBranch::Credits => VictoryEnd::Credits,

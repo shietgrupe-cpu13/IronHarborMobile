@@ -8,6 +8,7 @@ import java.nio.file.StandardCopyOption
 import java.util.Locale
 
 internal enum class LauncherIniProfile(val configValue: String, val title: String) {
+    RA2("ra2", "Red Alert 2"),
     YR("yr", "Yuri's Revenge"),
     MO("mo", "Mental Omega"),
     AUTO("auto", "Auto-detect INI roots"),

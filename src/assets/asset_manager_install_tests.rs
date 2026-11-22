@@ -1,4 +1,4 @@
-use super::test_support::{audio_test_install, make_new_format_mix_bytes};
+use super::test_support::{TestDirectory, audio_test_install, make_new_format_mix_bytes};
 use super::*;
 
 #[test]
@@ -68,6 +68,57 @@ fn startup_continues_without_map_and_movie_media() {
             ("movies03.mix", false)
         ]
     );
+}
+
+#[test]
+fn ra2_profile_mounts_base_game_archives_without_yr_master_archives() {
+    let directory = TestDirectory::new("ra2-profile-archive-family");
+    for name in [
+        "ra2.mix",
+        "cache.mix",
+        "local.mix",
+        "conquer.mix",
+        "cameo.mix",
+    ] {
+        directory.write_mix(name, "fixture.bin", b"base RA2");
+    }
+    for name in ["rules.ini", "art.ini", "ai.ini"] {
+        std::fs::write(directory.path().join(name), b"[LauncherProbe]\nValue=RA2\n").unwrap();
+    }
+
+    let roots = AssetManager::inspect_launch_ini_roots(
+        directory.path(),
+        None,
+        MediaArchiveMode::STOCK_DIGITAL,
+        crate::util::ares_launch::AresSetting::Off,
+        &crate::util::ini_roots::IniRootConfig {
+            profile: crate::util::ini_roots::IniProfile::Ra2,
+            ..Default::default()
+        },
+    )
+    .expect("base RA2 archive stack and INI roots validate");
+
+    assert_eq!(roots.profile(), crate::util::ini_roots::IniProfile::Ra2);
+    assert_eq!(roots.battle(), "BATTLE.INI");
+    assert_eq!(
+        crate::assets::asset_manager::ArchiveFamily::for_ini_profile(roots.profile()),
+        crate::assets::asset_manager::ArchiveFamily::Ra2
+    );
+
+    let manager = AssetManager::with_mod_and_ares_support(
+        directory.path(),
+        None,
+        None,
+        MediaArchiveMode::STOCK_DIGITAL,
+        crate::util::ares_launch::AresSetting::Off,
+        crate::assets::asset_manager::ArchiveFamily::Ra2,
+    )
+    .expect("base RA2 archives mount");
+    assert!(manager.archive("ra2.mix").is_some());
+    assert!(manager.archive("ra2md.mix").is_none());
+    assert!(manager.archive("cache.mix").is_some());
+    assert!(manager.archive("local.mix").is_some());
+    assert!(manager.archive("language.mix").is_none());
 }
 
 #[test]
@@ -286,4 +337,31 @@ fn mo_family_mounts_spawner_renamed_archives_and_their_ini_roots() {
         assert!(assets.archive(name).is_none(), "{name}");
     }
     assert_eq!(assets.ini_roots().rules(), "rulesmo.ini");
+}
+
+#[test]
+fn mo_profile_auto_uses_ares_semantics_without_requiring_ares_mix() {
+    let directory = audio_test_install("mo-ares-auto");
+    let family = ArchiveFamily::Mo;
+    let automatic = AssetManager::with_mod_and_ares(
+        directory.path(),
+        None,
+        MediaArchiveMode::STOCK_DIGITAL,
+        crate::util::ares_launch::AresSetting::Auto,
+        family,
+    )
+    .unwrap();
+    assert!(!automatic.ares_mix_mounted());
+    assert!(automatic.ships_ares());
+
+    let disabled = AssetManager::with_mod_and_ares(
+        directory.path(),
+        None,
+        MediaArchiveMode::STOCK_DIGITAL,
+        crate::util::ares_launch::AresSetting::Off,
+        family,
+    )
+    .unwrap();
+    assert!(!disabled.ares_mix_mounted());
+    assert!(!disabled.ships_ares());
 }

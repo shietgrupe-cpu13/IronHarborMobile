@@ -22,6 +22,7 @@
 pub enum IniProfile {
     #[default]
     Yr,
+    Ra2,
     Mo,
     Auto,
     Custom,
@@ -33,11 +34,12 @@ impl std::str::FromStr for IniProfile {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "yr" => Ok(Self::Yr),
+            "ra2" => Ok(Self::Ra2),
             "mo" => Ok(Self::Mo),
             "auto" => Ok(Self::Auto),
             "custom" => Ok(Self::Custom),
             _ => Err(format!(
-                "unknown INI profile '{value}'; use yr, mo, auto or custom"
+                "unknown INI profile '{value}'; use ra2, yr, mo, auto or custom"
             )),
         }
     }
@@ -100,6 +102,18 @@ impl IniRoots {
                     "MISSIONMD.INI",
                     "MAPSELMD.INI",
                 ),
+                IniProfile::Ra2 => (
+                    "rules.ini",
+                    "art.ini",
+                    "ai.ini",
+                    "sound.ini",
+                    "eva.ini",
+                    "",
+                    "theme.ini",
+                    "BATTLE.INI",
+                    "MISSION.INI",
+                    "MAPSEL.INI",
+                ),
                 IniProfile::Mo => (
                     "rulesmo.ini",
                     "artmo.ini",
@@ -159,10 +173,9 @@ impl IniRoots {
         format!("{control_name}{}.ini", self.theater_suffix)
     }
 
-    // The four names below are gamemd's literals under YR and custom. Under
-    // MO they take the spelling MO's spawner patches over those literals
-    // (contributor-reported from the spawner's patch table, not native
-    // evidence).
+    // The names below follow each game's native profile. Under MO they take
+    // the spelling MO's spawner patches over those literals (contributor-
+    // reported from the spawner's patch table, not native evidence).
 
     /// The Theme catalog: `THEMEMD.INI` (`0x00825D94`), pushed by Init_Game at
     /// `0x0052C8B9` for `ThemeClass::ReadINI` (`0x00720590`); MO `thememo.ini`.
@@ -279,7 +292,7 @@ impl IniRootConfig {
                 (0, 3) => mo,
                 _ => {
                     return Err(format!(
-                        "automatic INI selection is ambiguous or incomplete (YR {yr_count}/3, MO {mo_count}/3); explicitly select yr/mo or a complete custom profile; no files were mixed"
+                        "automatic INI selection is ambiguous or incomplete (YR {yr_count}/3, MO {mo_count}/3); explicitly select yr/mo or a complete custom profile; RA2 requires an explicit profile; no files were mixed"
                     ));
                 }
             };
@@ -288,6 +301,7 @@ impl IniRootConfig {
         }
         let mut selected = match self.profile {
             IniProfile::Yr => IniRoots::preset(IniProfile::Yr),
+            IniProfile::Ra2 => IniRoots::preset(IniProfile::Ra2),
             IniProfile::Mo => IniRoots::preset(IniProfile::Mo),
             IniProfile::Custom => {
                 // Start from the YR preset so the optional audio roots and the
@@ -423,6 +437,38 @@ mod tests {
                 .unwrap_err()
                 .contains("aimo.ini")
         );
+    }
+
+    #[test]
+    fn ini_roots_explicit_ra2_selects_base_campaign_and_theater_names() {
+        let roots = IniRootConfig {
+            profile: IniProfile::Ra2,
+            ..Default::default()
+        }
+        .resolve_strict(|name| matches!(name, "rules.ini" | "art.ini" | "ai.ini"))
+        .expect("base RA2 roots are complete");
+        assert_eq!(roots.profile(), IniProfile::Ra2);
+        assert_eq!(roots.names(), ["rules.ini", "art.ini", "ai.ini"]);
+        assert_eq!(
+            (roots.sound(), roots.eva(), roots.theater_ini("snow")),
+            ("sound.ini", "eva.ini", "snow.ini".to_owned())
+        );
+        assert_eq!(
+            (
+                roots.theme(),
+                roots.battle(),
+                roots.mission(),
+                roots.mapsel()
+            ),
+            ("theme.ini", "BATTLE.INI", "MISSION.INI", "MAPSEL.INI")
+        );
+        let missing = IniRootConfig {
+            profile: IniProfile::Ra2,
+            ..Default::default()
+        }
+        .resolve_strict(|name| name != "ai.ini")
+        .expect_err("an incomplete RA2 profile must not fall back to YR");
+        assert!(missing.contains("ai.ini"));
     }
 
     #[test]

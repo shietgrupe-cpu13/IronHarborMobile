@@ -53,6 +53,7 @@ class LauncherActivity : Activity() {
         SETTINGS("Settings", R.drawable.ic_ih_settings),
         TOUCH("Touch", R.drawable.ic_ih_touch),
         MODS("Mods", R.drawable.ic_ih_mods),
+        CAMPAIGNS("Campaigns", R.drawable.ic_ih_play),
         MAPS("Maps", R.drawable.ic_ih_maps),
         DIAGNOSTICS("Diagnostics", R.drawable.ic_ih_diagnostics),
     }
@@ -370,6 +371,7 @@ class LauncherActivity : Activity() {
             Page.SETTINGS -> renderSettings()
             Page.TOUCH -> renderTouch()
             Page.MODS -> renderMods()
+            Page.CAMPAIGNS -> renderCampaigns()
             Page.MAPS -> renderMaps()
             Page.DIAGNOSTICS -> renderDiagnostics()
         }
@@ -464,13 +466,15 @@ class LauncherActivity : Activity() {
         val ready = installation.ready
         stateCard.addView(kicker(if (ready) "INSTALLATION READY" else "SETUP REQUIRED", if (ready) R.color.launcher_accent else R.color.launcher_warning))
         stateCard.addView(text(
-            if (ready) "Yuri's Revenge files detected" else "Add your own game files",
+            if (ready && installation.iniProfile == "ra2") "Red Alert 2 files detected"
+            else if (ready) "Yuri's Revenge files detected" else "Add your own game files",
             19,
             R.color.launcher_text,
             bold = true,
         ))
         stateCard.addView(text(
             if (ready) installation.configuredDirectory?.absolutePath.orEmpty()
+            else if (installation.iniProfile == "ra2") "The launcher checks the configured folder for ra2.mix."
             else "The launcher checks the engine's configured folder for ra2.mix and ra2md.mix.",
             12,
             R.color.launcher_muted,
@@ -505,6 +509,11 @@ class LauncherActivity : Activity() {
             renderPage()
         }, margin(bottom = 17))
 
+        pageBody.addView(actionButton("CAMPAIGNS   /   RA2 + YURI'S REVENGE", primary = false) {
+            page = Page.CAMPAIGNS
+            renderPage()
+        }, margin(bottom = 14))
+
         val engine = card()
         engine.addView(kicker("ENGINE STATUS"))
         infoRow(engine, "Engine", "VERA20K ${appVersion()}")
@@ -516,6 +525,45 @@ class LauncherActivity : Activity() {
             10,
             R.color.launcher_muted,
         ), margin(top = 14))
+    }
+
+    private fun renderCampaigns() {
+        pageBody.addView(kicker("STOCK CAMPAIGN SELECTOR"))
+        pageBody.addView(text("Campaigns", 30, R.color.launcher_text, bold = true))
+        pageBody.addView(text(
+            "Choose the game campaign set. The original VERA20K campaign screen then lets you choose Allied or Soviet and keeps the game's mission routing and save behavior.",
+            14,
+            R.color.launcher_muted,
+        ), margin(bottom = 15))
+
+        val progress = runCatching { LauncherCampaignProgress.read(engineDataDirectory()) }.getOrDefault(emptyMap())
+        listOf(
+            Triple("Red Alert 2", "ra2", LauncherIniProfile.RA2),
+            Triple("Yuri's Revenge", "yr", LauncherIniProfile.YR),
+        ).forEach { (title, key, profile) ->
+            val group = card()
+            group.addView(kicker(if (key == "ra2") "BASE GAME CAMPAIGNS" else "EXPANSION CAMPAIGNS"))
+            group.addView(text(title, 20, R.color.launcher_text, bold = true))
+            group.addView(text("Allied  /  ${LauncherCampaignProgress.label(progress["$key.all1"])}", 13, R.color.launcher_muted), margin(top = 7))
+            group.addView(text("Soviet  /  ${LauncherCampaignProgress.label(progress["$key.sov1"])}", 13, R.color.launcher_muted), margin(top = 3, bottom = 9))
+            group.addView(actionButton("OPEN ${title.uppercase(Locale.ROOT)} CAMPAIGN SELECTION", primary = true) {
+                try {
+                    val data = engineDataDirectory()
+                    val contents = nativeConfigForSelection("", profile.configValue, data.absolutePath)
+                    LauncherConfigPublisher.publish(data, contents)
+                    modCatalog = readModCatalog(data)
+                    launchGame(openCampaignSelection = true)
+                } catch (error: Exception) {
+                    Toast.makeText(this, "Could not select $title: ${error.message}", Toast.LENGTH_LONG).show()
+                }
+            })
+            pageBody.addView(group, margin(bottom = 12))
+        }
+        pageBody.addView(text(
+            "Progress is recorded only after the engine reports a mission victory. Existing progress from older builds is not reconstructed. Campaign map selection remains the stock game's behavior.",
+            12,
+            R.color.launcher_muted,
+        ), margin(top = 2))
     }
 
     private fun renderFiles() {
@@ -608,7 +656,7 @@ class LauncherActivity : Activity() {
 
         val guide = card()
         guide.addView(kicker("WHAT THE CHECKER USES"))
-        infoRow(guide, "Required", "ra2.mix and ra2md.mix")
+        infoRow(guide, "Required", if (modCatalog.profile == LauncherIniProfile.RA2) "ra2.mix" else "ra2.mix and ra2md.mix")
         infoRow(guide, "Storage", "Original game folder is read in place; no game copy is made")
         infoRow(guide, "Game data", "Not bundled with this app")
         pageBody.addView(guide)
@@ -1184,7 +1232,7 @@ class LauncherActivity : Activity() {
         ), margin(top = 8))
         if (!installation.ready) {
             current.addView(text(
-                "Import a valid Yuri's Revenge installation before changing the active mod or profile.",
+                "Locate and validate a game installation before changing the active mod or INI profile.",
                 13,
                 R.color.launcher_warning,
             ), margin(top = 8))
@@ -1214,7 +1262,7 @@ class LauncherActivity : Activity() {
 
         val profiles = card()
         profiles.addView(kicker("SUPPORTED INI ROOT PROFILES"))
-        listOf(LauncherIniProfile.YR, LauncherIniProfile.MO, LauncherIniProfile.AUTO).forEach { profile ->
+        listOf(LauncherIniProfile.RA2, LauncherIniProfile.YR, LauncherIniProfile.MO, LauncherIniProfile.AUTO).forEach { profile ->
             profiles.addView(actionButton(
                 if (modCatalog.profile == profile) "  ${profile.title.uppercase()}   /   SELECTED" else profile.title.uppercase(),
                 primary = modCatalog.profile == profile,
@@ -1800,7 +1848,13 @@ class LauncherActivity : Activity() {
         val current = installation.configuredDirectory?.takeIf { it.isDirectory } ?: root
         LocalFolderPicker.show(
             this, root, current, "SELECT YURI'S REVENGE GAME FOLDER",
-            canUse = { LauncherInstallation.missingRequiredArchives(it).isEmpty() },
+            canUse = {
+                LauncherInstallation.missingRequiredArchives(
+                    it,
+                    modCatalog.profile.configValue,
+                    allowBaseRa2Detection = true,
+                ).isEmpty()
+            },
             onSelected = ::importGameDirectory,
         )
     }
@@ -1921,7 +1975,11 @@ class LauncherActivity : Activity() {
         renderPage()
         Thread({
             val result = try {
-                val missing = LauncherInstallation.missingRequiredArchives(gameDirectory)
+                val missing = LauncherInstallation.missingRequiredArchives(
+                    gameDirectory,
+                    modCatalog.profile.configValue,
+                    allowBaseRa2Detection = true,
+                )
                 if (missing.isNotEmpty()) throw IOException("Selected folder is missing ${missing.joinToString()}")
                 val contents = nativeConfigForImport(gameDirectory.absolutePath, dataDirectory.absolutePath)
                 LauncherConfigPublisher.publish(dataDirectory, contents)
@@ -1940,7 +1998,7 @@ class LauncherActivity : Activity() {
         }, "vera20k-direct-game-selection").start()
     }
 
-    private fun launchGame() {
+    private fun launchGame(openCampaignSelection: Boolean = false) {
         if (validatingLaunch || !launchGate.begin()) return
         validatingLaunch = true
         renderPage()
@@ -2005,6 +2063,7 @@ class LauncherActivity : Activity() {
                             )
                             startActivity(Intent(this, VeraActivity::class.java).apply {
                                 putExtra(ImmersiveFullscreenSettings.INTENT_EXTRA, immersiveFullscreen)
+                                putExtra(LauncherCampaignProgress.INTENT_EXTRA_OPEN_SELECTION, openCampaignSelection)
                             })
                         } catch (error: Exception) {
                             gameWasLaunched = false
