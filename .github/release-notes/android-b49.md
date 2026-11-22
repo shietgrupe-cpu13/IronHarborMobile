@@ -12,7 +12,7 @@ Unofficial Android ARM64 fork of VERA20K. The game files are not included.
 ## Not fixed / still needs testing
 
 - Mental Omega menu BGM remains unresolved. VERA reads WAV/AUD themes; its inspected MO folder has `chaoticimpulse.wma`, an XNA client resource. Android audio initialization succeeded, but this WMA track is not supported by the current theme loader.
-- No connected Android device was available for this build. Mod-map listing and in-game selection need device gameplay testing.
+- The B49 release installed on the Android 16 POCO (2412DPC0AG), and the launcher rendered. A post-release navigation tap probe unexpectedly opened `VeraActivity`; Android then reported an input-dispatch timeout for a DOWN event. The trace does not establish whether the map-tab tap caused the game launch, so Maps-page behavior and gameplay remain unverified. The ANR trace was saved with the local build diagnostics.
 
 ## What's verified
 
