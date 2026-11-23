@@ -44,6 +44,7 @@ pub(crate) mod superweapon_cameo;
 #[cfg(feature = "phobos")]
 pub(crate) mod sw_sidebar;
 pub(crate) mod taunt;
+pub(crate) mod power_mode;
 pub(crate) mod tooltips;
 pub(crate) mod transport_orders;
 

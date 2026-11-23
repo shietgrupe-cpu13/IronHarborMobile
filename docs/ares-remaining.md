@@ -140,8 +140,12 @@ Resurrection's nine pairs) have no such pair.
   (`[Colors] Count` above 8). Ares' defaults match the engine. See
   [ares-sidebar-ui-hooks.md](ares-sidebar-ui-hooks.md).
 - The CSF loader hooks (Misc/CSFLoader.cpp) are deferred: CSF loading is handled separately.
-- DLL plumbing (Checksum, Savegame, CopyProtection, Debug, Swizzle, Ares.cpp), most
-  of which does not apply to the engine.
+- Ares' FPSCounter and MapSnapshot keyboard commands (hook `0x533058`); TogglePower
+  and the debug commands are in [ares-commands.md](ares-commands.md).
+- The front-end hooks among the untouched ones below: the skirmish MultiEngineer
+  option and the uimd.ini settings. DLL plumbing (checksums, save stream,
+  copy protection, log, swizzling, start and command line) is in
+  [ares-skipped-hooks.md](ares-skipped-hooks.md).
 - Overlay radar colours (OverlayTypeClass_GetRadarColor, `1006ACC0`, hook `0x5FED00`):
   Ares returns the OverlayType's `RadarColor` field where VERA reads the SHP frame
   header colour for the map preview. The rest of `Misc/RMG.cpp` is in
@@ -255,7 +259,6 @@ hook script above skips this page). Most are DLL plumbing.
 | `0x6CF350` | `1006C440` | SwizzleManagerClass_ConvertNodes | `Misc/Swizzle.cpp` |
 | `0x6A9A43` | `1005E300` | StripClass_Draw_DrawPCX | `Misc/Cameos.cpp` |
 | `0x712045` | `1005E480` | TechnoTypeClass_GetCameo | `Misc/Cameos.cpp` |
-| `0x533058` | `10002A80` | CommandClassCallback_Register | `Ares.Commands.cpp` |
 | `0x6BC0CD` | `10005820` | LoadRA2MD | `Ares.GlobalControls.cpp` |
 | `0x5FACDF` | `10006030` | Options_LoadFromINI | `Ares.UISettings.cpp` |
 | `0x4C8FE0` | `100641A0` | Exception_Handler | `Misc/Exception.cpp` |
