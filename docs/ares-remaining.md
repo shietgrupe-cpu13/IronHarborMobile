@@ -21,8 +21,8 @@ on purpose are in [ares-skipped-hooks.md](ares-skipped-hooks.md).
   [ares-attach-effect.md](ares-attach-effect.md)). `ares-src/report/ini_coverage.tsv` is
   not exhaustive; use the key scan under Tools.
 - Hooks: Ares 3.0 installs 1448 (`report/hooks.tsv` also lists 234 0.A hooks that 3.0
-  removed). The engine source cites 1044; the chain docs give 357 more a disposition
-  (ported elsewhere, equivalent, not applicable, skipped or residual); 47 are
+  removed). The engine source cites 1045; the chain docs give 358 more a disposition
+  (ported elsewhere, equivalent, not applicable, skipped or residual); 46 are
   untouched, listed at the end. A residual disposition is still a gap: every
   residual in the chain docs is gathered on this page, the gameplay ones under
   [Smaller gameplay residuals](#smaller-gameplay-residuals).
@@ -121,8 +121,7 @@ Resurrection's nine pairs) have no such pair.
 
 ## Presentation and UI not ported
 
-- Unit art still needs the mixed indexed-gun draws above and the ore-gather anim
-  under EMP. A `Turret=yes` NoSpawnAlt unit's turret over its WO body (`0x73B6E3`) is a
+- Unit art still needs the mixed indexed-gun draws above. A `Turret=yes` NoSpawnAlt unit's turret over its WO body (`0x73B6E3`) is a
   residual in [ares-techno-hooks.md](ares-techno-hooks.md). PCX cameos are ported
   ([ares-pcx-cameos.md](ares-pcx-cameos.md)), but that doc cites neither of their hooks
   (`0x6A9A43`, `0x712045`), so both stay in the list.
@@ -218,7 +217,7 @@ Retail INIs for retail tests: run the repo's `extract-ini` into `ini/` and set `
 
 ## Untouched hooks
 
-These 47 Ares 3.0 hooks have no citation in the engine or in another chain doc (the
+These 46 Ares 3.0 hooks have no citation in the engine or in another chain doc (the
 hook script above skips this page). Most are DLL plumbing.
 
 | Hook | Ares.dll | Name | Source |
@@ -267,6 +266,5 @@ hook script above skips this page). Most are DLL plumbing.
 | `0x533058` | `10002A80` | CommandClassCallback_Register | `Ares.Commands.cpp` |
 | `0x6BC0CD` | `10005820` | LoadRA2MD | `Ares.GlobalControls.cpp` |
 | `0x5FACDF` | `10006030` | Options_LoadFromINI | `Ares.UISettings.cpp` |
-| `0x73D219` | `10053E50` | UnitClass_Draw_OreGatherAnim | `Ext/WarheadType/Hooks.EMP.cpp` |
 | `0x4C8FE0` | `100641A0` | Exception_Handler | `Misc/Exception.cpp` |
 | `0x64CCBF` | `1006A280` | DoList_ReplaceReconMessage | `Misc/Network.cpp` |
