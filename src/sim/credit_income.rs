@@ -370,6 +370,32 @@ pub(crate) fn produce_cash_on_grand_opening(
     }
 }
 
+/// Ares `BuildingClass_Put_ProduceCash @ 10014490` (hook `0x004409F4`):
+/// an upgrade put with a nonzero `ProduceCashDelay` starts its own timer,
+/// CashUpgradeTimers[UpgradeLevel - 1], with a stock Start (no extra frame).
+/// A zero-capacity host leaves UpgradeLevel at 0, so Ares writes the
+/// BuildingExt bytes before that array (`+0x48`/`+0x50`); VERA starts
+/// nothing there.
+pub(crate) fn ares_produce_cash_on_put(
+    session: &ScenarioSession,
+    substrate: &mut ObjectSubstrate,
+    host_id: u64,
+    delay: i32,
+) {
+    if delay == 0 {
+        return;
+    }
+    let Some(host) = substrate.entities.get_mut(host_id) else {
+        return;
+    };
+    let Ok(slot) = usize::try_from(host.building_upgrades().count()) else {
+        return;
+    };
+    if (1..=host.seldom.ares.cash_upgrade_timers.len()).contains(&slot) {
+        *ares_cash_timer_mut(host, slot) = CdTimer::started(session.binary_frame() as i32, delay);
+    }
+}
+
 /// The ProduceCash block of `BuildingClass::Update`: the stock block
 /// ([`stock_produce_cash_step`]), or in a game read the Ares way
 /// (`RuleSet::ares_form`) the hook that replaces it
@@ -1674,6 +1700,38 @@ mod tests {
         // The `-1` sentinel reads the raw duration; only duration 1 fires.
         assert!(!produce_cash_fires(CdTimer::from_raw(-1, 0), 0));
         assert!(produce_cash_fires(CdTimer::from_raw(-1, 1), 123));
+    }
+
+    /// Ares `BuildingClass::Put @ 0x004409F4 -> 0x10014490` starts an
+    /// installed upgrade's timer at Put with the configured delay, before the
+    /// Update hook's `delay + 1` cadence applies.
+    #[test]
+    fn ares_upgrade_put_starts_its_cash_timer_without_update_extra_frame() {
+        let rules = rules();
+        let mut sim = Simulation::new();
+        let id = sim
+            .spawn_object_at_height("CAOILD", "A", 10, 10, 0, 0, &rules)
+            .expect("cash building spawns");
+        let upgrade = sim.interner.intern("UPGRADE");
+        sim.substrate
+            .entities
+            .get_mut(id)
+            .unwrap()
+            .set_building_upgrades_for_test(1, [Some(upgrade), None, None]);
+        sim.session.set_binary_frame_for_test(41);
+
+        ares_produce_cash_on_put(&sim.session, &mut sim.substrate, id, 10);
+
+        assert_eq!(
+            sim.substrate
+                .entities
+                .get(id)
+                .unwrap()
+                .seldom
+                .ares
+                .cash_upgrade_timers[0],
+            CdTimer::started(41, 10)
+        );
     }
 
     /// Ares BuildingClass_Update_ProduceCash (100146E0, hook 0x43FD2C): the
