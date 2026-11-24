@@ -221,7 +221,7 @@ Retail INIs for retail tests: run the repo's `extract-ini` into `ini/` and set `
 
 ## Untouched hooks
 
-These 38 Ares 3.0 hooks have no citation in the engine or in another chain doc (the
+These 37 Ares 3.0 hooks have no citation in the engine or in another chain doc (the
 hook script above skips this page). Most are DLL plumbing.
 
 | Hook | Ares.dll | Name | Source |

@@ -468,6 +468,22 @@ mod tests {
         assert!(!state.power_mode_on && !state.repair_mode_on);
     }
 
+    /// `DisplayClass::Init_Clear @ 0x004A88C0` clears Power with Repair and
+    /// Sell for a new scenario, but does not clear the separate Beacon byte.
+    #[test]
+    fn new_scenario_clears_power_mode_but_preserves_beacon_mode() {
+        let mut state = SidebarGadgetState::new();
+        state.repair_mode_on = true;
+        state.sell_mode_on = true;
+        state.power_mode_on = true;
+        state.place_beacon_mode_on = true;
+
+        state.clear_for_new_scenario();
+
+        assert!(!state.repair_mode_on && !state.sell_mode_on && !state.power_mode_on);
+        assert!(state.place_beacon_mode_on);
+    }
+
     #[test]
     fn start_from_idle_initialises_all_fields() {
         let mut g = GadgetFlash::default();
