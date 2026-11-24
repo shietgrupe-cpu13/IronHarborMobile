@@ -19,8 +19,8 @@ dependencies {
 val ironHarborVersionName = providers.gradleProperty("ironHarborVersionName").orElse("0.4.1").get()
 // versionCode is a monotonically rising integer that Android compares for
 // upgrades; bump it by hand for every published build.
-val veraVersionCode = 265
-val veraBuildLabel = "B58"
+val veraVersionCode = 266
+val veraBuildLabel = "B59"
 val sideBySideDebug = providers.gradleProperty("ironHarborSideBySideDebug").orNull == "true"
 val releaseStoreFile = System.getenv("ANDROID_RELEASE_STORE_FILE")
 val releaseStorePassword = System.getenv("ANDROID_RELEASE_STORE_PASSWORD")
