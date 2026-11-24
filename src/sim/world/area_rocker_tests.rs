@@ -16,10 +16,9 @@ fn ordinary_frame(sim: &mut Simulation, rules: &RuleSet) -> Vec<super::SimFireEv
         .advance_app_frame(
             &commands,
             rules,
-            None,
             33,
             TickLane::Ordinary,
-            FrameEffects::default(),
+            &mut FrameEffects::default(),
         )
         .expect("ordinary retail Kirov frame");
     assert!(output.tick.frame_committed);
@@ -96,6 +95,7 @@ fn stock_kirov_bomb_impact_rocks_its_live_neighbor_then_rolls_it() {
         // Establish the AI's guard posture through the class receiver; this
         // fixture does not originate a player event for the computer House.
         assert!(sim.apply_command_with_overlays(
+            None,
             "Russians",
             &Command::Guard {
                 entity_id: id,
@@ -103,7 +103,7 @@ fn stock_kirov_bomb_impact_rocks_its_live_neighbor_then_rolls_it() {
             },
             &rules,
             None,
-            FrameEffects::default(),
+            &mut FrameEffects::default(),
         ));
     }
     let source = sim.substrate.entities.get(kirov).unwrap();
@@ -456,6 +456,7 @@ impl AreaScene {
                 warhead,
                 true,
                 origin,
+                &mut Vec::new(),
             );
         } else {
             world_receiver::apply_area_damage(
@@ -467,7 +468,7 @@ impl AreaScene {
                 warhead,
                 true,
                 origin,
-                FrameEffects::default(),
+                &mut FrameEffects::default(),
             );
         }
     }

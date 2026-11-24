@@ -1,9 +1,9 @@
 //! Application facade and shared imports for the focused orchestrator modules
 //! under `app/`. GPU initialization remains deferred to `resumed()`.
 
+use crate::util::time::Instant;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
-use crate::util::time::Instant;
 
 use anyhow::Result;
 use winit::application::ApplicationHandler;
@@ -41,22 +41,22 @@ use crate::render::bit_font::BitFont;
 use crate::render::gpu::GpuContext;
 use crate::rules::overlay_types::OverlayTypeRegistry;
 use crate::ui::game_screen::GameScreen;
-use crate::ui::shell::controller::ShellKey;
 use crate::ui::sidebar::{SidebarChromeLayoutSpec, SidebarTab};
 use crate::ui::skirmish_shell::{SavedSeedBrowserState, SavedSeedMode};
 use crate::util::config::GameConfig;
 
 pub mod app_bundle;
 pub(crate) mod audio_runtime;
+#[cfg(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown"))]
+mod browser_lifecycle;
 pub(crate) mod campaign_defeat;
-pub(crate) mod campaign_progress;
 pub(crate) mod campaign_victory;
 pub(crate) mod chrono_screen;
 mod cncnet;
 #[cfg(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown"))]
-mod browser_lifecycle;
-#[cfg(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown"))]
 pub(crate) use cncnet::SpawnAction;
+#[cfg(target_os = "android")]
+pub mod android_input;
 pub(crate) mod commander_feedback;
 mod cooperative_round;
 #[cfg(feature = "debug-tools")]
@@ -68,12 +68,13 @@ pub(crate) mod display_target;
 mod frame;
 pub mod frontend;
 mod game_data_check;
+#[cfg(not(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown")))]
+mod graphics_lost;
 mod handler;
 mod hidden_run;
 mod in_game;
 mod initialize;
 pub(crate) mod input;
-pub mod android_input;
 pub(crate) mod lan_service;
 pub(crate) mod loading;
 pub(crate) mod map_library;
@@ -84,19 +85,21 @@ pub(crate) mod match_diagnostics;
 pub(crate) mod match_runtime;
 pub(crate) mod mod_additions;
 pub(crate) mod mod_files;
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+mod mod_import_picker;
 pub(crate) mod mods;
 pub(crate) mod movie_playback;
-pub(crate) mod new_mod;
+pub(crate) mod movie_subtitles;
 #[cfg(not(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown")))]
 mod network_goodbye;
-pub(crate) mod movie_subtitles;
-pub(crate) mod persistence;
+pub(crate) mod new_mod;
 /// The build description's native version metadata (`Phobos.version.h`).
 pub(crate) mod os_clipboard;
+pub(crate) mod persistence;
 pub(crate) mod phobos_version;
 pub(crate) mod presentation;
 pub(crate) mod process_assets;
-#[cfg(feature = "telemetry-dashboard")]
+#[cfg(any(feature = "telemetry-dashboard", feature = "perf"))]
 pub(crate) mod process_stats;
 pub(crate) mod radar_movie;
 pub(crate) mod random_map_file;
@@ -104,12 +107,15 @@ pub(crate) mod random_map_file;
 mod random_map_lifecycle_tests;
 pub(crate) mod renderer_state;
 pub(crate) mod restart;
+pub(crate) mod rules_parts;
 pub(crate) mod scenario_catalog;
 mod shell_campaign;
 pub(crate) mod shell_lan;
 mod shell_load_saved_game;
 mod shell_main_menu;
 mod shell_menu;
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+mod shell_mod_import;
 mod shell_mods;
 mod shell_movies_credits;
 pub(crate) mod shell_network_setup;
@@ -118,6 +124,8 @@ pub(crate) mod shell_route;
 mod shell_saved_games;
 mod shell_saved_seeds;
 mod shell_skirmish;
+mod shell_skirmish_setups;
+mod shell_skirmish_team_menus;
 mod shell_wol;
 pub(crate) mod sidebar_projection;
 #[cfg(all(test, tests_app))]
@@ -137,6 +145,7 @@ pub(crate) mod types;
 pub(crate) mod updater;
 pub(crate) mod web_link;
 mod window_icon;
+pub(crate) mod worker;
 
 /// Main window title. The single-instance gate finds a running copy's window by
 /// this exact title, so `main` hands the same constant to
@@ -180,6 +189,9 @@ pub struct App {
     spawn_request: Option<crate::app::frontend::cncnet_spawn::SpawnRequest>,
     /// `-SPAWN`: where the launch result is written (docs/spawn.md).
     spawn_result_path: Option<std::path::PathBuf>,
+    /// `-SPAWN` refused for its `ExpectedRulesDigest`: this game's rules
+    /// parts, which the launch result names.
+    spawn_rules_mismatch: Option<crate::app::rules_parts::RulesParts>,
     replay_request: Option<crate::app::frontend::launch::ReplayLaunchRequest>,
     startup_failure: Option<String>,
     /// `--mod <folder>` or `--no-mod`, in place of config.toml's choice.
@@ -247,6 +259,7 @@ impl App {
             startup_options,
             spawn_request: None,
             spawn_result_path: None,
+            spawn_rules_mismatch: None,
             replay_request: None,
             startup_failure: None,
             mod_switch: None,
@@ -272,6 +285,7 @@ impl App {
             startup_options: crate::app::frontend::startup_options::RetailStartupOptions::default(),
             spawn_request: None,
             spawn_result_path: None,
+            spawn_rules_mismatch: None,
             replay_request: None,
             startup_failure: None,
             mod_switch: None,
@@ -299,6 +313,7 @@ impl App {
             startup_options: crate::app::frontend::startup_options::RetailStartupOptions::default(),
             spawn_request: None,
             spawn_result_path: None,
+            spawn_rules_mismatch: None,
             replay_request: None,
             startup_failure: None,
             mod_switch: None,
@@ -326,6 +341,7 @@ impl App {
             },
             spawn_request: None,
             spawn_result_path: None,
+            spawn_rules_mismatch: None,
             replay_request: None,
             startup_failure: None,
             mod_switch: None,
@@ -405,7 +421,7 @@ impl App {
     /// skips. The panic hook has already written the log and `except.txt`.
     pub fn save_replay_after_panic(&mut self) {
         if let Some(state) = self.state.as_mut() {
-            crate::app::match_runtime::sim_tick::flush_replay_log(state);
+            crate::app::match_runtime::sim_tick::preserve_replay_after_panic(state);
         }
     }
 }

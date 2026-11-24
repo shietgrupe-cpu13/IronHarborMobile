@@ -13,7 +13,6 @@ use crate::app::input::hotkeys::HotkeyBindings;
 use crate::app::input::sidebar_eva::{self, CameoClick, CameoOrder, CameoPress};
 use crate::app::sidebar_projection::{SidebarProjectionState, cameo_candidates};
 use crate::app::types::TargetingMode;
-use crate::rules::overlay_types::OverlayTypeRegistry;
 use crate::rules::ruleset::RuleSet;
 use crate::sim::command::{Command, CommandEnvelope};
 use crate::sim::house_state::HouseState;
@@ -59,7 +58,6 @@ mod scenario_house_name_tests;
 struct Fixture {
     sim: Simulation,
     rules: RuleSet,
-    overlays: OverlayTypeRegistry,
     owner: InternedId,
     input: MatchInputState,
     projection: SidebarProjectionState,
@@ -80,7 +78,6 @@ fn stock_base_fixture_from_retail(
     bind_buildup: bool,
     retail: crate::rules::retail_ini_fixture::RetailBattleRules,
 ) -> Option<Fixture> {
-    let overlays = OverlayTypeRegistry::from_ini(&retail.processed_rules, Some(&retail.fixed_art));
     let mut rules = retail.rules;
     if bind_buildup {
         let (_, mut assets) = crate::rules::retail_ini_fixture::retail_assets()?;
@@ -108,7 +105,6 @@ fn stock_base_fixture_from_retail(
     Some(Fixture {
         sim,
         rules,
-        overlays,
         owner,
         input: MatchInputState::new(HotkeyBindings::default()),
         projection: SidebarProjectionState::default(),
@@ -132,7 +128,8 @@ fn roundtrip_fixture_save(fixture: &mut Fixture, label: &str) {
         None,
         None,
         None,
-    );
+    )
+    .unwrap();
     let directory = crate::map::source::test_support::TestDirectory::new(label);
     let repository = crate::app::persistence::SaveRepository::at(directory.path());
     let path = repository.write_named("fixture.bin", &bytes).unwrap();
@@ -141,9 +138,7 @@ fn roundtrip_fixture_save(fixture: &mut Fixture, label: &str) {
         simulation: std::mem::replace(&mut fixture.sim, Simulation::new()),
         resources: crate::sim::runtime::SimResources {
             rules: fixture.rules.clone(),
-            overlay_registry: fixture.overlays.clone(),
             terrain_template: Some(terrain),
-            ..crate::sim::runtime::SimResources::empty()
         }
         .into(),
     };
@@ -165,7 +160,6 @@ fn paid_ready_fixture() -> Option<Fixture> {
     let Fixture {
         mut sim,
         rules,
-        overlays,
         owner,
         input,
         mut projection,
@@ -189,7 +183,7 @@ fn paid_ready_fixture() -> Option<Fixture> {
         &rules,
         "Americans",
         "GAPOWR",
-        FrameEffects::default(),
+        &mut FrameEffects::default(),
         false,
     ));
     assert!(production::enqueue_by_type(
@@ -197,7 +191,7 @@ fn paid_ready_fixture() -> Option<Fixture> {
         &rules,
         "Americans",
         "GAPILL",
-        FrameEffects::default(),
+        &mut FrameEffects::default(),
         false,
     ));
     // A fixture timeout, not an expected native completion frame. Both strips
@@ -207,10 +201,9 @@ fn paid_ready_fixture() -> Option<Fixture> {
             .advance_app_frame(
                 &[],
                 &rules,
-                Some(&overlays),
                 67,
                 TickLane::Ordinary,
-                FrameEffects::default(),
+                &mut FrameEffects::default(),
             )
             .expect("ordinary paid production frame");
         for fact in output.lifecycle_outputs {
@@ -233,7 +226,6 @@ fn paid_ready_fixture() -> Option<Fixture> {
     Some(Fixture {
         sim,
         rules,
-        overlays,
         owner,
         input,
         projection,
@@ -526,7 +518,7 @@ fn arm_gapowr_with_preview(fixture: &mut Fixture) -> production::BuildingPlaceme
         "GAPOWR",
         8,
         4,
-        Some(&fixture.overlays),
+        Some(fixture.rules.overlay_registry()),
     )
     .expect("armed ready factory supplies its real placement preview");
     assert!(preview.valid, "clear adjacent healthy-yard placement site");
@@ -613,7 +605,7 @@ fn submit_current_building(fixture: &mut Fixture, cell: (u16, u16)) -> CommandEn
         &name,
         cell.0,
         cell.1,
-        Some(&fixture.overlays),
+        Some(fixture.rules.overlay_registry()),
     )
     .expect("ready object's real preview");
     assert!(
@@ -659,16 +651,17 @@ fn advance_commands(fixture: &mut Fixture, commands: &[CommandEnvelope]) -> SimF
     let due = fixture.sim.take_due_commands();
     let visits = fixture.projection.production_factory_visits(&fixture.sim);
     let projection = std::cell::RefCell::new(&mut fixture.projection);
-    let clear_request = |type_id| projection.borrow_mut().clear_production_request(type_id);
+    let mut clear_request = |type_id| projection.borrow_mut().clear_production_request(type_id);
     fixture
         .sim
         .advance_app_frame(
             &due,
             &fixture.rules,
-            Some(&fixture.overlays),
             67,
             TickLane::Ordinary,
-            FrameEffects::default().with_production_strip(&visits, &clear_request),
+            &mut FrameEffects::default()
+                .with_production_strip(&visits)
+                .with_production_request_cleared(&mut clear_request),
         )
         .expect("ordinary authoritative command frame")
 }
@@ -723,7 +716,7 @@ fn loaded_ready_tabs_wait_for_the_saved_factory_changed_edge() {
             fixture.sim.session().map_width(),
             fixture.sim.session().map_height(),
         );
-        fixture.sim.install_overlay_grid_for_load(overlays);
+        *fixture.sim.overlay_grid_mut_for_test() = Some(overlays);
         if already_published {
             let published = advance_commands(&mut fixture, &[]);
             consume_frame_outputs(&mut fixture, &published, Some(owner));
@@ -2015,7 +2008,7 @@ fn mixed_infantry_terminal_delivery_clears_old_cameo_before_same_factory_promoti
             crate::sim::radio::RadioMessage::Hello,
             crate::sim::radio::RadioPayload::default(),
             &fixture.rules,
-            FrameEffects::default(),
+            &mut FrameEffects::default(),
         )
         .code(),
         1
@@ -2026,6 +2019,7 @@ fn mixed_infantry_terminal_delivery_clears_old_cameo_before_same_factory_promoti
             .entities()
             .get(producer)
             .unwrap()
+            .seldom
             .radio_contacts
             .first_free()
             .is_none()
@@ -2370,7 +2364,7 @@ fn queued_only_cameo_right_retains_pending_and_preview_before_abandon() {
                 &fixture.rules,
                 "Americans",
                 name,
-                FrameEffects::default(),
+                &mut FrameEffects::default(),
                 false,
             ));
         }
@@ -2458,7 +2452,7 @@ fn a_still_foundation_keeps_its_visibility_until_it_moves() {
                 "GAPOWR",
                 rx,
                 ry,
-                Some(&fixture.overlays),
+                Some(fixture.rules.overlay_registry()),
             )
         }
     }
@@ -2515,7 +2509,7 @@ fn mixed_slope_preview_uses_proximity_and_preserves_paid_product_lifecycle() {
         "GAPOWR",
         far.0,
         far.1,
-        Some(&fixture.overlays),
+        Some(fixture.rules.overlay_registry()),
     )
     .expect("the same paid product has a far preview inside the supplied map");
     assert_eq!(
@@ -2543,7 +2537,7 @@ fn mixed_slope_preview_uses_proximity_and_preserves_paid_product_lifecycle() {
         "GAPOWR",
         near.0,
         near.1,
-        Some(&fixture.overlays),
+        Some(fixture.rules.overlay_registry()),
     )
     .unwrap();
     assert!(!near_mixed.valid);
@@ -2564,7 +2558,7 @@ fn mixed_slope_preview_uses_proximity_and_preserves_paid_product_lifecycle() {
         "GAPOWR",
         far.0,
         far.1,
-        Some(&fixture.overlays),
+        Some(fixture.rules.overlay_registry()),
     )
     .unwrap();
     assert!(!far_mixed.valid);
@@ -2602,7 +2596,7 @@ fn mixed_slope_preview_uses_proximity_and_preserves_paid_product_lifecycle() {
         "GAPOWR",
         near.0,
         near.1,
-        Some(&fixture.overlays),
+        Some(fixture.rules.overlay_registry()),
     )
     .unwrap();
     assert!(
@@ -3136,12 +3130,9 @@ fn current_product_expiry_retains_type_and_preview_but_has_no_issuer() {
     let preview = arm_gapowr_with_preview(&mut fixture);
     let product = ready_product(&fixture, "GAPOWR");
     let defense_product = ready_product(&fixture, "GAPILL");
-    fixture.sim.detach_all_pointer_expired(
-        product,
-        &fixture.rules,
-        Some(&fixture.overlays),
-        FrameEffects::default(),
-    );
+    fixture
+        .sim
+        .detach_all_pointer_expired(product, &fixture.rules, &mut FrameEffects::default());
     let frame = advance_commands(&mut fixture, &[]);
     assert!(
         frame
@@ -3214,12 +3205,9 @@ fn null_product_cameo_right_retains_orphan_until_house_abandon() {
     let product = ready_product(&fixture, "GAPOWR");
     let defense_product = ready_product(&fixture, "GAPILL");
     let credits = production::credits_for_owner(&fixture.sim, "Americans");
-    fixture.sim.detach_all_pointer_expired(
-        product,
-        &fixture.rules,
-        Some(&fixture.overlays),
-        FrameEffects::default(),
-    );
+    fixture
+        .sim
+        .detach_all_pointer_expired(product, &fixture.rules, &mut FrameEffects::default());
     let frame = advance_commands(&mut fixture, &[]);
     let owner = fixture.owner;
     consume_frame_outputs(&mut fixture, &frame, Some(owner));
@@ -3319,8 +3307,7 @@ fn null_product_house_abandon_accepts_nonzero_buildcat_without_a_held_type() {
         fixture.sim.detach_all_pointer_expired(
             product,
             &fixture.rules,
-            Some(&fixture.overlays),
-            FrameEffects::default(),
+            &mut FrameEffects::default(),
         );
         let frame = advance_commands(&mut fixture, &[]);
         let owner = fixture.owner;
@@ -3387,12 +3374,9 @@ fn defense_null_product_house_abandon_clears_only_its_live_factory() {
     let product = ready_product(&fixture, "GAPILL");
     let power = ready_product(&fixture, "GAPOWR");
     let credits = production::credits_for_owner(&fixture.sim, "Americans");
-    fixture.sim.detach_all_pointer_expired(
-        product,
-        &fixture.rules,
-        Some(&fixture.overlays),
-        FrameEffects::default(),
-    );
+    fixture
+        .sim
+        .detach_all_pointer_expired(product, &fixture.rules, &mut FrameEffects::default());
     let frame = advance_commands(&mut fixture, &[]);
     let owner = fixture.owner;
     consume_frame_outputs(&mut fixture, &frame, Some(owner));
@@ -3439,12 +3423,9 @@ fn same_factory_rearm_retains_the_old_cameos_factory_link_and_construction_order
     // A real admission is saved; its returned envelope is deliberately not
     // delivered before the supplied product-expiry notification.
     let _pending = submit_ready_building(&mut fixture, "GAPOWR", SidebarTab::Building, (8, 4));
-    fixture.sim.detach_all_pointer_expired(
-        product,
-        &fixture.rules,
-        Some(&fixture.overlays),
-        FrameEffects::default(),
-    );
+    fixture
+        .sim
+        .detach_all_pointer_expired(product, &fixture.rules, &mut FrameEffects::default());
     let frame = advance_commands(&mut fixture, &[]);
     let owner = fixture.owner;
     consume_frame_outputs(&mut fixture, &frame, Some(owner));
@@ -3458,7 +3439,7 @@ fn same_factory_rearm_retains_the_old_cameos_factory_link_and_construction_order
         &fixture.rules,
         "Americans",
         "GAPILE",
-        FrameEffects::default(),
+        &mut FrameEffects::default(),
         false,
     ));
     let type_id = fixture.sim.interner().get("GAPILE").unwrap();
@@ -3630,12 +3611,9 @@ fn saved_product_expiry_clears_backup_without_clearing_another_current_product()
         SidebarTab::Defense
     ));
     let pending = fixture.input.targeting_mode.clone();
-    fixture.sim.detach_all_pointer_expired(
-        product,
-        &fixture.rules,
-        Some(&fixture.overlays),
-        FrameEffects::default(),
-    );
+    fixture
+        .sim
+        .detach_all_pointer_expired(product, &fixture.rules, &mut FrameEffects::default());
     let frame = advance_commands(&mut fixture, &[submitted]);
     let owner = fixture.owner;
     assert_eq!(consume_frame_outputs(&mut fixture, &frame, Some(owner)), 0);

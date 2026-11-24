@@ -13,18 +13,14 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
 }
 
-// versionName reads the Cargo package version, so the APK and the binary inside
-// it cannot drift apart (they did once: a 0.2.7 bump changed Cargo.toml while
-// this file still said 0.2.6). versionCode is a monotonically rising integer
-// that Play and sideload both compare, so it cannot be derived from the version
-// string and has to be bumped by hand on every upload.
-val veraVersionName: String = rootProject.file("../Cargo.toml")
-    .readLines()
-    .first { it.trimStart().startsWith("version = ") }
-    .substringAfter('"')
-    .substringBefore('"')
-val veraVersionCode = 256
-val veraBuildLabel = "B49"
+// Iron Harbor's Android app version is independent from the embedded VERA20K
+// engine version. Keep the mobile label on its own track so it does not claim
+// to be the upstream 0.4.2 release.
+val ironHarborVersionName = providers.gradleProperty("ironHarborVersionName").orElse("0.4.1").get()
+// versionCode is a monotonically rising integer that Android compares for
+// upgrades; bump it by hand for every published build.
+val veraVersionCode = 265
+val veraBuildLabel = "B58"
 val sideBySideDebug = providers.gradleProperty("ironHarborSideBySideDebug").orNull == "true"
 val releaseStoreFile = System.getenv("ANDROID_RELEASE_STORE_FILE")
 val releaseStorePassword = System.getenv("ANDROID_RELEASE_STORE_PASSWORD")
@@ -67,7 +63,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = veraVersionCode
-        versionName = veraVersionName
+        versionName = ironHarborVersionName
         resValue("string", "app_build_label", veraBuildLabel)
 
         // This build packages the shipping ARM64 Rust library. Do not advertise
@@ -83,7 +79,13 @@ android {
     // `debug.keystore.lock` after every other task has already succeeded.
     signingConfigs {
         getByName("debug") {
-            storeFile = rootProject.file(".android/debug.keystore")
+            storeFile = System.getenv("ANDROID_DEBUG_STORE_FILE")
+                ?.takeIf { it.isNotBlank() }
+                ?.let(::file)
+                ?: rootProject.file(".android/debug.keystore")
+            storePassword = System.getenv("ANDROID_DEBUG_STORE_PASSWORD") ?: "android"
+            keyAlias = System.getenv("ANDROID_DEBUG_KEY_ALIAS") ?: "androiddebugkey"
+            keyPassword = System.getenv("ANDROID_DEBUG_KEY_PASSWORD") ?: "android"
         }
         create("release") {
             storeFile = rootProject.file(

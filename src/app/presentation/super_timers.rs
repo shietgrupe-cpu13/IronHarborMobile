@@ -12,9 +12,13 @@
 use std::collections::HashMap;
 
 use crate::app::AppState;
+use crate::app::presentation::super_timer_groups::{TeamKey, TeamSuperRow, grouped_super_rows};
 use crate::assets::csf_file::{CsfFile, type_ui_name};
+use crate::map::houses::is_allied_with;
 use crate::render::batch::SpriteInstance;
-use crate::rules::house_colors::{HouseColorIndex, NO_REMAP, house_text_rgb};
+use crate::rules::house_colors::{
+    HouseColorIndex, NO_REMAP, RELATION_ALLY, RELATION_ENEMY, RELATION_SELF, house_text_rgb,
+};
 use crate::rules::ruleset::RuleSet;
 use crate::sim::intern::InternedId;
 use crate::sim::superweapon::SuperTimerView;
@@ -49,6 +53,10 @@ pub(crate) enum TimerSource {
     /// A house's blackout (`+0x2A4`), labelled `MSG:BlackoutTimer`, in the
     /// house's scheme.
     Blackout(InternedId),
+    /// VERA's `[VERA] GroupedSuperTimers=` line in place of the Super lines:
+    /// one team's Supers of one type, labelled `<team> <UIName> ready/total`
+    /// in the team's first house's scheme; it blinks like a Super's line.
+    Team(TeamSuperRow),
 }
 
 /// One timer line; its index is its place in [`timer_lines`]' answer.
@@ -166,15 +174,28 @@ impl TimerBlink {
     /// The Super's blink. A new grant, which a new list place shows, clears
     /// it (`+0x40`, Grant `0x006CB580`); the deadline stays.
     fn of<'a>(blinks: &'a mut TimerBlinks, view: &SuperTimerView) -> &'a mut TimerBlink {
-        let blink = blinks
-            .entry((view.owner(), view.sw_type()))
-            .or_insert(TimerBlink {
-                place: view.place(),
-                ..TimerBlink::default()
-            });
-        if blink.place != view.place() {
+        Self::of_key(blinks, view.owner(), view.sw_type(), view.place())
+    }
+
+    /// The blink of a grouped team line, by its first house and type. It has
+    /// no grant place, so it keeps place 0 and a regrouping never clears it.
+    fn of_team<'a>(blinks: &'a mut TimerBlinks, row: &TeamSuperRow) -> &'a mut TimerBlink {
+        Self::of_key(blinks, row.representative, row.sw_type, 0)
+    }
+
+    fn of_key<'a>(
+        blinks: &'a mut TimerBlinks,
+        owner: InternedId,
+        sw_type: InternedId,
+        place: u32,
+    ) -> &'a mut TimerBlink {
+        let blink = blinks.entry((owner, sw_type)).or_insert(TimerBlink {
+            place,
+            ..TimerBlink::default()
+        });
+        if blink.place != place {
             blink.on = false;
-            blink.place = view.place();
+            blink.place = place;
         }
         blink
     }
@@ -434,12 +455,73 @@ pub(crate) fn build_super_timer_instances(
         (house, left)
     });
     let scenario = sim.session().scenario_timer_view();
-    let lines = timer_lines(
+    let grouped = state.persistence.options_profile.grouped_super_timers;
+    let local = sim.session().current_house();
+    // Teams are the match's REAL launch teams, kept for the whole game in the
+    // app-owned SkirmishLaunchSession. Do not infer them from
+    // sim.house_alliances(): MakeAlly/MakeEnemy, triggers and the Paranoid AI
+    // rewrite that graph mid-match, splitting houses that launched on one team
+    // (the reported "enemy in D, me in -, both team A" bug).
+    // normalized_launch_slots' owner_name is exactly the name the sim interner
+    // registered for that house (asserted at launch).
+    //
+    // One entry per launched House: its real team, and whether it is a player
+    // seat (a human-controlled or AI House, not an observer). The per-team
+    // player count is how many such houses sit on that team; it is the "N" in
+    // the no-team row's `(N)` caption.
+    let launch = state
+        .match_state
+        .session
+        .network_setup()
+        .or_else(|| state.match_state.startup.offline_launch());
+    let mut team_by_name: HashMap<String, Option<u8>> = HashMap::new();
+    let mut players_by_team: HashMap<Option<u8>, usize> = HashMap::new();
+    if let Some(launch) = launch {
+        for slot in crate::sim::scenario_bootstrap::normalized_launch_slots(launch) {
+            let team = match slot.team() {
+                crate::skirmish_launch::LaunchTeam::Team(team) => Some(team),
+                crate::skirmish_launch::LaunchTeam::None => None,
+            };
+            if !slot.observer {
+                *players_by_team.entry(team).or_insert(0) += 1;
+            }
+            team_by_name.insert(slot.owner_name, team);
+        }
+    }
+    let local_team = local
+        .and_then(|house| team_by_name.get(sim.interner().resolve(house)))
+        .copied()
+        .flatten();
+    let mut lines = timer_lines(
         scenario.map(|(left, _)| left),
-        &supers,
+        if grouped { &[] } else { &supers },
         blackouts,
         !sim.session().game_mode_nonzero(),
     );
+    if grouped {
+        // The team lines take the Super lines' place: after the Scenario
+        // line, before the blackouts.
+        let teams = grouped_super_rows(
+            sim.houses().order(),
+            |house| {
+                team_by_name
+                    .get(sim.interner().resolve(house))
+                    .copied()
+                    .flatten()
+            },
+            &supers,
+            local,
+            |team| players_by_team.get(&team).copied().unwrap_or(0),
+        );
+        let at = usize::from(scenario.is_some());
+        lines.splice(
+            at..at,
+            teams.into_iter().map(|row| TimerLine {
+                source: TimerSource::Team(row),
+                seconds: row.nearest_seconds,
+            }),
+        );
+    }
     if lines.is_empty() {
         return (Vec::new(), Vec::new());
     }
@@ -459,28 +541,69 @@ pub(crate) fn build_super_timer_instances(
             .unwrap_or(NO_REMAP);
         house_text_rgb(schemes, color)
     };
+    let super_name = |sw_type: InternedId| {
+        type_ui_name(
+            rules
+                .super_weapon(sim.interner().resolve(sw_type))
+                .and_then(|sw| sw.ui_name.as_deref()),
+            csf,
+        )
+    };
+    // Grouped rows use fixed relation bands rather than a house's map colour:
+    // your own team is blue, a team you are allied with is green, the rest are
+    // red. Same-team is decided by the launch team (stable all match); the
+    // green check uses the live alliance graph, which is the right source for
+    // "are we allies right now" even though it must never decide grouping.
+    let alliances = sim.house_alliances();
+    let local_name = local.map(|house| sim.interner().resolve(house));
+    let team_rgb = |row: &TeamSuperRow| {
+        let same_team = match (row.team, local_team) {
+            (TeamKey::Named(team), Some(own)) => team == own,
+            (TeamKey::Unteamed, None) => true,
+            _ => false,
+        };
+        let relation = if same_team {
+            RELATION_SELF
+        } else if local_name.is_some_and(|name| {
+            is_allied_with(
+                alliances.as_map(),
+                name,
+                sim.interner().resolve(row.representative),
+            )
+        }) {
+            RELATION_ALLY
+        } else {
+            RELATION_ENEMY
+        };
+        house_text_rgb(schemes, relation)
+    };
     let lines: Vec<(TimerLine, String, [u8; 3])> = lines
         .into_iter()
         .map(|line| {
-            let (house, label) = match line.source {
+            let (house, label, team_color) = match line.source {
                 TimerSource::Scenario => (
                     sim.session().current_house(),
                     scenario
                         .filter(|(_, caption)| !caption.is_empty())
                         .map_or_else(String::new, |(_, caption)| localized(csf, caption)),
+                    None,
                 ),
-                TimerSource::Super(view) => (
-                    Some(view.owner()),
-                    type_ui_name(
-                        rules
-                            .super_weapon(sim.interner().resolve(view.sw_type()))
-                            .and_then(|sw| sw.ui_name.as_deref()),
-                        csf,
+                TimerSource::Super(view) => (Some(view.owner()), super_name(view.sw_type()), None),
+                TimerSource::Blackout(house) => (Some(house), localized(csf, BLACKOUT_LABEL), None),
+                TimerSource::Team(row) => (
+                    Some(row.representative),
+                    format!(
+                        "{} {} {}/{}",
+                        row.team.label(row.players),
+                        super_name(row.sw_type),
+                        row.ready,
+                        row.total
                     ),
+                    Some(team_rgb(&row)),
                 ),
-                TimerSource::Blackout(house) => (Some(house), localized(csf, BLACKOUT_LABEL)),
             };
-            (line, label, house_rgb(house))
+            let rgb = team_color.unwrap_or_else(|| house_rgb(house));
+            (line, label, rgb)
         })
         .collect();
     let blink_rgb = blink_rgb(rules);
@@ -493,9 +616,9 @@ pub(crate) fn build_super_timer_instances(
     let camera = field_parts::lane_camera(state, FieldPart::Timers);
 
     let font = &state.renderer.bit_font;
-    let local = sim.session().current_house();
     let timer_lines: Vec<_> = lines.iter().map(|(line, _, _)| *line).collect();
-    let compact = state.persistence.options_profile.compact_super_timers;
+    // The grouped lines are few; they replace the compact dock's paging.
+    let compact = state.persistence.options_profile.compact_super_timers && !grouped;
     let dock = &mut state.match_state.match_presentation.super_timer_dock;
     let rows = dock.rows(
         &timer_lines,
@@ -525,9 +648,13 @@ pub(crate) fn build_super_timer_instances(
     let mut texts = Vec::new();
     let mut next_flip_ms: Option<u64> = None;
     for (index, (line, label, rgb)) in lines.iter().enumerate() {
-        let blinking = match line.source {
-            TimerSource::Super(view) => {
-                let blink = TimerBlink::of(blinks, &view);
+        let blink = match line.source {
+            TimerSource::Super(view) => Some(TimerBlink::of(blinks, &view)),
+            TimerSource::Team(row) => Some(TimerBlink::of_team(blinks, &row)),
+            TimerSource::Scenario | TimerSource::Blackout(_) => None,
+        };
+        let blinking = match blink {
+            Some(blink) => {
                 let on = blink.step(line.seconds, now_ms);
                 if line.seconds == 0 {
                     next_flip_ms = Some(
@@ -536,7 +663,7 @@ pub(crate) fn build_super_timer_instances(
                 }
                 on
             }
-            TimerSource::Scenario | TimerSource::Blackout(_) => false,
+            None => false,
         };
         // Hidden rows still step the existing wall-clock blink owner.
         let Some(position) = positions[index] else {

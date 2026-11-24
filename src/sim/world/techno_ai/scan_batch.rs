@@ -191,7 +191,7 @@ impl ScannerKey {
             body_facing: entity.body_facing,
             barrel_facing: entity.barrel_facing,
             mission: entity.mission.current(),
-            retarget_after_stop: entity.foot_retarget_after_stop,
+            retarget_after_stop: entity.seldom.foot_retarget_after_stop,
             berserk: entity.berserk.is_active(),
             facts: attacker_facts(entity, obj),
             ranges: [0, 1].map(|index| {
@@ -221,7 +221,6 @@ impl ScannerKey {
             fire: FireSubject {
                 world,
                 rules,
-                overlay_registry: None,
                 fog: None,
                 firer: entity,
                 obj,
@@ -359,7 +358,7 @@ impl Simulation {
                 || (matches!(
                     entity.category(),
                     EntityCategory::Unit | EntityCategory::Infantry
-                ) && entity.low_bridge_tube_state.is_some()))
+                ) && entity.active_tube().is_some()))
         {
             return None;
         }
@@ -406,7 +405,6 @@ impl Simulation {
     pub(super) fn take_batched_scan(
         &mut self,
         rules: &RuleSet,
-        overlay_registry: Option<&OverlayTypeRegistry>,
         id: u64,
         mask: ScanMission,
         scan_coord: Option<[i32; 3]>,
@@ -450,7 +448,6 @@ impl Simulation {
                 id,
                 TargetKind::Entity(pick),
                 check_range,
-                overlay_registry,
             ) {
                 FireError::Illegal | FireError::Cant => true,
                 FireError::Range => check_range,

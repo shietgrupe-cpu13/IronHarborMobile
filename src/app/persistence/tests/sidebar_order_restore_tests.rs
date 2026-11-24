@@ -174,6 +174,7 @@ fn save(sim: &Simulation, rules: &RuleSet, order: Option<&SavedSidebarOrder>) ->
         None,
         None,
     )
+    .unwrap()
 }
 
 fn prepare(
@@ -187,7 +188,6 @@ fn prepare(
         Some(LOAD_FIXTURE_MAP_HASH),
         Some(rules),
         Some(&load_fixture_terrain()),
-        Some(&OverlayTypeRegistry::empty()),
     )
 }
 
@@ -241,6 +241,12 @@ fn a_loaded_game_opens_the_tab_it_was_saved_on() {
 
 #[test]
 fn sidebar_order_envelope_roundtrips_without_changing_simulation_hash() {
+    crate::test_fixture::on_game_stack(
+        sidebar_order_envelope_roundtrips_without_changing_simulation_hash_body,
+    );
+}
+
+fn sidebar_order_envelope_roundtrips_without_changing_simulation_hash_body() {
     let (sim, rules, owner, types) = fixture();
     let saved = retained_history(owner, types).saved_order().unwrap();
     let hash = sim.state_hash();
@@ -255,7 +261,7 @@ fn sidebar_order_envelope_roundtrips_without_changing_simulation_hash() {
     assert_eq!(loaded.sidebar_order(), Some(&saved));
     assert_eq!(loaded.sidebar_order().unwrap().owner(), owner);
     assert_eq!(loaded.sinking_waterlines, [(7, -12)]);
-    assert_eq!(loaded.sim.state_hash(), hash);
+    assert_eq!(loaded.into_simulation_for_test().state_hash(), hash);
     let bytes = GameSnapshot::save_validated(
         &sim,
         LOAD_FIXTURE_MAP_HASH,
@@ -272,11 +278,17 @@ fn sidebar_order_envelope_roundtrips_without_changing_simulation_hash() {
     .unwrap();
     assert!(loaded.sidebar_order().is_none());
     assert!(loaded.sinking_waterlines.is_empty());
-    assert_eq!(loaded.sim.state_hash(), hash);
+    assert_eq!(loaded.into_simulation_for_test().state_hash(), hash);
 }
 
 #[test]
 fn sidebar_order_prepares_and_commits_unsorted_history_without_reinserting_survivors() {
+    crate::test_fixture::on_game_stack(
+        sidebar_order_prepares_and_commits_unsorted_history_without_reinserting_survivors_body,
+    );
+}
+
+fn sidebar_order_prepares_and_commits_unsorted_history_without_reinserting_survivors_body() {
     let (sim, rules, owner, types) = fixture();
     let saved = retained_history(owner, types).saved_order().unwrap();
     let bytes = save(&sim, &rules, Some(&saved));
@@ -324,6 +336,10 @@ fn sidebar_order_prepares_and_commits_unsorted_history_without_reinserting_survi
 
 #[test]
 fn load_keeps_every_strip_order_and_shows_its_top_row() {
+    crate::test_fixture::on_game_stack(load_keeps_every_strip_order_and_shows_its_top_row_body);
+}
+
+fn load_keeps_every_strip_order_and_shows_its_top_row_body() {
     let (sim, rules, owner, candidates) = scrolling_fixture();
     let saved = scrolled_projection(owner, &candidates)
         .saved_order()
@@ -338,7 +354,7 @@ fn load_keeps_every_strip_order_and_shows_its_top_row() {
     )
     .unwrap();
     assert_eq!(loaded.sidebar_order(), Some(&saved));
-    assert_eq!(loaded.sim.state_hash(), hash);
+    assert_eq!(loaded.into_simulation_for_test().state_hash(), hash);
 
     let mut outgoing = scrolled_projection(owner, &candidates);
     let before = outgoing.saved_order();
@@ -400,20 +416,35 @@ fn invalid_sidebar_payload_preserves_outgoing_projection_and_running_world() {
     wrong_kind[0][0] = SavedCameoId::SuperWeapon(types[0]);
     let mut over_capacity = std::array::from_fn(|_| Vec::new());
     over_capacity[0] = vec![SavedCameoId::Object(types[0]); 77];
-    let invalid = [
+    // An id past the save's name table is refused by the snapshot's saved-id
+    // walk before the sidebar order is read; the others by the order itself.
+    let unknown_ids = [
         SavedSidebarOrder::new(InternedId::from_index(u32::MAX), valid.strips().clone()),
+        SavedSidebarOrder::new(owner, unknown),
+    ];
+    let invalid = [
         SavedSidebarOrder::new(owner, duplicate),
         SavedSidebarOrder::new(owner, wrong_strip),
-        SavedSidebarOrder::new(owner, unknown),
         SavedSidebarOrder::new(owner, wrong_kind),
         SavedSidebarOrder::new(owner, over_capacity),
         SavedSidebarOrder::new(owner, valid.strips().clone()).with_active_tab(4),
     ];
-    for order in invalid {
-        assert!(matches!(
-            prepare(&save(&sim, &rules, Some(&order)), &sim, &rules),
-            Err(PreparedLoadError::SidebarOrder(_))
-        ));
+    let refusals = unknown_ids.iter().map(|order| (order, true));
+    for (order, unknown_id) in refusals.chain(invalid.iter().map(|order| (order, false))) {
+        let result = prepare(&save(&sim, &rules, Some(order)), &sim, &rules);
+        if unknown_id {
+            assert!(
+                matches!(
+                    result,
+                    Err(PreparedLoadError::Restore(
+                        SnapshotRestoreError::UnknownSavedId(_)
+                    ))
+                ),
+                "an id the save's name table lacks is refused as a damaged save"
+            );
+        } else {
+            assert!(matches!(result, Err(PreparedLoadError::SidebarOrder(_))));
+        }
         assert_eq!(outgoing.saved_order(), before);
         assert_eq!(sim.state_hash(), hash);
         assert_eq!(sim.rng_state(), rng);

@@ -6,7 +6,6 @@
 
 use super::{FrameEffects, SimFireEvent, SimSoundEvent, Simulation, UninitContext};
 use crate::map::entities::EntityCategory;
-use crate::rules::overlay_types::OverlayTypeRegistry;
 use crate::rules::ruleset::RuleSet;
 use crate::sim::combat::{DeathEffects, UnderAttackEvent};
 
@@ -133,8 +132,7 @@ impl DamageConsequences {
         self,
         world: &mut Simulation,
         rules: &RuleSet,
-        overlay_registry: Option<&OverlayTypeRegistry>,
-        frame_effects: FrameEffects<'_>,
+        frame_effects: &mut FrameEffects<'_>,
     ) -> DamageCommitReceipt {
         let Self {
             mut effects,
@@ -145,7 +143,7 @@ impl DamageConsequences {
         for &dead_id in &effects.immediate_uninit_ids {
             world.uninit_with_context(
                 dead_id,
-                UninitContext::new(rules, overlay_registry).with_effects(frame_effects),
+                UninitContext::new(rules).with_effects(frame_effects),
             );
         }
 
@@ -299,7 +297,7 @@ pub(crate) fn admit_muzzle_anim(world: &mut Simulation, rules: &RuleSet, event: 
         descriptor,
         coord,
         constructor,
-        FrameEffects::default(),
+        &mut FrameEffects::default(),
     ) {
         log::debug!(
             "muzzle anim [{}] did not construct: {error}",

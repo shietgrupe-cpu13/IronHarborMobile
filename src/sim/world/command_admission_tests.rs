@@ -74,7 +74,7 @@ fn campaign_large_move_batch_reaches_every_actor_after_snapshot() {
         sim.resolve_type_handles(&rules);
         // This test covers delivery, not the formation algorithm: ask its
         // production owner for the destinations the entire batch should get.
-        sim.adjust_staged_megamission_destinations(&mut expected, &rules, Some(&registry), None);
+        sim.adjust_staged_megamission_destinations(&mut expected, &rules, None);
         let destinations: Vec<_> = expected
             .iter()
             .map(|command| {
@@ -93,8 +93,7 @@ fn campaign_large_move_batch_reaches_every_actor_after_snapshot() {
             })
             .collect();
         sim.transfer_local_commands();
-        let (executed, _) =
-            sim.apply_due_commands(&[], &rules, 0, Some(&registry), Default::default());
+        let (executed, _) = sim.apply_due_commands(&[], &rules, 0, &mut Default::default());
         assert_eq!(executed, actors.len());
         for (index, &actor) in actors.iter().enumerate() {
             let actual = sim.entities().get(actor).unwrap().navigation.nav_com();
@@ -172,7 +171,7 @@ fn borrowed_execution_observer_reports_actual_timing_acceptance() {
         );
     }
     let observed = RefCell::new(Vec::new());
-    let observer = |sim: &Simulation, record: &crate::sim::command::CommandRecord, applied| {
+    let mut observer = |sim: &Simulation, record: &crate::sim::command::CommandRecord, applied| {
         observed.borrow_mut().push((
             record.opcode(),
             record.house_id(),
@@ -191,7 +190,7 @@ fn borrowed_execution_observer_reports_actual_timing_acceptance() {
         33,
         crate::sim::world::TickLane::Ordinary,
         false,
-        FrameEffects::default().with_command_applied(&observer),
+        &mut FrameEffects::default().with_command_applied(&mut observer),
     )
     .unwrap();
     let rows = observed.into_inner();
@@ -510,11 +509,11 @@ fn group_move_spreads_owned_units_and_excludes_a_transferred_unit() {
                 other,
                 &rules,
                 Some(&registry),
-                FrameEffects::default(),
+                &mut FrameEffects::default(),
             );
         }
         let observed = RefCell::new(Vec::new());
-        let observe =
+        let mut observe =
             |_: &Simulation, _: &CommandRecord, applied| observed.borrow_mut().push(applied);
         sim.advance_master_frame(
             &[],
@@ -523,7 +522,7 @@ fn group_move_spreads_owned_units_and_excludes_a_transferred_unit() {
             33,
             TickLane::Ordinary,
             false,
-            FrameEffects::default().with_command_applied(&observe),
+            &mut FrameEffects::default().with_command_applied(&mut observe),
         )
         .unwrap();
         assert_eq!(observed.into_inner(), [true, !transfer_second]);
@@ -698,10 +697,9 @@ fn future_native_admission_is_recorded_once_and_replays_at_its_raw_frame() {
             .advance_app_frame(
                 &[],
                 RuleSet::empty_for_test(),
-                None,
                 33,
                 crate::sim::world::TickLane::Ordinary,
-                FrameEffects::default(),
+                &mut FrameEffects::default(),
             )
             .unwrap();
         let recorded = output.take_admitted_commands();
@@ -711,10 +709,9 @@ fn future_native_admission_is_recorded_once_and_replays_at_its_raw_frame() {
             .advance_app_frame(
                 &replayed,
                 RuleSet::empty_for_test(),
-                None,
                 33,
                 crate::sim::world::TickLane::Ordinary,
-                FrameEffects::default(),
+                &mut FrameEffects::default(),
             )
             .unwrap();
         assert_eq!(
@@ -748,7 +745,7 @@ fn frame_info_failure_resumes_only_the_remaining_tail_after_acknowledgement() {
         compared: Cell<usize>,
     }
     impl crate::sim::world::NetworkCommandBoundary for NetworkBoundary {
-        fn record_frame_checksum(&self, frame: u32, _checksum: u32) {
+        fn record_frame_checksum(&mut self, frame: u32, _checksum: u32) {
             self.published.set(Some(frame));
         }
         fn compare_frame_info(
@@ -798,7 +795,7 @@ fn frame_info_failure_resumes_only_the_remaining_tail_after_acknowledgement() {
             .encode()
             .unwrap(),
         );
-        let boundary = NetworkBoundary {
+        let mut boundary = NetworkBoundary {
             published: Cell::new(None),
             compared: Cell::new(0),
         };
@@ -806,10 +803,9 @@ fn frame_info_failure_resumes_only_the_remaining_tail_after_acknowledgement() {
             .advance_app_frame(
                 &[],
                 RuleSet::empty_for_test(),
-                None,
                 33,
                 crate::sim::world::TickLane::Ordinary,
-                FrameEffects::default().with_network_commands(&boundary),
+                &mut FrameEffects::default().with_network_commands(&mut boundary),
             )
             .unwrap();
         assert!(output.network_failure.is_some());
@@ -847,15 +843,14 @@ fn frame_info_failure_resumes_only_the_remaining_tail_after_acknowledgement() {
                 .advance_app_frame(
                     &[],
                     RuleSet::empty_for_test(),
-                    None,
                     33,
                     crate::sim::world::TickLane::Ordinary,
-                    FrameEffects::default()
+                    &mut FrameEffects::default()
                 )
                 .is_err()
         );
         let resumed = restored
-            .resume_after_network_failure(RuleSet::empty_for_test(), None, FrameEffects::default())
+            .resume_after_network_failure(RuleSet::empty_for_test(), &mut FrameEffects::default())
             .unwrap();
         assert!(resumed.network_failure.is_none());
         assert_eq!(resumed.tick.frame_committed, !terminal);
@@ -878,8 +873,7 @@ fn frame_info_failure_resumes_only_the_remaining_tail_after_acknowledgement() {
             restored
                 .resume_after_network_failure(
                     RuleSet::empty_for_test(),
-                    None,
-                    FrameEffects::default()
+                    &mut FrameEffects::default()
                 )
                 .is_err()
         );
@@ -896,10 +890,9 @@ fn frame_info_without_its_process_owner_is_not_silently_acknowledged() {
         .advance_app_frame(
             &[],
             RuleSet::empty_for_test(),
-            None,
             33,
             crate::sim::world::TickLane::Ordinary,
-            FrameEffects::default(),
+            &mut FrameEffects::default(),
         )
         .err()
         .expect("missing callback fails");
@@ -942,11 +935,12 @@ fn synchronized_tail_admits_human_or_player_controlled_houses_only() {
         // The direct EventClass payload owner is independent of the queue
         // admission gate; do not hide that policy inside individual actions.
         assert!(sim.apply_command_with_overlays(
+            None,
             "Computer",
             &Command::LiveGameSpeed { speed: 5 },
             RuleSet::empty_for_test(),
             None,
-            FrameEffects::default()
+            &mut FrameEffects::default()
         ));
         assert_eq!(sim.session.game_options().game_speed, 5);
     }
@@ -997,10 +991,9 @@ fn options_opens_only_after_accepted_local_dispatch_and_never_during_replay() {
         .advance_app_frame(
             &[],
             RuleSet::empty_for_test(),
-            None,
             33,
             crate::sim::world::TickLane::Ordinary,
-            FrameEffects::default(),
+            &mut FrameEffects::default(),
         )
         .unwrap();
     assert!(
@@ -1021,10 +1014,9 @@ fn options_opens_only_after_accepted_local_dispatch_and_never_during_replay() {
         .advance_app_frame(
             &[peer_event],
             RuleSet::empty_for_test(),
-            None,
             33,
             crate::sim::world::TickLane::Ordinary,
-            FrameEffects::default(),
+            &mut FrameEffects::default(),
         )
         .unwrap();
     assert_eq!(
@@ -1043,10 +1035,9 @@ fn options_opens_only_after_accepted_local_dispatch_and_never_during_replay() {
         .advance_app_frame(
             &due,
             RuleSet::empty_for_test(),
-            None,
             33,
             crate::sim::world::TickLane::Ordinary,
-            FrameEffects::default(),
+            &mut FrameEffects::default(),
         )
         .unwrap();
     assert!(
@@ -1079,10 +1070,9 @@ fn latency_event_occupies_a_slot_and_publishes_its_unclamped_session_write() {
         .advance_app_frame(
             &[],
             RuleSet::empty_for_test(),
-            None,
             33,
             crate::sim::world::TickLane::Ordinary,
-            FrameEffects::default(),
+            &mut FrameEffects::default(),
         )
         .unwrap();
     assert!(output.lifecycle_outputs.contains(
@@ -1162,10 +1152,9 @@ fn replay_keeps_future_local_work_on_the_admitted_scheduler() {
         .advance_app_frame(
             &[],
             RuleSet::empty_for_test(),
-            None,
             33,
             crate::sim::world::TickLane::Ordinary,
-            FrameEffects::default(),
+            &mut FrameEffects::default(),
         )
         .unwrap();
     assert_eq!(first.admitted_commands, [future.clone()]);
@@ -1176,10 +1165,9 @@ fn replay_keeps_future_local_work_on_the_admitted_scheduler() {
         .advance_app_frame(
             &due,
             RuleSet::empty_for_test(),
-            None,
             33,
             crate::sim::world::TickLane::Ordinary,
-            FrameEffects::default(),
+            &mut FrameEffects::default(),
         )
         .unwrap();
     assert_eq!(replay.pending_command_snapshot(), [future.clone()]);
@@ -1189,10 +1177,9 @@ fn replay_keeps_future_local_work_on_the_admitted_scheduler() {
         .advance_app_frame(
             &due,
             RuleSet::empty_for_test(),
-            None,
             33,
             crate::sim::world::TickLane::Ordinary,
-            FrameEffects::default(),
+            &mut FrameEffects::default(),
         )
         .unwrap();
     assert_eq!(replay.session.game_options().game_speed, 4);

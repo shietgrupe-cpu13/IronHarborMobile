@@ -507,13 +507,18 @@ fn status_text_precedes_clock(item: &crate::ui::sidebar::SidebarItem) -> bool {
 /// hard-coded `BuildCat` 0 (`StripClass::Draw`, push at `0x006A9C52`, then
 /// Fetch_Factory `0x00500510`): every structure gets the Buildings Factory. A
 /// Building entry finds its own, which holds one build at a time, so its count
-/// is at most the held copy; a Defense entry never counts. Phobos'
-/// `StripClass_DrawStrip_FindFactoryDehardCode @ 0x006A9C54`
-/// (`src/Ext/Building/Hooks.cpp`) replaces that `BuildCat` with the building
-/// type's own, unconditionally — it is not gated on
-/// `[General] BuildingProductionQueue=`, which only decides whether a
-/// structure strip may stack copies at all.
-const STRUCTURE_QUEUE_BADGES: bool = cfg!(feature = "phobos");
+/// is at most the held copy; a Defense entry never counts. The de-hard-coded
+/// lookup (Phobos' `StripClass_DrawStrip_FindFactoryDehardCode @ 0x006A9C54`,
+/// `src/Ext/Building/Hooks.cpp`) uses the building type's own Factory. It is
+/// unconditional under the `phobos` feature; a default build takes it with
+/// `[General] BuildingProductionQueue=`, the switch that lets structure strips
+/// stack copies, so gamemd's single-count badge stays without it.
+fn structure_queue_badges(state: &crate::app::state::AppState) -> bool {
+    cfg!(feature = "phobos")
+        || state
+            .rules()
+            .is_some_and(|rules| rules.general.building_production_queue)
+}
 
 fn shows_queue_badge(item: &crate::ui::sidebar::SidebarItem, structure_badges: bool) -> bool {
     // VERA's Superweapon Limit: a superweapon cameo counts its charged shots
@@ -855,7 +860,7 @@ pub(crate) fn build_sidebar_cameo_instances(
             }
         }
 
-        let has_queue_badge = shows_queue_badge(item, STRUCTURE_QUEUE_BADGES);
+        let has_queue_badge = shows_queue_badge(item, structure_queue_badges(state));
 
         // Dark strip overlay behind the cameo status text (alpha 0xAF).
         // It follows the label it backs, so only the Hold strip shifts.
@@ -1034,7 +1039,7 @@ pub(crate) fn build_sidebar_text_instances(
     for item in &view.items {
         let slot = item.rect;
 
-        let has_queue_badge = shows_queue_badge(item, STRUCTURE_QUEUE_BADGES);
+        let has_queue_badge = shows_queue_badge(item, structure_queue_badges(state));
 
         // Cameo status text ("Ready" / "On Hold") — at the top of the cameo.
         // Only the Hold label moves to the left edge, and only beside a queue
@@ -1245,6 +1250,7 @@ mod tests {
                 constraints_blocked: false,
                 ares_refusal: None,
                 ready_shots: 0,
+                ares_show_cameo: true,
                 display,
             }];
             let cameos = sidebar::cameo_order::CameoStrips::layout_fixture(&[], &[], &supers);
@@ -1352,12 +1358,15 @@ mod tests {
         let natural = font.text_width(text) as f32;
         let fits = natural + READY_PAD_X * 2.0;
         assert_eq!(status_label_fit(&font, text, fits, None), Fit::NONE);
-        let slot_w = natural * 0.9 + READY_PAD_X * 2.0;
+        // The narrowest letters are as far as a label squeezes; past them it is cut.
+        let tightest = font.fitted(Fit::TIGHTEST, |font| font.text_width(text)) as f32;
+        assert!(tightest < natural);
         for badge in [None, Some("3")] {
-            let fit = status_label_fit(&font, text, slot_w, badge);
             let badge_w = badge.map_or(0.0, |badge| {
                 font.text_width(badge) as f32 + QUEUE_COUNT_PAD_X
             });
+            let slot_w = tightest + READY_PAD_X * 2.0 + badge_w;
+            let fit = status_label_fit(&font, text, slot_w, badge);
             let width = font.fitted(fit, |font| font.text_width(text)) as f32;
             assert!(fit > Fit::NONE, "{badge:?}");
             assert!(

@@ -134,17 +134,16 @@ broadcasts leave by Wi-Fi even when cellular is up or the Wi-Fi has no
 internet. A Wi-Fi change while the lobby list shows reopens the lobby's sockets
 on the new network; a change during a room or a match waits for the lobby.
 
-Two more conditions come from the game, and both look like "the other player
-does not exist":
+Two more conditions come from the game:
 
-- **One build, one feature set.** The join proof carries the version,
-  `VERA20K_NETWORK_BUILD` and the extension flags, and `VERA20K_NETWORK_BUILD`
-  hashes the multiplayer sources plus every enabled Cargo feature. The APK is
-  built with `--no-default-features`, so a desktop peer must be too, or the
-  host refuses the join as a version mismatch.
-- **Player names are the LAN identity.** A player discards advertisements whose
-  name matches its own, so two peers left at the default `[New Player]` never
-  see each other's games. Android has no text input yet, so the activity
+- **One build, one feature set** ([build check](Networking.md#build-check)). The
+  APK is built with `--no-default-features`, so a desktop peer must be too. The
+  host's game shows in the list, but the host refuses the join: the guest sees
+  Request denied and "VERA20k build or enabled gameplay features differ."
+- **Player names are the LAN identity**, and a clash looks like "the other
+  player does not exist". A player discards advertisements whose name matches
+  its own, so two peers left at the default `[New Player]` never see each
+  other's games. Android has no text input yet, so the activity
   appends the last three hex digits of the Android ID: a fresh install enters
   the lobby as `[New Player]-1A2` (`util::device_identity`). The ID survives
   reinstall and an app-data clear and changes only on a factory reset. Every
@@ -157,9 +156,14 @@ A guest also needs the host's map in its own map library.
 - **`NativeActivity`, not `GameActivity`.** Smallest M0. It has no IME, so text
   entry (player name, chat, passwords) is unusable until P6 chooses: switch winit
   to `android-game-activity`, or overlay a Java `EditText` and add JNI.
-- **Vulkan only.** The manifest requires `android.hardware.vulkan.level 0`;
-  GLES-only devices cannot install. Whether to port the existing `webgl`
-  fallback to a runtime capability check is P4's call.
+- **Vulkan default; OpenGL ES experimental.** wgpu's Android build includes
+  both Vulkan and GLES. The launcher stores `[VERA] GraphicsAPI` in the normal
+  `VERA.INI` profile and applies the selected backend on the next game start.
+  Vulkan is optional at install time; OpenGL ES 3 is the package's minimum
+  graphics capability. The existing GL compatibility renderer uses reduced
+  feature limits and has not yet been validated on physical Android devices.
+  If a selected backend cannot initialize, startup reports the failure and
+  retries the engine's default backend.
 - **`configChanges` covers everything winit handles** so rotation and
   split-screen arrive as a resize, not an activity rebuild. A second activity in
   the same process cannot work — winit builds one event loop per process — so

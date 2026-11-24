@@ -215,7 +215,6 @@ pub(crate) fn visual_character(
     cloaking_stages: i32,
     invisible: bool,
     is_building: bool,
-    cloak_present: bool,
     owned_by_current_house: bool,
     owner_present: bool,
     query: VisualCharacterQuery,
@@ -225,18 +224,6 @@ pub(crate) fn visual_character(
     }
     if invisible && !query.map_editor {
         return 5;
-    }
-    // With MO's single cloak stage, Ares can park a cloak-capable unit in
-    // state zero between cloaked frames. A screen observer with sensor vision
-    // still sees the steady half-transparent ghost. Keep this screen-only:
-    // forced sensor queries used by simulation remain native-exact.
-    if cloak_present
-        && !query.force_sensor
-        && !query.map_editor
-        && !is_building
-        && query.observer_senses_cell
-    {
-        return 3;
     }
     if state == 0 || query.map_editor || is_building {
         return 0;
@@ -548,7 +535,6 @@ impl CloakRuntime {
                     facts.cloaking_stages,
                     facts.invisible,
                     facts.is_building,
-                    true,
                     facts.owned_by_current_house,
                     true,
                     VisualCharacterQuery::sensor(false, false, false),
@@ -593,7 +579,6 @@ impl CloakRuntime {
                 facts.cloaking_stages,
                 facts.invisible,
                 facts.is_building,
-                true,
                 facts.owned_by_current_house,
                 true,
                 VisualCharacterQuery::sensor(false, false, false),
@@ -695,7 +680,7 @@ impl crate::sim::game_entity::GameEntity {
         alliances: Option<&crate::sim::house_diplomacy::HouseAlliances>,
         interner: &crate::sim::intern::StringInterner,
     ) -> bool {
-        let Some(disguise) = self.disguise.as_ref() else {
+        let Some(disguise) = self.seldom.disguise.as_ref() else {
             return false;
         };
         // Building and Aircraft keep the Techno base (`0x0041C020`): the raw
@@ -738,7 +723,11 @@ impl crate::sim::game_entity::GameEntity {
         owner_allied_with_player: bool,
     ) -> Option<InternedId> {
         use crate::map::entities::EntityCategory;
-        let worn = self.disguise.as_ref().and_then(DisguiseRuntime::house);
+        let worn = self
+            .seldom
+            .disguise
+            .as_ref()
+            .and_then(DisguiseRuntime::house);
         match self.category() {
             EntityCategory::Unit | EntityCategory::Infantry
                 if owner_allied_with_player && !skip_own =>
@@ -833,7 +822,7 @@ use transitions::{StartCloakingResult, StartUncloakingResult};
 /// from different stack slots by the two reveal writers. It has no established
 /// behavioral meaning in this chain and is not deterministic cell state.
 /// Native controls: `tools/spatial_oracle/mirage_disguise.{py,json,md}`.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DisguiseRuntime {
     disguised: bool,
     disguise_creation_frame: u32,
@@ -858,7 +847,8 @@ impl crate::sim::game_entity::GameEntity {
     /// object's writer that puts a disguise on also calls
     /// `EntityStore::note_look`, which the atlas check reads.
     pub(crate) fn disguise_mut(&mut self, frame: u32) -> &mut DisguiseRuntime {
-        self.disguise
+        self.seldom
+            .disguise
             .get_or_insert_with(|| DisguiseRuntime::new(frame))
     }
 }
@@ -1015,7 +1005,12 @@ impl crate::sim::world::Simulation {
         ) {
             return None;
         }
-        if let Some(kind) = entity.disguise.as_ref().and_then(DisguiseRuntime::type_id) {
+        if let Some(kind) = entity
+            .seldom
+            .disguise
+            .as_ref()
+            .and_then(DisguiseRuntime::type_id)
+        {
             return Some(kind);
         }
         if entity.category() != EntityCategory::Infantry {
@@ -1024,7 +1019,7 @@ impl crate::sim::world::Simulation {
         // VERA network adaptation, as HasOccurred53's: PlayerPtr differs per
         // client, so a network game answers the worn type alone. Dormant on
         // retail, whose only Agent (SPY) is built wearing its side's type.
-        if self.session.game_mode().is_network() {
+        if self.session.execution_topology().is_lockstep() {
             return None;
         }
         let side = self
@@ -1092,7 +1087,7 @@ impl crate::sim::world::Simulation {
                     return;
                 };
                 Some(
-                    match target.disguise.as_ref().filter(|d| d.is_disguised()) {
+                    match target.seldom.disguise.as_ref().filter(|d| d.is_disguised()) {
                         Some(disguise) => (
                             self.forced_disguise_type(target.stable_id(), rules),
                             disguise.house().or(self.session.current_house()),
@@ -1153,16 +1148,20 @@ impl crate::sim::world::Simulation {
         // predicate has no intervening simulation writer on this route.
         let moving = crate::sim::movement::motion_query::is_moving(entity)
             .ok_or_else(|| format!("UpdateDisguise7468C0: Unit {id} has no locomotor"))?;
-        let acquire = !entity.disguise.as_ref().is_some_and(|d| d.is_disguised())
+        let acquire = !entity
+            .seldom
+            .disguise
+            .as_ref()
+            .is_some_and(|d| d.is_disguised())
             && !moving
             && object_type.disguise_when_still
-            && entity.radio_contacts.slot(0).is_none();
+            && entity.seldom.radio_contacts.slot(0).is_none();
         if moving {
             if let Some(disguise) = self
                 .substrate
                 .entities
                 .get_mut(id)
-                .and_then(|e| e.disguise.as_mut())
+                .and_then(|e| e.seldom.disguise.as_mut())
             {
                 disguise.clear_unit();
             }
@@ -1233,6 +1232,7 @@ impl crate::sim::world::Simulation {
                 state.clear_unit();
             } else if acquire
                 && !entity
+                    .seldom
                     .disguise
                     .as_ref()
                     .is_some_and(|d| d.reveal_blocks(frame))

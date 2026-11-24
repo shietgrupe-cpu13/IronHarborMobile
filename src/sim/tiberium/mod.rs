@@ -116,7 +116,10 @@ pub struct TiberiumPlacementObjectContext<'a> {
     /// `0x005FD04F` for TIB01). Production Marks read the simulation's own
     /// planes; only the test harness that builds a world from this context
     /// copies these.
-    #[cfg_attr(not(any(test, feature = "test-support")), allow(dead_code))]
+    #[cfg_attr(
+        not(any(test, feature = "test-support")),
+        expect(dead_code, reason = "only the test harness copies it")
+    )]
     raw_occupation: &'a RawCellOccupationGrid,
     rules: &'a RuleSet,
     interner: &'a StringInterner,
@@ -378,7 +381,7 @@ pub(crate) fn place_tiberium(
     cell: (u16, u16),
     type_id: TiberiumTypeId,
     amount: u8,
-    effects: FrameEffects<'_>,
+    effects: &mut FrameEffects<'_>,
 ) -> Result<Option<TiberiumPlacement>, RuntimeOverlayError> {
     // An absent index or an entry without a usable Image= places nothing.
     let Some(ty) = rules.tiberium_types.live(type_id) else {
@@ -449,7 +452,7 @@ pub(crate) fn place_new_tiberium(
     requested: (u16, u16),
     type_id: TiberiumTypeId,
     amount: u8,
-    effects: FrameEffects<'_>,
+    effects: &mut FrameEffects<'_>,
 ) -> Result<Option<TiberiumPlacement>, RuntimeOverlayError> {
     let Some(ty) = rules.tiberium_types.live(type_id) else {
         return Ok(None);
@@ -532,7 +535,7 @@ pub(crate) fn spread_tiberium(
     source: (u16, u16),
     forced: bool,
     spawner: Option<SpawnerSpread>,
-    effects: FrameEffects<'_>,
+    effects: &mut FrameEffects<'_>,
 ) -> Result<Option<TiberiumPlacement>, RuntimeOverlayError> {
     let Some(grid) = sim.overlay_grid.as_ref() else {
         return Ok(None);
@@ -638,7 +641,7 @@ fn spawner_cell_spread(
     source: (u16, u16),
     type_id: TiberiumTypeId,
     spawner: SpawnerSpread,
-    effects: FrameEffects<'_>,
+    effects: &mut FrameEffects<'_>,
 ) -> Result<Option<TiberiumPlacement>, RuntimeOverlayError> {
     // `SpawnsTiberium.Type=` naming an absent or image-less entry: no spread.
     let Some(ty) = rules.tiberium_types.live(type_id) else {
@@ -894,7 +897,7 @@ mod tests {
                 cell,
                 id,
                 amount,
-                FrameEffects::default(),
+                &mut FrameEffects::default(),
             )
         })
         .expect("valid placement fixture")
@@ -913,7 +916,7 @@ mod tests {
                 cell,
                 forced,
                 spawner,
-                FrameEffects::default(),
+                &mut FrameEffects::default(),
             )
         })
         .expect("valid spread fixture")
@@ -1046,7 +1049,7 @@ mod tests {
             (10, 10),
             TiberiumTypeId(0),
             3,
-            FrameEffects::default(),
+            &mut FrameEffects::default(),
         )
         .unwrap()
         .expect("admitted numeric overlay placement");
@@ -1096,7 +1099,7 @@ mod tests {
                 (10, 10),
                 TiberiumTypeId(0),
                 0,
-                FrameEffects::default()
+                &mut FrameEffects::default()
             )
             .unwrap()
             .is_none()
@@ -1147,7 +1150,7 @@ mod tests {
                 (10, 10),
                 TiberiumTypeId(1),
                 1,
-                FrameEffects::default()
+                &mut FrameEffects::default()
             )
             .unwrap()
             .is_none()
@@ -1166,7 +1169,7 @@ mod tests {
                 (10, 10),
                 TiberiumTypeId(1),
                 1,
-                FrameEffects::default()
+                &mut FrameEffects::default()
             )
             .unwrap()
             .is_none(),
@@ -1187,7 +1190,7 @@ mod tests {
                 (12, 12),
                 0,
                 OverlayRecalc::Immediate,
-                FrameEffects::default(),
+                &mut FrameEffects::default(),
             )
             .is_ok()
         );
@@ -1215,7 +1218,7 @@ mod tests {
                 event,
                 crate::sim::world::SimSoundEvent::AnimationStarted { anim_id, sound_id, world }
                     if *anim_id == child_id
-                        && sound_id == "BUILDINGFIREBIG"
+                        && sound_id.name_in(&cold) == "BUILDINGFIREBIG"
                         && *world == child.world_coord()
             )),
             "retail FIRE01 Start must emit its sound before classification"
@@ -1245,7 +1248,7 @@ mod tests {
             (4, 4),
             true,
             Some(spawner),
-            FrameEffects::default(),
+            &mut FrameEffects::default(),
         )
         .expect("an entry without Image= must not stop the frame");
         assert!(placed.is_none());
@@ -1294,6 +1297,14 @@ mod tests {
     fn native_tiberium_fixture_with_riparius_growth(
         riparius_growth: &str,
     ) -> (OverlayTypeRegistry, TiberiumTypeRegistry) {
+        let ini = native_tiberium_ini(riparius_growth);
+        (
+            OverlayTypeRegistry::from_ini(&ini, None),
+            TiberiumTypeRegistry::from_ini(&ini),
+        )
+    }
+
+    fn native_tiberium_ini(riparius_growth: &str) -> IniFile {
         // Retail's [Tiberium] row, the Land every ore overlay here copies. An
         // unauthored one is the zero row, whose Wheel 0 makes ore impassable.
         let mut ini_text = format!(
@@ -1356,11 +1367,7 @@ SpreadPercentage=.06
         for name in tiberium_names {
             ini_text.push_str(&format!("[{name}]\nTiberium=yes\n"));
         }
-        let ini = IniFile::from_str(&ini_text);
-        (
-            OverlayTypeRegistry::from_ini(&ini, None),
-            TiberiumTypeRegistry::from_ini(&ini),
-        )
+        IniFile::from_str(&ini_text)
     }
 
     fn flat_clear_terrain() -> ResolvedTerrainGrid {
@@ -1963,12 +1970,8 @@ SpreadPercentage=.06
         use crate::sim::world::TickLane;
         use std::sync::Arc;
 
-        let (overlay_registry, tiberium_types) = native_tiberium_fixture();
-        let mut rules = RuleSet::from_ini(&IniFile::from_str(
-            "[InfantryTypes]\n[VehicleTypes]\n[AircraftTypes]\n[BuildingTypes]\n",
-        ))
-        .expect("empty roster rules");
-        rules.tiberium_types = tiberium_types;
+        let rules = RuleSet::from_ini(&native_tiberium_ini(".06")).unwrap();
+        let overlay_registry = rules.overlay_registry();
         let mut sim = Simulation::new();
         sim.hash_state_every(std::num::NonZeroU64::MIN);
         sim.ore_growth_config.set_grows_for_test(false);
@@ -1985,7 +1988,7 @@ SpreadPercentage=.06
         assert!(crate::sim::overlay_grid::recalc_overlay_passability(
             &mut overlay,
             &mut terrain,
-            &overlay_registry,
+            overlay_registry,
             0,
             0,
         ));
@@ -2008,7 +2011,7 @@ SpreadPercentage=.06
             (0, 0),
             4,
             &rules,
-            Some(&overlay_registry),
+            Some(overlay_registry),
         )
         .unwrap();
         assert!(outcome.fully_removed);
@@ -2035,19 +2038,18 @@ SpreadPercentage=.06
         );
         let repeated = sim.overlay_grid.as_mut().unwrap().recalculate_runtime_cell(
             sim.resolved_terrain.as_mut().unwrap(),
-            &overlay_registry,
+            overlay_registry,
             (0, 0),
         );
         assert!(!repeated.navigation_changed);
 
         let deferred = sim
-            .advance_app_frame(
+            .advance_app_frame_without_overlay_types_for_test(
                 &[],
                 &rules,
-                None,
                 67,
                 TickLane::Ordinary,
-                crate::sim::world::FrameEffects::default(),
+                &mut crate::sim::world::FrameEffects::default(),
             )
             .expect("fixture frame must complete");
         assert!(deferred.overlay_updates.is_empty());
@@ -2068,10 +2070,9 @@ SpreadPercentage=.06
             .advance_app_frame(
                 &[],
                 &rules,
-                Some(&overlay_registry),
                 67,
                 TickLane::Ordinary,
-                crate::sim::world::FrameEffects::default(),
+                &mut crate::sim::world::FrameEffects::default(),
             )
             .expect("fixture frame must complete");
         assert!(sim.zone_grid.is_some());
@@ -2088,10 +2089,9 @@ SpreadPercentage=.06
             .advance_app_frame(
                 &[],
                 &rules,
-                Some(&overlay_registry),
                 67,
                 TickLane::Ordinary,
-                crate::sim::world::FrameEffects::default(),
+                &mut crate::sim::world::FrameEffects::default(),
             )
             .expect("fixture frame must complete");
         assert!(second.overlay_updates.is_empty());

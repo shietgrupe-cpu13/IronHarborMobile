@@ -135,14 +135,14 @@ impl RadarMovies {
     }
 }
 
-/// Request5BF390: campaign mode0, fixed catalogue ordinal, unlock progress
+/// Request5BF390: campaign world, fixed catalogue ordinal, unlock progress
 /// before the asset check, source-preserving YR media resolution, then append.
 pub(crate) fn enqueue(state: &mut AppState, index: i32, pause_simulation: bool) {
     if state
         .match_state
         .sim_runtime
         .runtime()
-        .is_none_or(|rt| rt.simulation.session().game_mode_nonzero())
+        .is_none_or(|rt| !rt.simulation.session().uses_campaign_world())
     {
         return;
     }
@@ -497,6 +497,7 @@ fn play_head(state: &mut AppState, wall_ms: u64) {
         .options_profile
         .voice_volume
         .clamp(0.0, 1.0);
+    let active = playback_active(state);
     if state
         .match_state
         .match_presentation
@@ -516,10 +517,15 @@ fn play_head(state: &mut AppState, wall_ms: u64) {
             .expect("unstarted head owns video");
         // Radar's 0x005BF360 callback posts HUD rows instead of a movie overlay.
         // Its cue cursor stays with the FIFO head and advances only while active.
-        let playback = MoviePlayback::new(surface, state.audio.movie_mixer(), voice_volume, None);
+        let playback = MoviePlayback::new(
+            surface,
+            state.audio.movie_mixer(),
+            voice_volume,
+            None,
+            active,
+        );
         state.match_state.match_presentation.radar_movies.playing = Some(playback);
     }
-    let active = playback_active(state);
     let playback = state
         .match_state
         .match_presentation

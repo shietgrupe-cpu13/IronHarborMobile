@@ -54,7 +54,6 @@ class LauncherActivity : Activity() {
         SETTINGS("Settings", R.drawable.ic_ih_settings),
         TOUCH("Touch", R.drawable.ic_ih_touch),
         MODS("Mods", R.drawable.ic_ih_mods),
-        CAMPAIGNS("Campaigns", R.drawable.ic_ih_play),
         MAPS("Maps", R.drawable.ic_ih_maps),
         DIAGNOSTICS("Diagnostics", R.drawable.ic_ih_diagnostics),
     }
@@ -86,6 +85,7 @@ class LauncherActivity : Activity() {
         private var aresSetting = "Auto"
     private var downloadingAres = false
     private var modSelectionNote: String? = null
+    private var applyingModSelection = false
     private var modImporting = false
     private var modImportNote: String? = null
     private var mapImporting = false
@@ -118,6 +118,8 @@ class LauncherActivity : Activity() {
     private external fun nativeMapsDirectory(filesDirectory: String): String
     private external fun nativeGetAresSetting(filesDirectory: String): String
     private external fun nativeSetAresSetting(value: String, filesDirectory: String): String
+    private external fun nativeGetRenderer(filesDirectory: String): String
+    private external fun nativeSetRenderer(value: String, filesDirectory: String): String
     private external fun nativeGetCameraZoomLimits(filesDirectory: String): String
     private external fun nativeConfigForCameraZoomLimits(minimum: Float, maximum: Float, filesDirectory: String): String
     private external fun nativeGetRenderOptions(filesDirectory: String): String
@@ -376,7 +378,6 @@ class LauncherActivity : Activity() {
             Page.SETTINGS -> renderSettings()
             Page.TOUCH -> renderTouch()
             Page.MODS -> renderMods()
-            Page.CAMPAIGNS -> renderCampaigns()
             Page.MAPS -> renderMaps()
             Page.DIAGNOSTICS -> renderDiagnostics()
         }
@@ -514,15 +515,10 @@ class LauncherActivity : Activity() {
             renderPage()
         }, margin(bottom = 17))
 
-        pageBody.addView(actionButton("CAMPAIGNS   /   RA2 + YURI'S REVENGE", primary = false) {
-            page = Page.CAMPAIGNS
-            renderPage()
-        }, margin(bottom = 14))
-
         val engine = card()
         engine.addView(kicker("ENGINE STATUS"))
         infoRow(engine, "Engine", "VERA20K ${appVersion()}")
-        infoRow(engine, "Renderer", "Vulkan required by this build")
+        infoRow(engine, "Renderer", currentRendererLabel())
         infoRow(engine, "Attribution", "YuriPlanet / VERA20K  /  GPLv3")
         pageBody.addView(engine)
         pageBody.addView(text(
@@ -530,45 +526,6 @@ class LauncherActivity : Activity() {
             10,
             R.color.launcher_muted,
         ), margin(top = 14))
-    }
-
-    private fun renderCampaigns() {
-        pageBody.addView(kicker("STOCK CAMPAIGN SELECTOR"))
-        pageBody.addView(text("Campaigns", 30, R.color.launcher_text, bold = true))
-        pageBody.addView(text(
-            "Choose the game campaign set. The original VERA20K campaign screen then lets you choose Allied or Soviet and keeps the game's mission routing and save behavior.",
-            14,
-            R.color.launcher_muted,
-        ), margin(bottom = 15))
-
-        val progress = runCatching { LauncherCampaignProgress.read(engineDataDirectory()) }.getOrDefault(emptyMap())
-        listOf(
-            Triple("Red Alert 2", "ra2", LauncherIniProfile.RA2),
-            Triple("Yuri's Revenge", "yr", LauncherIniProfile.YR),
-        ).forEach { (title, key, profile) ->
-            val group = card()
-            group.addView(kicker(if (key == "ra2") "BASE GAME CAMPAIGNS" else "EXPANSION CAMPAIGNS"))
-            group.addView(text(title, 20, R.color.launcher_text, bold = true))
-            group.addView(text("Allied  /  ${LauncherCampaignProgress.label(progress["$key.all1"])}", 13, R.color.launcher_muted), margin(top = 7))
-            group.addView(text("Soviet  /  ${LauncherCampaignProgress.label(progress["$key.sov1"])}", 13, R.color.launcher_muted), margin(top = 3, bottom = 9))
-            group.addView(actionButton("OPEN ${title.uppercase(Locale.ROOT)} CAMPAIGN SELECTION", primary = true) {
-                try {
-                    val data = engineDataDirectory()
-                    val contents = nativeConfigForSelection("", profile.configValue, data.absolutePath)
-                    LauncherConfigPublisher.publish(data, contents)
-                    modCatalog = readModCatalog(data)
-                    launchGame(openCampaignSelection = true)
-                } catch (error: Exception) {
-                    Toast.makeText(this, "Could not select $title: ${error.message}", Toast.LENGTH_LONG).show()
-                }
-            })
-            pageBody.addView(group, margin(bottom = 12))
-        }
-        pageBody.addView(text(
-            "Progress is recorded only after the engine reports a mission victory. Existing progress from older builds is not reconstructed. Campaign map selection remains the stock game's behavior.",
-            12,
-            R.color.launcher_muted,
-        ), margin(top = 2))
     }
 
     private fun renderFiles() {
@@ -704,11 +661,39 @@ class LauncherActivity : Activity() {
             ).show()
         }
         infoRow(display, "Orientation", "Landscape-first Android window")
-        infoRow(display, "Renderer", "Vulkan; required by the current engine")
+        display.addView(text("Graphics renderer", 15, R.color.launcher_text, bold = true), margin(top = 9))
+        val rendererValues = listOf("auto", "vulkan", "opengl")
+        val rendererLabels = listOf("Automatic (engine default)", "Vulkan", "OpenGL ES (experimental)")
+        val selectedRenderer = try {
+            nativeGetRenderer(engineDataDirectory().absolutePath).lowercase(Locale.ROOT)
+        } catch (error: Exception) {
+            Toast.makeText(this, "Using automatic renderer: ${error.message ?: "profile unavailable"}", Toast.LENGTH_LONG).show()
+            "auto"
+        }
+        val rendererSpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(this@LauncherActivity, android.R.layout.simple_spinner_dropdown_item, rendererLabels)
+            setSelection(rendererValues.indexOf(selectedRenderer).takeIf { it >= 0 } ?: 0)
+            contentDescription = "Gameplay graphics renderer"
+        }
+        display.addView(rendererSpinner)
+        display.addView(text(
+            "Saved to the engine's VERA.INI profile and applied on the next game launch. OpenGL ES uses the engine's compatibility renderer and is experimental on Android; if initialization fails, the engine can fall back to its default backend.",
+            12,
+            R.color.launcher_muted,
+        ), margin(top = 3))
+        display.addView(actionButton("SAVE RENDERER", primary = false) {
+            try {
+                val value = rendererValues[rendererSpinner.selectedItemPosition.coerceIn(rendererValues.indices)]
+                nativeSetRenderer(value, engineDataDirectory().absolutePath)
+                Toast.makeText(this, "${rendererLabels[rendererSpinner.selectedItemPosition]} saved; it applies next launch", Toast.LENGTH_LONG).show()
+            } catch (error: Exception) {
+                Toast.makeText(this, "Could not save renderer: ${error.message ?: error.javaClass.simpleName}", Toast.LENGTH_LONG).show()
+            }
+        }, margin(top = 7))
         infoRow(display, "Display", "Physical Android resolution stays unchanged")
         display.addView(text("EXPERIMENTAL BETA", 12, R.color.launcher_accent, bold = true), margin(top = 8))
         display.addView(text("World render scale", 17, R.color.launcher_text, bold = true), margin(top = 2))
-        display.addView(text("Keep this at 100% for normal play. Lower scales are experimental and may offset the movement indicator or omit building textures. They apply on the next launch, and no FPS gain is established; the scale does not reduce CPU world-draw preparation.", 13, R.color.launcher_muted), margin(top = 4, bottom = 6))
+        display.addView(text("Keep this at 100% for normal play. Lower scales are experimental and may offset the movement indicator or omit building textures. In this engine build, scale and FPS choices are saved by the launcher but are not applied by the renderer.", 13, R.color.launcher_muted), margin(top = 4, bottom = 6))
         val renderOptions = try {
             nativeGetRenderOptions(engineDataDirectory().absolutePath).split(',').let { values ->
                 require(values.size == 2)
@@ -753,14 +738,14 @@ class LauncherActivity : Activity() {
             contentDescription = "Gameplay frame limit"
         }
         display.addView(fpsSpinner)
-        display.addView(text("Frame limiting affects presentation only; simulation/network tick pacing is unchanged. 120 FPS is subject to display refresh and engine pacing. Adaptive resolution is not available.", 12, R.color.launcher_muted), margin(top = 3))
+        display.addView(text("The saved FPS choice is not active in this Android engine build. Simulation/network tick pacing is unchanged. Adaptive resolution is unavailable.", 12, R.color.launcher_muted), margin(top = 3))
         display.addView(actionButton("SAVE GRAPHICS SETTINGS", primary = true) {
             try {
                 val dataDirectory = requireSharedDataDirectory()
                 val fps = fpsValues[fpsSpinner.selectedItemPosition.coerceIn(fpsValues.indices)]
                 val contents = nativeConfigForRenderOptions(renderPercent, fps, dataDirectory.absolutePath)
                 LauncherConfigPublisher.publish(dataDirectory, contents)
-                Toast.makeText(this, "Graphics settings saved; they apply the next time you start the game", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Graphics choices saved; renderer support is still experimental and these values are not applied yet", Toast.LENGTH_LONG).show()
             } catch (error: Exception) {
                 Toast.makeText(this, "Could not save graphics settings: ${error.message ?: error.javaClass.simpleName}", Toast.LENGTH_LONG).show()
             }
@@ -1265,13 +1250,27 @@ class LauncherActivity : Activity() {
         }
         pageBody.addView(current, margin(bottom = 12))
 
+        if (applyingModSelection) {
+            val progress = card()
+            progress.addView(kicker("SAVING GAME PROFILE"))
+            progress.addView(ProgressBar(this).apply { isIndeterminate = true }, margin(top = 8))
+            progress.addView(text(
+                "The launcher is saving your selection. The engine checks archives and INI roots once while it starts.",
+                13,
+                R.color.launcher_muted,
+            ), margin(top = 7))
+            pageBody.addView(progress, margin(bottom = 12))
+        }
+
         val profiles = card()
         profiles.addView(kicker("SUPPORTED INI ROOT PROFILES"))
         listOf(LauncherIniProfile.RA2, LauncherIniProfile.YR, LauncherIniProfile.MO, LauncherIniProfile.AUTO).forEach { profile ->
             profiles.addView(actionButton(
                 if (modCatalog.profile == profile) "  ${profile.title.uppercase()}   /   SELECTED" else profile.title.uppercase(),
                 primary = modCatalog.profile == profile,
-            ) { applyModSelection(modCatalog.selectedMod, profile) }, margin(top = 7))
+            ) { applyModSelection(modCatalog.selectedMod, profile) }.apply {
+                isEnabled = !applyingModSelection
+            }, margin(top = 7))
         }
         if (modCatalog.profile == LauncherIniProfile.CUSTOM) {
             profiles.addView(text(
@@ -1287,7 +1286,9 @@ class LauncherActivity : Activity() {
         installed.addView(actionButton(
             if (modImporting) "IMPORTING MOD..." else "IMPORT MOD FOLDER",
             primary = false,
-        ) { if (!modImporting) chooseModFolder() }, margin(top = 7))
+        ) { if (!modImporting && !applyingModSelection) chooseModFolder() }.apply {
+            isEnabled = !modImporting && !applyingModSelection
+        }, margin(top = 7))
         if (modImporting) installed.addView(text(
             "Validating the selected folder in place. The source files are not copied or moved.",
             13, R.color.launcher_muted,
@@ -1300,7 +1301,9 @@ class LauncherActivity : Activity() {
         installed.addView(actionButton(
             if (modCatalog.selectedMod == null) "  VANILLA YURI'S REVENGE   /   SELECTED" else "USE VANILLA YURI'S REVENGE",
             primary = modCatalog.selectedMod == null,
-        ) { applyModSelection(null, null) }, margin(top = 10))
+        ) { applyModSelection(null, null) }.apply {
+            isEnabled = !applyingModSelection
+        }, margin(top = 10))
         if (sharedModCatalogLoading) installed.addView(text("Checking Documents/RA2Harbor/Mods for new or nested mod folders...", 13, R.color.launcher_muted), margin(top = 8))
         if (modCatalog.installedMods.isEmpty() && !sharedModCatalogLoading) {
             installed.addView(text("No mod folders found under Documents/RA2Harbor/Mods.", 13, R.color.launcher_muted), margin(top = 8))
@@ -1311,7 +1314,9 @@ class LauncherActivity : Activity() {
             installed.addView(actionButton(
                 if (folder.equals(modCatalog.selectedMod, ignoreCase = true)) "  SELECTED FOR NEXT LAUNCH" else "USE THIS MOD",
                 primary = folder.equals(modCatalog.selectedMod, ignoreCase = true),
-            ) { applyModSelection(folder, null) }, margin(top = 5))
+            ) { applyModSelection(folder, null) }.apply {
+                isEnabled = !applyingModSelection
+            }, margin(top = 5))
         }
         pageBody.addView(installed)
 
@@ -1596,11 +1601,12 @@ class LauncherActivity : Activity() {
         infoRow(device, "Device", "${Build.MANUFACTURER} ${Build.MODEL}")
         infoRow(device, "Android", "${Build.VERSION.RELEASE}  /  API ${Build.VERSION.SDK_INT}")
         infoRow(device, "ABI", Build.SUPPORTED_ABIS.joinToString())
-        infoRow(device, "Vulkan", "Required by package; live adapter not queried here")
+        infoRow(device, "Renderer choice", currentRendererLabel())
+        infoRow(device, "Renderer support", "Vulkan optional; OpenGL ES 3 required (OpenGL path experimental)")
         infoRow(device, "Memory", "${memory.availMem / (1024 * 1024)} MB available  /  native heap ${Debug.getNativeHeapAllocatedSize() / (1024 * 1024)} MB")
         infoRow(device, "Performance profile", "In-game Options > Performance Stats shows frame/tick rate, CPU phases, core load and GPU timing")
         val preflight = File(engineDataDirectory(), "Logs/launcher-preflight-latest.txt")
-        infoRow(device, "File/launch timing", if (preflight.isFile) preflight.readLines().take(5).joinToString("  /  ") else "Recorded after the next Play preflight")
+        infoRow(device, "Path preflight timing", if (preflight.isFile) preflight.readLines().take(5).joinToString("  /  ") else "Recorded after the next Play preflight")
         infoRow(device, "FPS comparison", "Use the in-game CPU/GPU overlay and matching workloads; the diagnostics ZIP does not yet record live frame samples")
         infoRow(device, "Log export", "Full retained engine logs and crash report in a ZIP")
         infoRow(device, "Automatic startup log", "${StartupDiagnostics.locationDescription(this)} — refreshed at launch and after returning from a game; the same file is overwritten")
@@ -1624,17 +1630,18 @@ class LauncherActivity : Activity() {
             appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL}")
             appendLine("Android: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
             appendLine("ABI: ${Build.SUPPORTED_ABIS.joinToString()}")
-            appendLine("Vulkan: required by package; live adapter not queried by launcher")
+            appendLine("Saved renderer choice: ${currentRendererLabel()}")
+            appendLine("Backend support: Vulkan optional; OpenGL ES 3 required; OpenGL compatibility path experimental")
             appendLine("Available memory: ${memory.availMem / (1024 * 1024)} MB")
             appendLine("Native heap: ${Debug.getNativeHeapAllocatedSize() / (1024 * 1024)} MB")
             appendLine("Installation configured: ${installation.configuredDirectory?.absolutePath ?: "no"}")
             appendLine("Engine logs: ${File(engineDataDirectory(), "Logs").absolutePath}")
             val preflight = File(engineDataDirectory(), "Logs/launcher-preflight-latest.txt")
             if (preflight.isFile) {
-                appendLine("Last game-file/mod preflight timings:")
+                appendLine("Last launcher path-preflight timings:")
                 appendLine(preflight.readText().take(16_384))
             } else {
-                appendLine("No launcher preflight timing has been recorded yet.")
+                appendLine("No launcher path-preflight timing has been recorded yet.")
             }
             appendLine("The attached ZIP includes recognized engine logs, retained crash/ANR details when available, a bounded startup diagnostic report, and recent app-UID logcat.")
             appendLine("The logcat capture cannot include system-wide logs or guarantee that entries remain available.")
@@ -1879,7 +1886,11 @@ class LauncherActivity : Activity() {
         dialog.show()
     }
 
-    private fun applyModSelection(modName: String?, profile: LauncherIniProfile?) {
+    private fun applyModSelection(
+        modName: String?,
+        profile: LauncherIniProfile?,
+    ) {
+        if (applyingModSelection) return
         if (!installation.ready) {
             modSelectionNote = "Locate and verify a game installation before changing the mod or INI profile."
             renderPage()
@@ -1895,24 +1906,47 @@ class LauncherActivity : Activity() {
             refreshInstallation()
             return
         }
-        try {
-            val dataDirectory = requireSharedDataDirectory()
-            val contents = if (profile == null) {
-                nativeConfigForMod(modName.orEmpty(), dataDirectory.absolutePath)
-            } else {
-                nativeConfigForSelection(modName.orEmpty(), profile.configValue, dataDirectory.absolutePath)
-            }
-            LauncherConfigPublisher.publish(dataDirectory, contents)
-            val externalPath = modName?.takeIf {
-                File(it).isAbsolute && AndroidSharedStoragePath.relativeFolderName(File(dataDirectory, "Mods"), File(it)) == null
-            }
-            SharedDataStorage(this).setExternalModPath(externalPath)
-            modSelectionNote = "Saved. The engine validated the selected resources in place; they take effect on the next launch. ${LauncherModCatalog.resourceSummary(contents)}."
-            refreshInstallation()
+        val dataDirectory = try {
+            requireSharedDataDirectory()
         } catch (error: Exception) {
             modSelectionNote = "Selection was not applied: ${error.message ?: error.javaClass.simpleName}"
             renderPage()
+            return
         }
+        applyingModSelection = true
+        modSelectionNote = "Saving the selected mod and INI profile to Config/config.toml..."
+        renderPage()
+        Thread({
+            val selection = runCatching {
+                val contents = if (profile == null) {
+                    nativeConfigForMod(modName.orEmpty(), dataDirectory.absolutePath)
+                } else {
+                    nativeConfigForSelection(modName.orEmpty(), profile.configValue, dataDirectory.absolutePath)
+                }
+                LauncherConfigPublisher.publish(dataDirectory, contents)
+                val externalPath = modName?.takeIf {
+                    File(it).isAbsolute && AndroidSharedStoragePath.relativeFolderName(
+                        File(dataDirectory, "Mods"), File(it),
+                    ) == null
+                }
+                contents to externalPath
+            }
+            runOnUiThread {
+                applyingModSelection = false
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                selection.fold(
+                    onSuccess = { (contents, externalPath) ->
+                        SharedDataStorage(this).setExternalModPath(externalPath)
+                        modSelectionNote = "Saved in Documents/RA2Harbor/Config/config.toml. Archive and INI validation runs once during engine startup. ${LauncherModCatalog.resourceSummary(contents)}."
+                        refreshInstallation()
+                    },
+                    onFailure = { error ->
+                        modSelectionNote = "Selection was not applied: ${error.message ?: error.javaClass.simpleName}"
+                        renderPage()
+                    },
+                )
+            }
+        }, "ironharbor-mod-profile-save").start()
     }
 
     private fun chooseStorageLocation() {
@@ -2012,8 +2046,9 @@ class LauncherActivity : Activity() {
                 modImporting = false
                 result.onSuccess { (name, config) ->
                     refreshInstallation()
-                    applyModSelection(name, null)
+                    modSelectionNote = "Saved $name for next launch. ${LauncherModCatalog.resourceSummary(config)}."
                     modImportNote = "$name was validated and selected in place. Its source files were not copied. ${LauncherModCatalog.resourceSummary(config)}."
+                    renderPage()
                 }.onFailure { error ->
                     modImportNote = "Could not use the selected mod in place: ${error.message ?: error.javaClass.simpleName}"
                     renderPage()
@@ -2091,7 +2126,7 @@ class LauncherActivity : Activity() {
         }, "vera20k-direct-game-selection").start()
     }
 
-    private fun launchGame(openCampaignSelection: Boolean = false) {
+    private fun launchGame() {
         if (validatingLaunch || !launchGate.begin()) return
         validatingLaunch = true
         renderPage()
@@ -2110,7 +2145,7 @@ class LauncherActivity : Activity() {
             }
             val validation = runCatching {
                 syncUserManagedData(measure)
-                measure("engine_selection_validation") {
+                measure("game_mod_path_preflight") {
                     nativeValidateCurrentSelection(engineDataDirectory().absolutePath)
                 }
             }
@@ -2156,7 +2191,6 @@ class LauncherActivity : Activity() {
                             )
                             startActivity(Intent(this, VeraActivity::class.java).apply {
                                 putExtra(ImmersiveFullscreenSettings.INTENT_EXTRA, immersiveFullscreen)
-                                putExtra(LauncherCampaignProgress.INTENT_EXTRA_OPEN_SELECTION, openCampaignSelection)
                             })
                         } catch (error: Exception) {
                             gameWasLaunched = false
@@ -2224,6 +2258,14 @@ class LauncherActivity : Activity() {
             }
         }, "ironharbor-documents-migration").start()
     }
+
+    private fun currentRendererLabel(): String = runCatching {
+        when (nativeGetRenderer(engineDataDirectory().absolutePath).lowercase(Locale.ROOT)) {
+            "vulkan" -> "Vulkan (next launch)"
+            "opengl" -> "OpenGL ES (experimental; next launch)"
+            else -> "Automatic (engine default)"
+        }
+    }.getOrDefault("Automatic (profile unavailable)")
 
     private fun appVersion(): String {
         val versionName = runCatching {

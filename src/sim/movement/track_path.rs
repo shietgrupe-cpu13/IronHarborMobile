@@ -29,7 +29,7 @@
 //! relocation.
 //!
 //! Find_Path's ordinary zero-prefix copy installs at most 24 direction words
-//! (`FootPathQueue::install`, 0x4D3E82..0x4D3EA1). The full search destination
+//! (`FootPathQueue::install_directions`, 0x4D3E82..0x4D3EA1). The full search destination
 //! stays with its owner. When the window runs short, the existing last-word
 //! distance check or no-queue continuation can request the next window;
 //! this is not an unconditional replan every 24 cells.
@@ -78,10 +78,12 @@ fn hover_unit(entity: &GameEntity) -> bool {
 /// the Unit setter's Foot tail reaches Walk Move_To (0x0075ACB0).
 fn walk_unit(entity: &GameEntity) -> bool {
     entity.category() == EntityCategory::Unit
-        && entity
-            .locomotor
-            .as_ref()
-            .is_some_and(|loco| loco.active_kind() == LocomotorKind::Walk)
+        && entity.locomotor.as_ref().is_some_and(|loco| {
+            matches!(
+                loco.active_kind(),
+                LocomotorKind::Walk | LocomotorKind::Mech
+            )
+        })
 }
 
 /// A Unit on a Teleport locomotor, which for a type that is no `Teleporter=`
@@ -211,7 +213,7 @@ impl Simulation {
         request: &FootPathRequest,
         rules: &RuleSet,
         registry: Option<&OverlayTypeRegistry>,
-        frame_effects: FrameEffects<'_>,
+        frame_effects: &mut FrameEffects<'_>,
     ) -> Result<FootPathOutcome, String> {
         let id = request.entity_id;
         let frame = self.session.binary_frame();
@@ -235,7 +237,7 @@ impl Simulation {
         found: super::foot_path::FindPathResult,
         rules: &RuleSet,
         registry: Option<&OverlayTypeRegistry>,
-        frame_effects: FrameEffects<'_>,
+        frame_effects: &mut FrameEffects<'_>,
     ) -> Result<FootPathOutcome, String> {
         use super::foot_path::FindPathResult;
         //4B28B3..4B28C7 / 6A1F03..6A1F17: a vanished Foot sets the out byte.
@@ -258,7 +260,7 @@ impl Simulation {
         id: u64,
         rules: &RuleSet,
         registry: Option<&OverlayTypeRegistry>,
-        frame_effects: FrameEffects<'_>,
+        frame_effects: &mut FrameEffects<'_>,
     ) -> Result<FootPathOutcome, String> {
         let actor = self
             .substrate
@@ -302,14 +304,14 @@ impl Simulation {
         id: u64,
         rules: &RuleSet,
         registry: Option<&OverlayTypeRegistry>,
-        frame_effects: FrameEffects<'_>,
+        frame_effects: &mut FrameEffects<'_>,
     ) -> Result<FootPathOutcome, String> {
         let destination = self.substrate.entities.get(id).and_then(track_destination);
         //4B28CD / 6A1F1D: the zone precheck on the LIVE destination, which the
-        //Unit receiver may already have cleared (Cell(0,0) refuses).
+        //class receiver may already have cleared (Cell(0,0) refuses).
         let probe = destination.unwrap_or(super::foot_coordinate::NULL_COORD);
         if !self.foot_path_zone_precheck(id, probe, rules)? {
-            self.set_unit_null_destination(id, rules, None, frame_effects);
+            self.assign_null_destination(id, rules, Some(rules.overlay_registry()), frame_effects);
             return Ok(FootPathOutcome::Returned);
         }
         //4B28F5..4B2917: a null destination returns.
@@ -403,18 +405,21 @@ impl Simulation {
         id: u64,
         rules: &RuleSet,
         registry: Option<&OverlayTypeRegistry>,
-        frame_effects: FrameEffects<'_>,
+        frame_effects: &mut FrameEffects<'_>,
     ) {
         if self.foot_can_fire_at_target(id, rules, registry) != Some(false) {
             return;
         }
         if let Some(actor) = self.substrate.entities.get_mut(id) {
-            actor.foot_retarget_after_stop.mark_stopped_cannot_fire();
+            actor
+                .seldom
+                .foot_retarget_after_stop
+                .mark_stopped_cannot_fire();
         }
         if let Some((team_id, _)) = self.team_script_vm.team_for_member(id) {
-            self.team_scan_limit(team_id, rules, registry, frame_effects);
+            self.team_scan_limit(team_id, rules, frame_effects);
         }
-        let _ = self.assign_target_represented(id, None, rules, registry, frame_effects);
+        let _ = self.assign_target_represented(id, None, rules, frame_effects);
     }
 
     /// 0x4B2E77..0x4B2F1A / 0x6A24C7..: a stopped Foot holding a target it
@@ -424,7 +429,7 @@ impl Simulation {
         id: u64,
         rules: &RuleSet,
         registry: Option<&OverlayTypeRegistry>,
-        frame_effects: FrameEffects<'_>,
+        frame_effects: &mut FrameEffects<'_>,
     ) -> Result<FootPathOutcome, String> {
         let actor = self
             .substrate
@@ -463,7 +468,7 @@ impl Simulation {
         direction: u8,
         rules: &RuleSet,
         registry: Option<&OverlayTypeRegistry>,
-        frame_effects: FrameEffects<'_>,
+        frame_effects: &mut FrameEffects<'_>,
     ) -> Result<bool, String> {
         if !crate::sim::cell_rect::cell_is_in_playfield_height_aware(
             cell,
@@ -494,7 +499,6 @@ impl Simulation {
                 previous_cell: None,
             },
             rules,
-            registry,
         )?;
         match code {
             3 => {
@@ -523,7 +527,7 @@ impl Simulation {
         cell: (i32, i32),
         rules: &RuleSet,
         registry: Option<&OverlayTypeRegistry>,
-        frame_effects: FrameEffects<'_>,
+        frame_effects: &mut FrameEffects<'_>,
     ) -> Result<bool, String> {
         let terrain = self
             .resolved_terrain
@@ -563,8 +567,14 @@ impl Simulation {
                 b.owner(),
             )
         });
-        //4B2BF1..4B2C04: IsTrain (Type+C94) is set by no retail TechnoType.
-        if !allied {
+        // Drive 4B2C04/4B30E9 and Ship 6A2254/6A2739 skip the ally
+        // stop/scatter for a train in both no-queue responses.
+        if !allied
+            || self
+                .interner
+                .object_type(actor.type_ref(), rules)
+                .is_some_and(|object| object.is_train)
+        {
             return Ok(false);
         }
         let destination = track_destination_or_null(actor);
@@ -574,7 +584,10 @@ impl Simulation {
             [location.x, location.y, location.z],
             [destination.x, destination.y, destination.z],
         ) < rules.general.close_enough;
-        if close && actor.radio_contacts.is_empty() && self.track_stop_band(location, destination) {
+        if close
+            && actor.seldom.radio_contacts.is_empty()
+            && self.track_stop_band(location, destination)
+        {
             //4B2CDD..4B2D65: clear the head, then stop or take the waypoint.
             self.stop_or_take_next_waypoint(id, rules, frame_effects);
             return Ok(true);
@@ -592,44 +605,56 @@ impl Simulation {
 
     /// The shared stop/waypoint pair: clear the head; with an empty NavQueue
     /// SetDestination(NULL, 1), else Foot 0x4DF0D0 (NavCom only) then the
-    /// Unit idle entry (+0x484 = 0x738970), whose AL the caller may return.
+    /// owner's idle entry (vt+0x484), whose AL the caller may return.
     /// Returns that AL (false after the NULL setter).
     pub(super) fn stop_or_take_next_waypoint(
         &mut self,
         id: u64,
         rules: &RuleSet,
-        frame_effects: FrameEffects<'_>,
+        frame_effects: &mut FrameEffects<'_>,
     ) -> bool {
         let Some(actor) = self.substrate.entities.get_mut(id) else {
             return false;
         };
         clear_track_head(actor);
         if actor.navigation.nav_queue().is_empty() {
-            self.set_unit_null_destination(id, rules, None, frame_effects);
+            self.assign_null_destination(id, rules, Some(rules.overlay_registry()), frame_effects);
             return false;
         }
         actor.navigation.stop_moving();
-        self.unit_enter_idle_mode(id, rules, false, frame_effects)
+        crate::sim::world::enter_idle_mode(
+            self,
+            id,
+            rules,
+            Some(rules.overlay_registry()),
+            frame_effects,
+        )
     }
 
     /// The outer Process stop at a same-cell Cell NavCom (0x4B066C..0x4B06D2)
     /// or a Guard exact destination (0x4B06D5..0x4B0772), Ship twins
     /// 0x69FD13 / 0x69FD7F: NavQueue empty -> SetDestination(NULL, 1), else
-    /// Foot 0x4DF0D0 then the Unit idle entry (+0x484). No head write.
+    /// Foot 0x4DF0D0 then the owner's idle entry (vt+0x484). No head write.
     pub(super) fn track_navcom_stop(
         &mut self,
         id: u64,
         rules: &RuleSet,
-        frame_effects: FrameEffects<'_>,
+        frame_effects: &mut FrameEffects<'_>,
     ) {
         let Some(actor) = self.substrate.entities.get_mut(id) else {
             return;
         };
         if actor.navigation.nav_queue().is_empty() {
-            self.set_unit_null_destination(id, rules, None, frame_effects);
+            self.assign_null_destination(id, rules, Some(rules.overlay_registry()), frame_effects);
         } else {
             actor.navigation.stop_moving();
-            self.unit_enter_idle_mode(id, rules, false, frame_effects);
+            crate::sim::world::enter_idle_mode(
+                self,
+                id,
+                rules,
+                Some(rules.overlay_registry()),
+                frame_effects,
+            );
         }
     }
 
@@ -639,7 +664,7 @@ impl Simulation {
         &mut self,
         id: u64,
         rules: &RuleSet,
-        frame_effects: FrameEffects<'_>,
+        frame_effects: &mut FrameEffects<'_>,
     ) {
         self.stop_or_take_next_waypoint(id, rules, frame_effects);
     }
@@ -675,8 +700,7 @@ impl Simulation {
         &mut self,
         id: u64,
         rules: &RuleSet,
-        registry: Option<&OverlayTypeRegistry>,
-        frame_effects: FrameEffects<'_>,
+        frame_effects: &mut FrameEffects<'_>,
     ) {
         // A quiet unit is owed no setter (`world::quiet_units`).
         if self.quiet(id) {
@@ -696,13 +720,13 @@ impl Simulation {
         let Some(requested) = actor.navigation.nav_com() else {
             return;
         };
-        if !self.destination_setter_available(id, requested, rules, registry) {
+        if !self.destination_setter_available(id, requested, rules) {
             return;
         }
         if let Some(actor) = self.substrate.entities.get_mut(id) {
             actor.navigation.stop_moving();
         }
-        self.assign_destination_represented(id, Some(requested), rules, registry, frame_effects)
+        self.assign_destination_represented(id, Some(requested), rules, frame_effects)
             .expect("checked deferred destination setter");
     }
 
@@ -730,7 +754,7 @@ impl Simulation {
         id: u64,
         rules: &RuleSet,
         registry: Option<&OverlayTypeRegistry>,
-        frame_effects: FrameEffects<'_>,
+        frame_effects: &mut FrameEffects<'_>,
     ) {
         let Some(category) = self
             .substrate
@@ -817,7 +841,7 @@ impl Simulation {
         requested: NavTargetRef,
         rules: &RuleSet,
         clear_queue: bool,
-        frame_effects: FrameEffects<'_>,
+        frame_effects: &mut FrameEffects<'_>,
     ) -> bool {
         let Some(actor) = self.substrate.entities.get(id) else {
             return false;
@@ -840,7 +864,7 @@ impl Simulation {
             .navigation
             .nav_com()
             .is_some_and(|held| held.same_pointer(requested, self.resolved_terrain.as_ref()))
-            && !actor.setter_force_reassign.raised
+            && !actor.seldom.setter_force_reassign.raised
         {
             return true;
         }
@@ -849,7 +873,7 @@ impl Simulation {
             .entities
             .get_mut(id)
             .expect("same Unit setter");
-        actor.setter_force_reassign.raised = false;
+        actor.seldom.setter_force_reassign.raised = false;
         //741A96..741ACD, after the same-NavCom guard: deployment refuses
         // through Foot4DF0D0, which clears NavCom, not locomotor movement.
         if deployment_refuses_destination(actor) {
@@ -871,8 +895,8 @@ impl Simulation {
         // when sent to another Techno it holds no contact with.
         if let Some(target) = requested_techno
             && let Some(unit) = self.substrate.entities.get(id)
-            && let Some(contact) = unit.radio_contacts.slot(0)
-            && !unit.radio_contacts.contains(target)
+            && let Some(contact) = unit.seldom.radio_contacts.slot(0)
+            && !unit.seldom.radio_contacts.contains(target)
             && self
                 .entity_object_type(unit, rules)
                 .is_some_and(|object| object.passengers > 0)
@@ -894,10 +918,10 @@ impl Simulation {
         // Carryall coming to lift it (`aircraft::carryall`) calls the
         // Carryall off: its destination is dropped, then UNTETHER and BREAK.
         if let Some(unit) = self.substrate.entities.get(id)
-            && unit.tether.partner().is_some()
+            && unit.seldom.tether.partner().is_some()
             && unit.mission.effective()
                 == crate::sim::mission::MissionId::from_known(MissionType::Sleep)
-            && let Some(carryall) = unit.radio_contacts.slot(0)
+            && let Some(carryall) = unit.seldom.radio_contacts.slot(0)
             && self.is_carryall(carryall, rules)
         {
             self.assign_aircraft_destination(carryall, None, rules, frame_effects);
@@ -998,7 +1022,7 @@ impl Simulation {
                     .substrate
                     .entities
                     .get(building)
-                    .is_some_and(|building| !building.radio_contacts.is_empty());
+                    .is_some_and(|building| !building.seldom.radio_contacts.is_empty());
                 if busy {
                     // `0x00741D41..0x00741D44`: a busy building that is not a
                     // Bunker= becomes the ArchiveTarget.
@@ -1134,7 +1158,8 @@ impl Simulation {
         // the NULL this tail may leave, is not one.
         if let Some((depot, true, _, _)) = enter_building {
             let held_by_other = self.substrate.entities.get(depot).is_some_and(|building| {
-                !building.radio_contacts.is_empty() && building.radio_contacts.slot(0) != Some(id)
+                !building.seldom.radio_contacts.is_empty()
+                    && building.seldom.radio_contacts.slot(0) != Some(id)
             });
             if held_by_other {
                 if let Some(unit) = self.substrate.entities.get_mut(id) {
@@ -1178,7 +1203,8 @@ impl Simulation {
         // alone here; unlike the depot arm, it does not archive the request.
         if !dock_fast_return && let Some((bunker, _, _, true)) = enter_building {
             let held_by_other = self.substrate.entities.get(bunker).is_some_and(|building| {
-                !building.radio_contacts.is_empty() && building.radio_contacts.slot(0) != Some(id)
+                !building.seldom.radio_contacts.is_empty()
+                    && building.seldom.radio_contacts.slot(0) != Some(id)
             });
             if !held_by_other
                 && crate::sim::radio::transmit(
@@ -1214,14 +1240,27 @@ impl Simulation {
         }
         let Some(requested) = destination else {
             if teleporter {
-                let _ = self.unit_teleporter_arm(id, None, rules);
+                let _ = self.unit_teleporter_arm(
+                    id,
+                    None,
+                    rules,
+                    Some(rules.overlay_registry()),
+                    frame_effects,
+                );
             }
-            if !dock_fast_return && self.unit_factory_exit_arm(id, None, rules, None, frame_effects)
+            if !dock_fast_return
+                && self.unit_factory_exit_arm(
+                    id,
+                    None,
+                    rules,
+                    Some(rules.overlay_registry()),
+                    frame_effects,
+                )
             {
                 return true;
             }
             self.unit_destination_power_on(id, rules);
-            self.foot_null_destination(id, rules, None, frame_effects);
+            self.foot_null_destination(id, rules, Some(rules.overlay_registry()), frame_effects);
             return true;
         };
         // 7424B1..7424F0 casts the requested receiver to CellClass. A Foot
@@ -1230,7 +1269,14 @@ impl Simulation {
             NavTargetRef::Cell { rx, ry } => Some((rx, ry)),
             _ => None,
         };
-        let skip_move_to = teleporter && self.unit_teleporter_arm(id, requested_cell, rules);
+        let skip_move_to = teleporter
+            && self.unit_teleporter_arm(
+                id,
+                requested_cell,
+                rules,
+                Some(rules.overlay_registry()),
+                frame_effects,
+            );
         self.unit_tunnel_arm(id, requested, rules);
         // UnitClass::Set_Destination 0x00741970: successful UnitRepair/Bunker
         // docking jumps from 0x00742C8E/0x00742D08 to Foot's setter at
@@ -1239,7 +1285,13 @@ impl Simulation {
         // the repair destination as a factory-exit order while Enter is pending.
         // Source: gamemd.exe instructions 0x00742C14..0x00742E47.
         if !dock_fast_return
-            && self.unit_factory_exit_arm(id, Some(requested), rules, None, frame_effects)
+            && self.unit_factory_exit_arm(
+                id,
+                Some(requested),
+                rules,
+                Some(rules.overlay_registry()),
+                frame_effects,
+            )
         {
             return true;
         }
@@ -1250,7 +1302,12 @@ impl Simulation {
                     UnitDockArm::Cell((rx, ry)) => NavTargetRef::Cell { rx, ry },
                     UnitDockArm::Null => {
                         self.unit_destination_power_on(id, rules);
-                        self.foot_null_destination(id, rules, None, frame_effects);
+                        self.foot_null_destination(
+                            id,
+                            rules,
+                            Some(rules.overlay_registry()),
+                            frame_effects,
+                        );
                         return true;
                     }
                 }
@@ -1260,7 +1317,13 @@ impl Simulation {
         if !dock_fast_return {
             self.unit_destination_power_on(id, rules);
         }
-        if !self.begin_foot_destination(id, true, rules, None, frame_effects) {
+        if !self.begin_foot_destination(
+            id,
+            true,
+            rules,
+            Some(rules.overlay_registry()),
+            frame_effects,
+        ) {
             if dock_fast_return && let Some(actor) = self.substrate.entities.get_mut(id) {
                 actor.navigation.path_replay_mut().clear_live_head();
             }
@@ -1296,7 +1359,6 @@ impl Simulation {
         } else {
             None
         };
-        let terrain = self.resolved_terrain.as_ref();
         let actor = self
             .substrate
             .entities
@@ -1313,12 +1375,12 @@ impl Simulation {
                     LocomotorKind::Drive
                     | LocomotorKind::Ship
                     | LocomotorKind::Hover
-                    | LocomotorKind::Walk,
+                    | LocomotorKind::Walk
+                    | LocomotorKind::Mech,
                 ) => {
                     let coord = coord.expect("accepted Move_To captures target +4C");
-                    if super::navcom::set_destination_internal_coord(
-                        actor, requested, coord, terrain, frame,
-                    ) && let Err(error) = self.hover_move_to_path_step(id, rules, frame_effects)
+                    if let Err(error) =
+                        self.ground_foot_move_to(id, requested, coord, rules, frame_effects)
                     {
                         log::warn!("Unit Hover MoveTo {id}: {}", error.cause);
                     }
@@ -1331,7 +1393,7 @@ impl Simulation {
                         id,
                         coord,
                         rules,
-                        frame_effects.overlay_registry(),
+                        Some(rules.overlay_registry()),
                         frame_effects,
                     );
                     true
@@ -1347,7 +1409,7 @@ impl Simulation {
                         coord,
                         rules,
                         is_harvester,
-                        frame_effects.overlay_registry(),
+                        Some(rules.overlay_registry()),
                         frame_effects,
                     )
                     .unwrap_or_else(|error| {
@@ -1389,7 +1451,7 @@ impl Simulation {
         dock: u64,
         current: NavTargetRef,
         rules: &RuleSet,
-        frame_effects: FrameEffects<'_>,
+        frame_effects: &mut FrameEffects<'_>,
     ) -> UnitDockArm {
         let Some(actor) = self.substrate.entities.get(id) else {
             return UnitDockArm::Keep;
@@ -1420,8 +1482,8 @@ impl Simulation {
                 )
             })
         };
-        let contact = actor.radio_contacts.slot(0) == Some(dock);
-        let busy = !building.radio_contacts.is_empty();
+        let contact = actor.seldom.radio_contacts.slot(0) == Some(dock);
+        let busy = !building.seldom.radio_contacts.is_empty();
         let queue_near = contact
             || busy
             || crate::sim::radio::transmit(
@@ -1461,7 +1523,7 @@ impl Simulation {
             .substrate
             .entities
             .get(id)
-            .and_then(|actor| actor.radio_contacts.slot(0))
+            .and_then(|actor| actor.seldom.radio_contacts.slot(0))
             == Some(current_building)
         {
             return UnitDockArm::Keep;
@@ -1582,6 +1644,8 @@ impl Simulation {
         id: u64,
         cell: Option<(u16, u16)>,
         rules: &RuleSet,
+        registry: Option<&OverlayTypeRegistry>,
+        frame_effects: &mut FrameEffects<'_>,
     ) -> bool {
         let Some(actor) = self.substrate.entities.get(id) else {
             return false;
@@ -1597,6 +1661,7 @@ impl Simulation {
             return false;
         };
         let dock_contact = actor
+            .seldom
             .radio_contacts
             .slot(0)
             .and_then(|contact| self.substrate.entities.get(contact))
@@ -1626,9 +1691,13 @@ impl Simulation {
             if self.try_end_piggyback(id, rules) {
                 return false;
             }
-            let actor = self.substrate.entities.get_mut(id).expect("same arm actor");
-            super::navcom::track_stop_moving(actor);
-            actor.setter_force_reassign.raised = true;
+            if let Err(cause) = self.locomotor_stop_moving(id, rules, registry, frame_effects) {
+                log::warn!("Teleporter {id} could not stop: {cause}");
+            }
+            let Some(actor) = self.substrate.entities.get_mut(id) else {
+                return false;
+            };
+            actor.seldom.setter_force_reassign.raised = true;
             let _ = self.substrate.mission_assign_exact(
                 id,
                 crate::sim::mission::MissionId::NONE,
@@ -1680,7 +1749,7 @@ impl Simulation {
         id: u64,
         rules: &RuleSet,
         registry: Option<&OverlayTypeRegistry>,
-        frame_effects: FrameEffects<'_>,
+        frame_effects: &mut FrameEffects<'_>,
     ) -> bool {
         if self.balloon_hover_keeps_nav_com(id, rules) {
             return false;
@@ -1688,12 +1757,12 @@ impl Simulation {
         let Some(actor) = self.substrate.entities.get(id) else {
             return false;
         };
-        if actor.navigation.nav_com().is_none() && !actor.setter_force_reassign.raised {
+        if actor.navigation.nav_com().is_none() && !actor.seldom.setter_force_reassign.raised {
             return false;
         }
         let teleporter = teleporter_unit(self, actor, rules);
         if let Some(actor) = self.substrate.entities.get_mut(id) {
-            actor.setter_force_reassign.raised = false;
+            actor.seldom.setter_force_reassign.raised = false;
             //741A96..741ACD; same native owner as the non-null setter.
             if deployment_refuses_destination(actor) {
                 actor.navigation.stop_moving();
@@ -1701,7 +1770,7 @@ impl Simulation {
             }
         }
         if teleporter {
-            let _ = self.unit_teleporter_arm(id, None, rules);
+            let _ = self.unit_teleporter_arm(id, None, rules, registry, frame_effects);
         }
         let Some(actor) = self.substrate.entities.get_mut(id) else {
             return false;
@@ -1751,12 +1820,13 @@ impl Simulation {
         destination: Option<NavTargetRef>,
         rules: &RuleSet,
         registry: Option<&OverlayTypeRegistry>,
-        frame_effects: FrameEffects<'_>,
+        frame_effects: &mut FrameEffects<'_>,
     ) -> bool {
         let Some(actor) = self.substrate.entities.get(id) else {
             return false;
         };
         let Some(factory) = actor
+            .seldom
             .radio_contacts
             .slot(0)
             .filter(|&contact| self.is_weapons_factory(contact, rules))

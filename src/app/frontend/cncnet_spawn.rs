@@ -26,7 +26,7 @@ use crate::rules::skirmish_colors::{FIRST_EXTRA_PRIORITY, MAX_EXTRA_COLORS, OBSE
 use crate::sim::game_options::is_selectable_game_speed;
 use crate::skirmish_launch::{
     AiDifficulty, LaunchCountry, LaunchHumanRole, LaunchStartPosition, LaunchTeam,
-    NETWORK_PLAYER_SLOT_COUNT, PreFillHouseRoster, SKIRMISH_PLAYER_SLOT_COUNT, SkirmishAiSlot,
+    NETWORK_PLAYER_SLOT_COUNT, SKIRMISH_MAX_SLOT_COUNT, SKIRMISH_PLAYER_SLOT_COUNT, SkirmishAiSlot,
     SkirmishHumanSlot, SkirmishLaunchMode, SkirmishLaunchOptions, SkirmishLaunchSession,
     SkirmishLocalSlot,
 };
@@ -47,19 +47,6 @@ pub(crate) struct SpawnRequest {
     /// The launch file, read again once the mode roster is loaded
     /// ([`SpawnRequest::admit_loaded_modes`]).
     text: String,
-}
-
-/// The stock Battle row, `GameMode`'s default; `--probe` digests the rules
-/// through its mode file.
-pub(crate) fn spawn_battle_mode() -> SkirmishLaunchMode {
-    SkirmishLaunchMode::stock(crate::skirmish_launch::BATTLE_MODE_ID).expect("stock Battle row")
-}
-
-/// The stock rows a network spawn may select. A Cooperative launch is one mission: it
-/// holds no campaign progress record for its Start (`0x005C1D80`) to bind, so
-/// `+0xA0` (`0x005C3710`) records nothing and no next mission follows.
-pub(crate) fn spawn_modes() -> impl Iterator<Item = SkirmishLaunchMode> {
-    (1..=9).filter_map(SkirmishLaunchMode::stock)
 }
 
 /// One MPModesMD.ini row by id, or none.
@@ -142,10 +129,15 @@ impl SpawnExpectations {
         }
         if let Some(expected) = &self.rules_digest {
             let actual = rules_digest()?;
-            ensure!(
-                *expected == actual,
-                "ExpectedRulesDigest {expected} does not match the local rules digest {actual}"
-            );
+            if *expected != actual {
+                return Err(RulesMismatch {
+                    message: format!(
+                        "ExpectedRulesDigest {expected} does not match the local rules digest {actual}"
+                    ),
+                    parts: None,
+                }
+                .into());
+            }
         }
         if let Some(expected) = &self.map_digest {
             let actual = map_digest()?;
@@ -157,6 +149,24 @@ impl SpawnExpectations {
         Ok(())
     }
 }
+
+/// The launch's rules differ from the `ExpectedRulesDigest` the launcher
+/// probed: the launch report names the failure and this game's parts
+/// (docs/spawn.md, "Rules parts").
+#[derive(Debug)]
+pub(crate) struct RulesMismatch {
+    message: String,
+    /// This game's rules parts for the launched mode, once read.
+    pub(crate) parts: Option<crate::app::rules_parts::RulesParts>,
+}
+
+impl std::fmt::Display for RulesMismatch {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for RulesMismatch {}
 
 #[derive(Debug)]
 pub(crate) enum SpawnGame {
@@ -193,8 +203,12 @@ pub(crate) struct RelaySpawn {
     /// (WSS origin, loopback WS allowed); without it, the compiled one. Desktop
     /// sends UDP to `address` and does not use it.
     pub(crate) gateway_url: Option<String>,
-    /// Bearer for `service_url`.
+    /// Bearer for `service_url`. A watcher's only polls for its renewals.
     pub(crate) token: String,
+    /// `[Relay] Ticket` is a watch ticket (docs/spawn.md "Watching"): this
+    /// game watches the match from its first frame, controls nothing and
+    /// sends the match service nothing but its renewal polls.
+    pub(crate) watch: bool,
     /// The launch speed the ordering certificate's fixed clock names.
     pub(crate) game_speed: i32,
     /// `[Relay] AdmissionTimeout`: each admission barrier's client deadline.
@@ -224,6 +238,7 @@ impl std::fmt::Debug for RelaySpawn {
             .field("game_speed", &self.game_speed)
             .field("admission_timeout", &self.admission_timeout)
             .field("resume", &self.resume)
+            .field("watch", &self.watch)
             .finish_non_exhaustive()
     }
 }
@@ -261,6 +276,12 @@ impl CampaignSpawn {
         // StartScenario(ScenarioName,1,0). Original683AB0 keeps this index
         // independently of the explicit filename; see campaign_start_prefix.json.
         // Do not infer a record from Scenario, Side or client CampaignID.
+        // An empty Scenario takes the record's own (Start_Scenario683AC8).
+        anyhow::ensure!(
+            self.scenario.is_empty() || crate::map::source::is_logical_name(&self.scenario),
+            "campaign Scenario {:?} is not a map name",
+            self.scenario
+        );
         let campaign_index = 0;
         crate::app::match_bootstrap::prepare_campaign_startup_at_index(
             catalog,
@@ -565,22 +586,29 @@ fn skirmish(
         "SpecialHouseIsAlly=Yes is unsupported; use the VERA client profile"
     );
     let multiplayer = player_count > 1 || ini.section("Relay").is_some();
-    // *(VERA)* One human is admitted as a network room admits it, in any mode
-    // and with up to thirty houses, because a lobby plays every one-human
-    // game without a relay. Retail Skirmish lists only Battle and Free for All
-    // (`0x005D6263`), which VERA's Skirmish screen keeps.
+    // *(VERA)* One human is admitted as a network room admits it, in any mode,
+    // because a lobby plays every one-human game without a relay. Retail
+    // Skirmish lists only Battle and Free for All (`0x005D6263`), which VERA's
+    // Skirmish screen keeps. Without a relay that game seats as many houses
+    // as offline Skirmish (`SKIRMISH_MAX_SLOT_COUNT`); a network launch keeps
+    // the relay's thirty sources.
+    let house_limit = if multiplayer {
+        NETWORK_PLAYER_SLOT_COUNT
+    } else {
+        SKIRMISH_MAX_SLOT_COUNT
+    };
     let ai_count = ranged(
         settings,
         "AIPlayers",
         0,
         0,
-        (NETWORK_PLAYER_SLOT_COUNT - player_count) as i32,
+        (house_limit - player_count) as i32,
     )? as usize;
     let handicaps = ini.section_or_empty("HouseHandicaps");
     let mut active = Vec::new();
     let mut rows = Vec::new();
     let mut colors = Vec::new();
-    let mut used_starts = [false; NETWORK_PLAYER_SLOT_COUNT];
+    let mut used_starts = [false; SKIRMISH_MAX_SLOT_COUNT];
     let mut humans: Vec<Option<SkirmishHumanSlot>> = vec![None; player_count];
     let mut names = std::collections::BTreeSet::new();
     let mut local_player_index = 0;
@@ -624,7 +652,7 @@ fn skirmish(
         } else {
             (country(section, "Side")?, color(section, "Color")?)
         };
-        let start = start(ini, house, &mut used_starts)?;
+        let start = start(ini, house, house_limit, &mut used_starts)?;
         ensure!(
             !observer || start == LaunchStartPosition::Auto,
             "spectator Multi{} cannot have a start location",
@@ -666,7 +694,7 @@ fn skirmish(
         .collect();
 
     let mut opponents = Vec::new();
-    for raw_slot in player_count..NETWORK_PLAYER_SLOT_COUNT {
+    for raw_slot in player_count..house_limit {
         let key = format!("Multi{}", raw_slot + 1);
         let difficulty = integer(handicaps, &key, -1)?;
         ensure!(
@@ -693,7 +721,7 @@ fn skirmish(
             country_random: false,
             color_index,
             color_random: false,
-            start_position: start(ini, raw_slot, &mut used_starts)?,
+            start_position: start(ini, raw_slot, house_limit, &mut used_starts)?,
             team: LaunchTeam::None,
             difficulty: match difficulty {
                 0 => AiDifficulty::Hard,
@@ -708,14 +736,10 @@ fn skirmish(
         "AIPlayers={ai_count} does not match {} active HouseHandicaps entries",
         opponents.len()
     );
-    // The lobby's start admission (docs/lobby-protocol.md): spectators
-    // exclude AI, and at least two participants play. Each spectator takes
-    // an observer House (`ScenarioSession::observer_houses`).
+    // The lobby's start admission (docs/lobby-protocol.md): at least two
+    // participants play; spectators may watch AI play too. Each spectator
+    // takes an observer House (`ScenarioSession::observer_houses`).
     let spectators = humans.iter().filter(|human| human.is_observer()).count();
-    ensure!(
-        spectators == 0 || ai_count == 0,
-        "games with spectators cannot include AI players"
-    );
     ensure!(
         !multiplayer || humans.len() - spectators + ai_count >= 2,
         "a multiplayer launch needs at least two playing participants"
@@ -734,7 +758,7 @@ fn skirmish(
         }
     }
     // `active` lists the humans' houses first, then the AI houses in order.
-    let teams = teams(ini, &active, &rows)?;
+    let teams = teams(ini, &active, &rows, house_limit)?;
     for (row, team) in rows.iter().zip(&teams).take(player_count) {
         let human = &mut humans[usize::from(*row)];
         ensure!(
@@ -804,17 +828,14 @@ fn skirmish(
         queue: Vec::new(),
         host_rules: Default::default(),
     };
-    let mut session = SkirmishLaunchSession {
+    let mut session = SkirmishLaunchSession::from_rows(
         mode,
-        selected_map_file: Some(scenario),
+        Some(scenario),
         humans,
         local_player_index,
-        ai_player_count: ai_count as i32,
         opponents,
-        // Derived below by the canonical owner from the human and raw AI rows.
-        pre_fill_house_roster: PreFillHouseRoster::new(Vec::new(), Vec::new()),
         options,
-    };
+    );
     // The gates network setup's host runs before its assignments: the mode's
     // Start (`validate_setup_start`, vtable+14), then TXT_CANNOT_ALLY.
     let roles: Vec<_> = session
@@ -832,7 +853,7 @@ fn skirmish(
                 session.humans[source].role = role;
             }
         }
-        // No progress record to bind the partners into (see `spawn_modes`).
+        // External Cooperative launches have no campaign progress record to bind partners into.
         Ok(ModeStartEffect::None | ModeStartEffect::CooperativePartners) => {}
         Err(_) => bail!(
             "GameMode={} cannot start with these settings",
@@ -840,7 +861,6 @@ fn skirmish(
         ),
     }
     ensure!(!session.all_allied(), "every house is on one team");
-    session.rebuild_house_roster();
     Ok(session)
 }
 
@@ -901,12 +921,13 @@ fn color(section: &IniSection, key: &str) -> Result<u8> {
     Ok(priority as u8)
 }
 
-/// Waypoints 0..29, for one human as in network rooms; the map decides which
-/// exist.
+/// Waypoints below `house_limit`: 0..29 in network rooms, as for one human
+/// with a relay, and 0..119 offline; the map decides which exist.
 fn start(
     ini: &IniFile,
     raw_slot: usize,
-    used: &mut [bool; NETWORK_PLAYER_SLOT_COUNT],
+    house_limit: usize,
+    used: &mut [bool; SKIRMISH_MAX_SLOT_COUNT],
 ) -> Result<LaunchStartPosition> {
     let key = format!("Multi{}", raw_slot + 1);
     let value = ranged(
@@ -914,7 +935,7 @@ fn start(
         &key,
         -2,
         -2,
-        NETWORK_PLAYER_SLOT_COUNT as i32 - 1,
+        house_limit as i32 - 1,
     )?;
     if value < 0 {
         return Ok(LaunchStartPosition::Auto);
@@ -948,7 +969,13 @@ fn validate_house_extensions(ini: &IniFile, raw_slot: usize) -> Result<()> {
 
 /// `active` holds house slots (MultiN-1); `rows` the matching shared session
 /// rows, which name a team so that every participant derives the same value.
-fn teams(ini: &IniFile, active: &[usize], rows: &[u8]) -> Result<Vec<LaunchTeam>> {
+/// Houses and team numbers stay below `house_limit`.
+fn teams(
+    ini: &IniFile,
+    active: &[usize],
+    rows: &[u8],
+    house_limit: usize,
+) -> Result<Vec<LaunchTeam>> {
     const KEYS: [&str; 8] = [
         "HouseAllyOne",
         "HouseAllyTwo",
@@ -959,7 +986,7 @@ fn teams(ini: &IniFile, active: &[usize], rows: &[u8]) -> Result<Vec<LaunchTeam>
         "HouseAllySeven",
         "HouseAllyEight",
     ];
-    let legacy = (0..NETWORK_PLAYER_SLOT_COUNT).any(|slot| {
+    let legacy = (0..house_limit).any(|slot| {
         ini.section(&format!("Multi{}_Alliances", slot + 1))
             .is_some()
     });
@@ -970,7 +997,7 @@ fn teams(ini: &IniFile, active: &[usize], rows: &[u8]) -> Result<Vec<LaunchTeam>
             !legacy,
             "[HouseTeams] cannot be combined with [MultiN_Alliances]"
         );
-        for slot in 0..NETWORK_PLAYER_SLOT_COUNT {
+        for slot in 0..house_limit {
             let key = format!("Multi{}", slot + 1);
             ensure!(
                 active.contains(&slot) || !section.is_present(&key),
@@ -982,7 +1009,7 @@ fn teams(ini: &IniFile, active: &[usize], rows: &[u8]) -> Result<Vec<LaunchTeam>
             .map(|slot| {
                 let key = format!("Multi{}", slot + 1);
                 Ok(if section.is_present(&key) {
-                    let last = NETWORK_PLAYER_SLOT_COUNT as i32 - 1;
+                    let last = house_limit as i32 - 1;
                     LaunchTeam::Team(ranged(section, &key, -1, 0, last)? as u8)
                 } else {
                     LaunchTeam::None
@@ -991,7 +1018,7 @@ fn teams(ini: &IniFile, active: &[usize], rows: &[u8]) -> Result<Vec<LaunchTeam>
             .collect();
     }
     // Spawner alliances name houses 1..8 only.
-    for slot in SKIRMISH_PLAYER_SLOT_COUNT..NETWORK_PLAYER_SLOT_COUNT {
+    for slot in SKIRMISH_PLAYER_SLOT_COUNT..house_limit {
         ensure!(
             ini.section(&format!("Multi{}_Alliances", slot + 1))
                 .is_none(),
@@ -999,8 +1026,8 @@ fn teams(ini: &IniFile, active: &[usize], rows: &[u8]) -> Result<Vec<LaunchTeam>
             slot + 1
         );
     }
-    let mut allies = [[false; NETWORK_PLAYER_SLOT_COUNT]; NETWORK_PLAYER_SLOT_COUNT];
-    for raw_slot in 0..NETWORK_PLAYER_SLOT_COUNT {
+    let mut allies = vec![[false; SKIRMISH_MAX_SLOT_COUNT]; house_limit];
+    for raw_slot in 0..house_limit {
         allies[raw_slot][raw_slot] = true;
     }
     for raw_slot in 0..SKIRMISH_PLAYER_SLOT_COUNT {
@@ -1076,24 +1103,51 @@ fn transport(
             .map_err(|_| anyhow!("[Relay] Address must be IPv4:port"))?;
         let match_id = text(relay, "MatchId")?;
         let player_id = text(relay, "PlayerId")?;
-        // The lobby's decoder checks the ticket's match, player and source
-        // (RelayGrant.source_index is SourceIndex) and the key widths.
-        let grant = crate::app::shell_wol::decode_external_relay_grant(
-            address,
-            text(relay, "Ticket")?,
-            text(relay, "PacketKey")?,
-            text(relay, "PayloadKey")?,
-            text(relay, "OrderingCertificate")?,
-            // RelayGrant.federation: present when the service homes the match
-            // on several regional relays.
-            relay
-                .is_present("Federation")
-                .then(|| text(relay, "Federation"))
-                .transpose()?,
-            session.local_player_index as u8,
-            &match_id,
-            &player_id,
-        )
+        let ticket = text(relay, "Ticket")?;
+        // docs/spawn.md "Watching": a watch ticket makes this game a watcher
+        // of the match, nothing else does.
+        let watch = crate::app::shell_wol::relay_ticket_is_watch(&ticket);
+        let grant = if watch {
+            // A watcher joins one relay, never a federation, and is no
+            // returning player.
+            ensure!(
+                !relay.is_present("Federation"),
+                "[Relay] Federation cannot go with a watch ticket"
+            );
+            ensure!(
+                !relay.is_present("ResumePings") && !relay.is_present("ResumeCursor"),
+                "[Relay] ResumePings and ResumeCursor cannot go with a watch ticket"
+            );
+            // The lobby's watch decoder checks the ticket's and certificate's
+            // match and the key widths; a watch ticket names no source.
+            crate::app::shell_wol::decode_external_watch_grant(
+                address,
+                ticket,
+                text(relay, "PacketKey")?,
+                text(relay, "PayloadKey")?,
+                text(relay, "OrderingCertificate")?,
+                &match_id,
+            )
+        } else {
+            // The lobby's decoder checks the ticket's match, player and source
+            // (RelayGrant.source_index is SourceIndex) and the key widths.
+            crate::app::shell_wol::decode_external_relay_grant(
+                address,
+                ticket,
+                text(relay, "PacketKey")?,
+                text(relay, "PayloadKey")?,
+                text(relay, "OrderingCertificate")?,
+                // RelayGrant.federation: present when the service homes the
+                // match on several regional relays.
+                relay
+                    .is_present("Federation")
+                    .then(|| text(relay, "Federation"))
+                    .transpose()?,
+                session.local_player_index as u8,
+                &match_id,
+                &player_id,
+            )
+        }
         .context("invalid [Relay] grant")?;
         let certificate = crate::net::udp::OrderingCertificate::parse(&grant.ordering_certificate)
             .map_err(|_| anyhow!("invalid [Relay] OrderingCertificate"))?;
@@ -1131,6 +1185,7 @@ fn transport(
                 .then(|| gateway_origin(&text(relay, "GatewayUrl")?))
                 .transpose()?,
             token,
+            watch,
             game_speed,
             admission_timeout: crate::util::time::Duration::from_secs(admission_timeout as u64),
             resume,

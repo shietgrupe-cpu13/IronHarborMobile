@@ -258,7 +258,6 @@ fn production_chain_clear_and_code2_share_admission_and_never_scatter_or_repath(
                         previous_cell: None,
                     },
                     &rules,
-                    None,
                 )
                 .unwrap();
             assert_eq!(classified, if blocker == 0 { 0 } else { 2 });
@@ -350,7 +349,7 @@ fn accepted_chain_per_cell_crush_finishes_lifecycle_in_list_order_before_continu
         victim.set_is_voxel_for_test(false);
         victim.set_sub_cell(Some(0));
         victim.position = position;
-        victim.crushable_facts.set_crushable_for_test(true);
+        victim.seldom.crushable_facts.set_crushable_for_test(true);
         victim.lifecycle.set_object_alive_for_test(true);
         victim.lifecycle.set_in_limbo_for_test(false);
         victim.lifecycle.set_cell_marked_for_test(true);

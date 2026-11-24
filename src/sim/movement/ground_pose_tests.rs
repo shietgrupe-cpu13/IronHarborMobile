@@ -521,7 +521,7 @@ fn moving_ramp_snapshot_continues_residual_bridge_crossing_through_paid_points()
             .expect("moving ramp snapshot")
             .sim;
         // The original and restored controls run as independent test processes.
-        restored.main_rng = sim.main_rng.snapshot_for_test().into();
+        restored.main_rng = sim.main_rng.clone();
         restored.mapgen_rng = sim.mapgen_rng.clone();
         restored
             .restore_after_snapshot_load()
@@ -972,7 +972,7 @@ fn forced_track_terminal_samples_full_head_xy_before_relink() {
         },
         crate::rules::ruleset::RuleSet::empty_for_test(),
         None,
-        crate::sim::world::FrameEffects::default(),
+        &mut crate::sim::world::FrameEffects::default(),
     ));
     if sim.path_grid.is_none() {
         sim.path_grid = Some(std::sync::Arc::new(grid.clone()));
@@ -1033,7 +1033,7 @@ fn ordinary_drive_ship_command_keeps_subcell_origin_through_terminal_cleanup() {
                 crate::sim::components::NavTargetRef::cell(destination.0, destination.1),
                 &rules,
                 true,
-                crate::sim::world::FrameEffects::default(),
+                &mut crate::sim::world::FrameEffects::default(),
             ));
             for frame in 0..128 {
                 sim.session.set_binary_frame_for_test(frame);
@@ -1255,6 +1255,7 @@ fn getcoords_xy_is_the_location_or_a_buildings_foundation_centre() {
         ("not-a-native-foundation", raw),
     ] {
         entity
+            .seldom
             .type_facts
             .set_foundation_for_test(foundation.to_string().into());
         assert_eq!(
@@ -1340,7 +1341,7 @@ fn two_marked_units() -> Simulation {
             id,
             crate::rules::ruleset::RuleSet::empty_for_test(),
             None,
-            crate::sim::world::FrameEffects::default()
+            &mut crate::sim::world::FrameEffects::default()
         ));
     }
     sim
@@ -1362,8 +1363,7 @@ fn set_height_on_a_marked_object_re_marks_it_at_the_head_of_its_cell() {
         1,
         30,
         crate::rules::ruleset::RuleSet::empty_for_test(),
-        None,
-        crate::sim::world::FrameEffects::default(),
+        &mut crate::sim::world::FrameEffects::default(),
     );
     assert_eq!(next_in_cell(&sim, 1), Some(Entity(2)));
     let entity = sim.substrate.entities.get(1).unwrap();
@@ -1393,14 +1393,13 @@ fn set_height_on_an_unmarked_object_writes_z_without_marking_it() {
         1,
         crate::rules::ruleset::RuleSet::empty_for_test(),
         None,
-        crate::sim::world::FrameEffects::default()
+        &mut crate::sim::world::FrameEffects::default()
     ));
     sim.set_object_height(
         1,
         60,
         crate::rules::ruleset::RuleSet::empty_for_test(),
-        None,
-        crate::sim::world::FrameEffects::default(),
+        &mut crate::sim::world::FrameEffects::default(),
     );
     let entity = sim.substrate.entities.get(1).unwrap();
     assert!(!entity.lifecycle.cell_marked());
@@ -1458,9 +1457,9 @@ fn foot_set_location_always_writes_but_moves_riders_only_on_a_change() {
     transport.position.set_exact_z_leptons_for_test(Some(0));
     let mut cargo = PassengerCargo::new(5, 2.0);
     cargo.board_forced_chain(&[(2, 1.0)]);
-    transport.passenger_role = PassengerRole::transport(cargo);
+    transport.set_passenger_role_for_test(PassengerRole::transport(cargo));
     let mut rider = GameEntity::test_default(2, "E1", "Americans", 3, 0);
-    rider.passenger_role = PassengerRole::inside_for_test(1, true);
+    rider.set_passenger_role_for_test(PassengerRole::inside_for_test(1, true));
     entities.insert(transport);
     entities.insert(rider);
     let interner = crate::sim::intern::test_interner();

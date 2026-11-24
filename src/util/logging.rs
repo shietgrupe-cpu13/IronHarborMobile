@@ -1,7 +1,7 @@
 //! Logging initialization helpers.
 //!
 //! Binaries route `log` records into a file under `logs/` in the current
-//! working directory, or to stderr. Each record is one line,
+//! working directory (or Android's `Documents/RA2Harbor/Logs/`), or to stderr. Each record is one line,
 //! `[2026-10-18T20:44:36Z INFO  module::path] message`, with the time in UTC.
 //!
 //! `RUST_LOG` filters records as env_logger did: comma-separated directives,
@@ -19,6 +19,9 @@ use std::sync::{Mutex, OnceLock};
 
 use log::{LevelFilter, Log, Metadata, Record};
 
+/// Whether a panic is writing `except.txt`: the panic hook has no receiver
+/// and runs on whichever thread panicked, so the claim is a process-wide
+/// atomic.
 static EXCEPTION_DUMP_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// The file [`init_file_logger`] opened, for messages that point the player
 /// at it.
@@ -30,7 +33,7 @@ mod telemetry;
 #[cfg(feature = "telemetry")]
 pub use telemetry::{enable_telemetry_capture, ring};
 
-/// Install a logger that appends to `logs/<name>.log`.
+/// Install a logger that appends to `logs/<name>.log` (Android: `Logs/`).
 ///
 /// Honors `RUST_LOG` and defaults to `info` when the variable is unset.
 /// Returns the resolved log file path on success.
@@ -41,7 +44,11 @@ pub fn init_file_logger(name: &str) -> io::Result<PathBuf> {
         Some(dir) => dir.to_path_buf(),
         None => std::env::current_dir()?,
     };
-    log_dir.push(if cfg!(target_os = "android") { "Logs" } else { "logs" });
+    log_dir.push(if crate::util::platform_dir::get().is_some() {
+        "Logs"
+    } else {
+        "logs"
+    });
     fs::create_dir_all(&log_dir)?;
 
     let mut log_path = log_dir;
@@ -141,6 +148,8 @@ fn install(default_filter: &str, destination: Destination) -> Result<(), log::Se
 
 enum Destination {
     Stderr,
+    /// Locked because the `log` crate's logger is one process-wide `Sync`
+    /// value that every thread writes through `&self`.
     File(Mutex<RollingFile>),
 }
 

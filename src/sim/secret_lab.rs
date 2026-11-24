@@ -269,7 +269,7 @@ mod tests {
                 .collect();
             // Startup's global list includes constructed limbo buildings.
             if let Some(&first) = labs.first() {
-                sim.techno_limbo_with_rules(first, &rules, None);
+                sim.techno_limbo_with_rules(first, &rules);
             }
             if let Some(retained) = row["initial_fallback"].as_str() {
                 let id = sim.interner.intern(retained);
@@ -295,8 +295,7 @@ mod tests {
                 row["rng_before"]["scenario"].as_str().unwrap(),
             );
             sim.main_rng =
-                SimRng::from_native_state_hex_for_test(row["rng_before"]["main"].as_str().unwrap())
-                    .into();
+                SimRng::from_native_state_hex_for_test(row["rng_before"]["main"].as_str().unwrap());
             sim.mapgen_rng = SimRng::from_native_state_hex_for_test(
                 row["rng_before"]["mapgen"].as_str().unwrap(),
             );
@@ -316,10 +315,13 @@ mod tests {
                             map_height: 0,
                             fill_silos: false,
                             rules: &rules,
+                            construction_rules:
+                                crate::rules::rule_policy::RulePolicy::stock_campaign(),
                             overlay_registry: &overlays,
                             house_roster: &roster,
                             skirmish_session: None,
                             campaign_map: None,
+                            stage_home_global: None,
                         },
                     )
                     .unwrap();
@@ -442,7 +444,7 @@ mod tests {
                 0,
                 0,
                 rules,
-                crate::sim::world::FrameEffects::default(),
+                &mut crate::sim::world::FrameEffects::default(),
             )
             .unwrap();
         sim.substrate
@@ -463,7 +465,7 @@ mod tests {
                 false,
                 rules,
                 None,
-                crate::sim::world::FrameEffects::default(),
+                &mut crate::sim::world::FrameEffects::default(),
             )
         })
         .1

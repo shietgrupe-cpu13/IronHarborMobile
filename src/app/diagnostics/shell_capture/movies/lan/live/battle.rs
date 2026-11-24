@@ -297,7 +297,7 @@ impl BattleOpening {
                 if simulation(state)?
                     .entities()
                     .get(id)
-                    .is_some_and(|e| e.selection.is_selected())
+                    .is_some_and(|e| e.seldom.selection.is_selected())
                 {
                     if host {
                         chat_key(state, KeyCode::KeyD, &Key::Character("d".into()), Some("d"));
@@ -817,15 +817,8 @@ impl BattleOpening {
                         .iter()
                         .copied()
                         .find(|&cell| {
-                            commands::ordinary_cell_move_goal(
-                                sim,
-                                rules,
-                                state.overlay_registry(),
-                                owner,
-                                id,
-                                cell,
-                                false,
-                            ) == Some(cell)
+                            commands::ordinary_cell_move_goal(sim, rules, owner, id, cell, false)
+                                == Some(cell)
                         })
                         .context("no legal ordinary GI Move into the former GAPILE foundation")?;
                     ground_order_with_mouse(state, id, goal)?;
@@ -911,8 +904,8 @@ impl BattleOpening {
         let actor = sim.entities().get(actor).context("firing paid GI")?;
         let target = sim.entities().get(target).context("shot paid GI")?;
         if target.health.current() < self.attack_health.context("Attack health baseline")?
-            && actor.rearm_timer.start_frame() >= admitted as i32
-            && actor.rearm_timer.duration() > 0
+            && actor.seldom.rearm_timer.start_frame() >= admitted as i32
+            && actor.seldom.rearm_timer.duration() > 0
         {
             ensure!(
                 actor.attack_target.target() == Some(TargetKind::Entity(target.stable_id())),
@@ -1040,7 +1033,7 @@ impl BattleOpening {
                     entity.attack_target.target().is_none()
                         && entity.navigation.nav_com().is_none()
                         && entity.navigation.suspended_nav_com().is_none()
-                        && entity.suspended_attack_target.target().is_none()
+                        && entity.seldom.suspended_attack_target.target().is_none()
                         && entity.navigation.nav_queue().is_empty(),
                     "executed raw Stop did not clear the ordinary GI's target/navigation references"
                 );
@@ -1130,8 +1123,8 @@ impl BattleOpening {
                 && observation
                     .attack_health
                     .is_some_and(|health| current.health < health)
-                && gi.rearm_timer.start_frame() >= attack_due as i32
-                && gi.rearm_timer.duration() > 0
+                && gi.seldom.rearm_timer.start_frame() >= attack_due as i32
+                && gi.seldom.rearm_timer.duration() > 0
             {
                 ensure!(
                     gi.attack_target.target() == Some(TargetKind::Entity(producer)),
@@ -1157,7 +1150,7 @@ impl BattleOpening {
                     );
                     ensure!(
                         gi.attack_target.target().is_none()
-                            && gi.suspended_attack_target.target().is_none()
+                            && gi.seldom.suspended_attack_target.target().is_none()
                             && gi.navigation.nav_com().is_none()
                             && gi.navigation.suspended_nav_com().is_none()
                             && gi.navigation.nav_queue().is_empty(),
@@ -2717,10 +2710,10 @@ fn combat_snapshot(state: &AppState, ids: [u64; 2], frame: u32) -> Result<Value>
             "deployed":entity.is_deployed(),"deploying":entity.infantry_deploy_doing(),
             "mission":entity.mission.current().raw(),"queued_mission":entity.mission.queued().raw(),
             "target":entity.attack_target.target(),"destination":entity.navigation.nav_com(),
-            "suspended_target":entity.suspended_attack_target.target(),
+            "suspended_target":entity.seldom.suspended_attack_target.target(),
             "suspended_destination":entity.navigation.suspended_nav_com(),
             "nav_queue":entity.navigation.nav_queue(),
-            "rearm_start":entity.rearm_timer.start_frame(),"rearm_duration":entity.rearm_timer.duration()}));
+            "rearm_start":entity.seldom.rearm_timer.start_frame(),"rearm_duration":entity.seldom.rearm_timer.duration()}));
     }
     Ok(json!({"native_frame":frame,"entities":entities}))
 }
@@ -2730,7 +2723,7 @@ fn gi_rally_snapshot(entity: &crate::sim::game_entity::GameEntity, frame: u32) -
     json!({"native_frame":frame,"id":entity.stable_id(),"position":entity.position,
         "archive":entity.archive_target(),"destination":entity.navigation.nav_com(),
         "mission":entity.mission.current().raw(),"queued_mission":entity.mission.queued().raw(),
-        "tether":entity.tether.partner(),"radio_partner":entity.radio_contacts.slot(0),
+        "tether":entity.seldom.tether.partner(),"radio_partner":entity.seldom.radio_contacts.slot(0),
         "walk_moving":walk.and_then(|walk| walk.walk_is_moving()),
         "walk_destination":walk.and_then(|walk| walk.walk_destination()),
         "step_head":walk.and_then(|walk| walk.step_head())})
@@ -2883,15 +2876,9 @@ fn legal_move_cell(state: &AppState, actor: u64, desired: (u16, u16)) -> Result<
         ) else {
             continue;
         };
-        if let Some(cell) = commands::ordinary_cell_move_goal(
-            sim,
-            rules,
-            state.overlay_registry(),
-            owner,
-            actor,
-            (x, y),
-            false,
-        ) && cell == (x, y)
+        if let Some(cell) =
+            commands::ordinary_cell_move_goal(sim, rules, owner, actor, (x, y), false)
+            && cell == (x, y)
         {
             return Ok(cell);
         }

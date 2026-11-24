@@ -299,7 +299,7 @@ impl Simulation {
         value: i32,
         rules: &RuleSet,
         registry: Option<&crate::rules::overlay_types::OverlayTypeRegistry>,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) -> bool {
         let Some(house) = self.houses.get_mut(&owner) else {
             return false;
@@ -328,7 +328,7 @@ impl Simulation {
         owner: InternedId,
         rules: &RuleSet,
         registry: Option<&crate::rules::overlay_types::OverlayTypeRegistry>,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) -> bool {
         let candidate = self.houses[&owner]
             .base_projection()
@@ -337,8 +337,9 @@ impl Simulation {
             .rev()
             .find_map(|&id| {
                 let building = self.substrate.entities.get(id)?;
-                (!building.lifecycle.in_limbo() && building.type_facts.build_const_eligible())
-                    .then_some(id)
+                (!building.lifecycle.in_limbo()
+                    && building.seldom.type_facts.build_const_eligible())
+                .then_some(id)
             });
         let Some(cell) = candidate.and_then(|id| self.raw_building_base_cell(id)) else {
             return true;
@@ -347,7 +348,11 @@ impl Simulation {
             .get_mut(&owner)
             .expect("retained owner")
             .set_base_center(cell);
-        if self.session.game_mode_nonzero() && !self.houses[&owner].is_controlled_by_human(true) {
+        // 0x0050C2F0: Trigger 30 requests Paranoid for the computer before
+        // re-reading the base plan, independently of [AI] Paranoid.
+        if self.session.rule_policy().permits_paranoid_reactions()
+            && !self.houses[&owner].is_human()
+        {
             self.computer_paranoid(rules, registry, effects);
         }
         // 0x0050C2F5 rereads the plan after the diplomacy callbacks. Keep Recalc's
@@ -420,8 +425,7 @@ impl Simulation {
         &mut self,
         owner: InternedId,
         rules: &RuleSet,
-        registry: Option<&crate::rules::overlay_types::OverlayTypeRegistry>,
-        frame_effects: FrameEffects<'_>,
+        frame_effects: &mut FrameEffects<'_>,
     ) {
         // 0x0050C924 reads TechnoClass::Array's count before the search; the
         // walk re-reads each slot (0x0050C9D5).
@@ -483,13 +487,8 @@ impl Simulation {
             // Assign_Destination(cell, 1) (vt+0x480, 0x0050CA93), a plain
             // archive clear (0x0070C610 at 0x0050CA9D), then
             // Queue_Mission(Move, 0) (vt+0x1E8, 0x0050CAAA) without commencing.
-            let _ = self.assign_destination_represented(
-                id,
-                Some(destination),
-                rules,
-                registry,
-                frame_effects,
-            );
+            let _ =
+                self.assign_destination_represented(id, Some(destination), rules, frame_effects);
             if let Some(entity) = self.substrate.entities.get_mut(id) {
                 entity.set_archive_target(None);
             }
@@ -1248,7 +1247,13 @@ mod tests {
                 };
                 let ids = sim.houses[&owner].base_projection().buildings().to_vec();
                 let other = add_house(&mut sim, "Russians", &rules);
-                sim.change_owner_with_rules(ids[0], other, &rules, None, FrameEffects::default());
+                sim.change_owner_with_rules(
+                    ids[0],
+                    other,
+                    &rules,
+                    None,
+                    &mut FrameEffects::default(),
+                );
                 assert_eq!(
                     sim.theoretical_power_for_owner(&rules, "Americans"),
                     native_total("stock-drain")
@@ -1258,7 +1263,7 @@ mod tests {
                     native_total("stock-output")
                 );
                 assert_eq!(
-                    sim.techno_limbo_with_rules(ids[1], &rules, None),
+                    sim.techno_limbo_with_rules(ids[1], &rules),
                     lifecycle::ConcealOutcome::Concealed
                 );
                 assert_eq!(
@@ -1546,7 +1551,9 @@ mod tests {
                 )
             });
             let house = sim.houses.get_mut(&owner).unwrap();
-            house.tracking_mut().set_buildings_for_test(tracked);
+            house
+                .tracking_mut_for_test()
+                .set_buildings_for_test(tracked);
             house.set_alternate_base_center_for_test(alternate);
             house.retain_base_geometry(Some((14, 14)), 9999);
             if let Some(bonus) = input["unit_bonus"].as_f64() {
@@ -1685,7 +1692,7 @@ mod tests {
         assert_eq!(radius, 512);
 
         assert_eq!(
-            sim.techno_limbo_with_rules(second, &rules, None),
+            sim.techno_limbo_with_rules(second, &rules),
             lifecycle::ConcealOutcome::Concealed
         );
         // Both entries are alive/on-map at Building445DA6. The unoccupied
@@ -1697,7 +1704,7 @@ mod tests {
             .unwrap()
             .set_base_center((14, 14));
         assert_eq!(
-            sim.techno_limbo_with_rules(second, &rules, None),
+            sim.techno_limbo_with_rules(second, &rules),
             lifecycle::ConcealOutcome::AlreadyConcealed
         );
         assert_eq!(geometry(&sim, owner), (Some((14, 14)), 512));
@@ -1757,7 +1764,7 @@ mod tests {
                     placement,
                     logic_eligible: true,
                 },
-                UninitContext::with_rules(&rules),
+                UninitContext::new(&rules),
             );
             if index == 0 {
                 assert!(matches!(result, RevealOutcome::Failed(_)));
@@ -1853,8 +1860,8 @@ mod tests {
         );
         // Restore leaves geometry historical. The NEXT native boundary must
         // produce the same publication and list cleanup on either continuation.
-        sim.techno_limbo_with_rules(second, &rules, None);
-        restored.techno_limbo_with_rules(second, &rules, None);
+        sim.techno_limbo_with_rules(second, &rules);
+        restored.techno_limbo_with_rules(second, &rules);
         assert_eq!(geometry(&restored, owner), geometry(&sim, owner));
         assert_eq!(restored.state_hash(), sim.state_hash());
     }
@@ -1960,7 +1967,7 @@ mod tests {
             allies,
             &rules,
             None,
-            crate::sim::world::FrameEffects::default(),
+            &mut crate::sim::world::FrameEffects::default(),
         );
         assert_eq!(costs(&sim), (675, 450));
         assert!(
@@ -2045,7 +2052,7 @@ mod tests {
         let house = sim.houses.get_mut(&owner).unwrap();
         house.set_base_center_for_test(None);
         house.set_alternate_base_center_for_test((0, 0));
-        sim.move_ground_forces_to_base(owner, &rules, None, FrameEffects::default());
+        sim.move_ground_forces_to_base(owner, &rules, &mut FrameEffects::default());
         assert_eq!(snapshot(&sim), before);
 
         let origin = (12, 12);
@@ -2068,7 +2075,7 @@ mod tests {
         assert_eq!(search(origin, (1, 1)), Some(origin), "1x1 differs");
         assert_ne!(found, origin, "the water blocks the origin's 4x4 block");
         let destination = Some(NavTargetRef::cell(found.0 + 1, found.1 + 1));
-        sim.move_ground_forces_to_base(owner, &rules, None, FrameEffects::default());
+        sim.move_ground_forces_to_base(owner, &rules, &mut FrameEffects::default());
 
         let after = snapshot(&sim);
         let move_mission = MissionId::from_known(MissionType::Move);

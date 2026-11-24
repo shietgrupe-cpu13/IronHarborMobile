@@ -3,7 +3,7 @@
 //! reversing those two replays is an explicit component-order negative control.
 
 use super::super::draw_plan_lowering::{
-    NativeDisplayOrder, ObjectBodyDraw, PlannedObjectInstance, lower_object_instances,
+    NativeDisplayOrder, ObjectBodyDraw, OwnedPlannedObject, PlannedObjects, lower_object_instances,
 };
 use super::*;
 use crate::app::presentation::combat_lights::CombatLight;
@@ -141,7 +141,7 @@ fn ordinary_repair_children_reach_the_actual_effect_builder_and_gpu_without_muta
     let hidden = Default::default();
     let atlas = SpriteAtlas::from_test_entries(Default::default());
     let build = |detail: &RefCell<DetailState>, atlas: Option<&SpriteAtlas>| {
-        let mut parents = Vec::new();
+        let mut parents = PlannedObjects::default();
         build_display_effect_instances(
             &DisplayEffectInputs {
                 sim: &sim,
@@ -152,6 +152,7 @@ fn ordinary_repair_children_reach_the_actual_effect_builder_and_gpu_without_muta
                 tactical: [0, 0, size[0], size[1]],
                 zoom: 1.,
                 axis: DepthAxis::NONE,
+                z_seed: crate::render::native_z::DEFAULT_Z,
                 atlas,
                 detail,
                 detail_level: 2,
@@ -167,6 +168,7 @@ fn ordinary_repair_children_reach_the_actual_effect_builder_and_gpu_without_muta
             &order,
             Default::default(),
         );
+        let parents = parents.into_owned();
         assert_eq!(
             sim.state_hash(),
             before_hash,
@@ -227,7 +229,7 @@ fn ordinary_repair_children_reach_the_actual_effect_builder_and_gpu_without_muta
     let detail = overflow_detail();
     let ordered = build(&detail, Some(&atlas));
     let has =
-        |parents: &[PlannedObjectInstance], id| parents.iter().any(|parent| parent.parent.id == id);
+        |parents: &[OwnedPlannedObject], id| parents.iter().any(|parent| parent.parent.id == id);
     assert_eq!(
         has(&ordered, system_id),
         control["draws"][0]["performance_passed"].as_bool().unwrap()
@@ -277,7 +279,7 @@ fn ordinary_repair_children_reach_the_actual_effect_builder_and_gpu_without_muta
                 (Some(ObjectBodyDraw::Surface(_)), 2) => false,
                 _ => true,
             });
-            let mut layers = lower_object_instances(parents);
+            let mut layers = lower_object_instances(parents.into());
             let mut records = Vec::new();
             for layer in &mut layers {
                 layer.light_record_base = records.len();
@@ -478,7 +480,7 @@ fn retained_welding_system_then_particles_matches_original_shared_destination() 
                 serde_json::json!(light.surface_index),
                 native_light["surface_index"]
             );
-            let mut parent = PlannedObjectInstance::object(
+            let mut parent = OwnedPlannedObject::object(
                 order.object_draw(1, SpriteEncoding::Plain).unwrap(),
                 Vec::new(),
             );
@@ -497,7 +499,7 @@ fn retained_welding_system_then_particles_matches_original_shared_destination() 
                 )
                 .unwrap()
                 {
-                    let mut parent = PlannedObjectInstance::object(
+                    let mut parent = OwnedPlannedObject::object(
                         order
                             .object_draw(index as u64 + 2, SpriteEncoding::Plain)
                             .unwrap(),
@@ -509,7 +511,7 @@ fn retained_welding_system_then_particles_matches_original_shared_destination() 
             }
             // Storage has no authority over Display or body execution order.
             parents.reverse();
-            let mut layers = lower_object_instances(parents);
+            let mut layers = lower_object_instances(parents.into());
             assert_eq!(layers[2].light_records.len(), 1);
             assert_eq!(
                 layers[3].surface_draws.len(),

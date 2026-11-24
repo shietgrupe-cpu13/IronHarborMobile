@@ -63,6 +63,9 @@ const SIM_AREAS: [&str; PHASE_COUNT] = [
 
 /// The labels of the render's phases, in `RenderPhases::spans` order.
 const RENDER_AREAS: [&str; RenderPhases::COUNT] = [
+    "VERA:CpuDrawSnapshot",
+    "VERA:CpuDrawTerrain",
+    "VERA:CpuDrawObjects",
     "VERA:CpuDrawWorld",
     "VERA:CpuDrawDebug",
     "VERA:CpuDrawShroud",
@@ -113,8 +116,6 @@ pub(super) struct Shown {
     pub(super) loop_rates: Option<LoopRates>,
     /// The GPU's mean time on each of VERA's frames, in milliseconds.
     pub(super) gpu_ms: Option<f32>,
-    /// Sum of world target/setup, instance-build, and finalization time.
-    pub(super) world_detail: Option<[Duration; 3]>,
 }
 
 /// The open window. Reset while the panel is hidden, so showing it measures
@@ -154,9 +155,7 @@ impl PanelStats {
             .window_start
             .replace(now)
             .map(|start| now.duration_since(start));
-        let render_meter = std::mem::take(&mut self.render);
-        let render = render_meter.totals();
-        let world_detail = render_meter.world_detail_means();
+        let render = std::mem::take(&mut self.render).totals();
         let sim_spans = sample
             .zip(self.sim_baseline)
             .and_then(|(sample, before)| profile_delta(before, sample.profile));
@@ -177,7 +176,6 @@ impl PanelStats {
                 .zip(loop_counts)
                 .and_then(|(wall, counts)| loop_rates(wall, counts)),
             gpu_ms,
-            world_detail,
         };
     }
 }
@@ -341,88 +339,6 @@ fn milliseconds(ms: f32) -> String {
     }
 }
 
-/// Stable, locale-independent performance data for the app log. These samples
-/// are emitted once per visible panel window, so a diagnostics export can be
-/// profiled without relying on a screenshot.
-pub(super) fn format_sample(shown: &Shown) -> String {
-    let fps = if shown.frame_ms.is_finite() && shown.frame_ms > 0.0 {
-        format!("{:.1}", 1000.0 / shown.frame_ms)
-    } else {
-        "na".to_owned()
-    };
-    let frame_ms = if shown.frame_ms.is_finite() && shown.frame_ms >= 0.0 {
-        format!("{:.2}", shown.frame_ms)
-    } else {
-        "na".to_owned()
-    };
-    let sim_tps = shown
-        .tps
-        .filter(|tps| tps.is_finite())
-        .map(|tps| format!("{tps:.1}"))
-        .unwrap_or_else(|| "na".to_owned());
-    let units = shown
-        .units
-        .map(|units| units.to_string())
-        .unwrap_or_else(|| "na".to_owned());
-    let rayon_workers = shown
-        .units
-        .map(|_| rayon::current_num_threads().to_string())
-        .unwrap_or_else(|| "na".to_owned());
-    let gpu_ms = shown
-        .gpu_ms
-        .filter(|ms| ms.is_finite())
-        .map(|ms| format!("{ms:.2}"))
-        .unwrap_or_else(|| "na".to_owned());
-    let cpu_areas = shown
-        .areas
-        .iter()
-        .map(|(name, percent)| format!("{name}={percent:.1}%"))
-        .collect::<Vec<_>>()
-        .join(",");
-    let core_loads = shown
-        .core_loads
-        .as_ref()
-        .map(|loads| {
-            loads
-                .iter()
-                .map(|load| format!("{load:.0}%"))
-                .collect::<Vec<_>>()
-                .join(",")
-        })
-        .unwrap_or_else(|| "na".to_owned());
-    let thread_loads = shown
-        .threads
-        .map(|loads| {
-            format!(
-                "main={:.0}%,sim={:.0}%,other={:.0}%",
-                loads.main, loads.simulation, loads.others
-            )
-        })
-        .unwrap_or_else(|| "na".to_owned());
-    let loop_rates = shown
-        .loop_rates
-        .map(|rates| {
-            format!(
-                "main={:.1},sim={:.1},turns={:.1}",
-                rates.main_ticks, rates.simulation_ticks, rates.turns
-            )
-        })
-        .unwrap_or_else(|| "na".to_owned());
-    let world_detail = shown
-        .world_detail
-        .map(|spans| {
-            let ms = spans.map(|span| span.as_secs_f64() * 1000.0);
-            format!(
-                "setup={:.2},instances={:.2},finalize={:.2}",
-                ms[0], ms[1], ms[2]
-            )
-        })
-        .unwrap_or_else(|| "na".to_owned());
-    format!(
-        "fps={fps} frame_ms={frame_ms} sim_tps={sim_tps} units={units} gpu_ms={gpu_ms} rayon_workers={rayon_workers} cpu_areas=[{cpu_areas}] world_subphases_ms=[{world_detail}] core_loads=[{core_loads}] thread_loads=[{thread_loads}] loop_rates=[{loop_rates}]"
-    )
-}
-
 fn first_row(shown: &Shown) -> String {
     let frame_ms = shown.frame_ms;
     let mut row = if frame_ms.is_finite() && frame_ms > 0.0 {
@@ -533,72 +449,6 @@ mod tests {
         assert_eq!(gpu(5.0, f32::NAN).len(), 1);
     }
 
-    #[test]
-    fn performance_sample_is_stable_and_contains_cpu_gpu_and_simulation_rates() {
-        let shown = Shown {
-            frame_ms: 20.0,
-            tps: Some(30.0),
-            units: Some(122),
-            areas: vec![("VERA:CpuDrawWorld", 38.0), ("VERA:CpuTargeting", 7.0)],
-            world_detail: Some([
-                Duration::from_millis(1),
-                Duration::from_millis(20),
-                Duration::from_millis(2),
-            ]),
-            gpu_ms: Some(8.5),
-            core_loads: Some(vec![80.0, 40.0]),
-            threads: Some(ThreadLoads {
-                main: 72.0,
-                simulation: 24.0,
-                others: 18.0,
-            }),
-            loop_rates: Some(LoopRates {
-                main_ticks: 30.0,
-                simulation_ticks: 0.0,
-                turns: 60.0,
-            }),
-            ..Shown::default()
-        };
-
-        let rayon_workers = rayon::current_num_threads();
-        assert_eq!(
-            format_sample(&shown),
-            format!("fps=50.0 frame_ms=20.00 sim_tps=30.0 units=122 gpu_ms=8.50 rayon_workers={rayon_workers} cpu_areas=[VERA:CpuDrawWorld=38.0%,VERA:CpuTargeting=7.0%] world_subphases_ms=[setup=1.00,instances=20.00,finalize=2.00] core_loads=[80%,40%] thread_loads=[main=72%,sim=24%,other=18%] loop_rates=[main=30.0,sim=0.0,turns=60.0]")
-        );
-    }
-
-    #[test]
-    fn world_render_subphases_are_reported_as_per_frame_means() {
-        let mut meter = RenderTimingMeter::default();
-        assert_eq!(meter.world_detail_means(), None);
-
-        meter.record(RenderPhases {
-            world_detail: [
-                Duration::from_millis(2),
-                Duration::from_millis(8),
-                Duration::from_millis(4),
-            ],
-            ..RenderPhases::default()
-        });
-        meter.record(RenderPhases {
-            world_detail: [
-                Duration::from_millis(4),
-                Duration::from_millis(12),
-                Duration::from_millis(6),
-            ],
-            ..RenderPhases::default()
-        });
-
-        assert_eq!(
-            meter.world_detail_means(),
-            Some([
-                Duration::from_millis(3),
-                Duration::from_millis(10),
-                Duration::from_millis(5),
-            ])
-        );
-    }
-
     /// The rows' text with the thread rows on.
     fn rows_of(shown: Shown) -> Vec<String> {
         rows(&shown, true)
@@ -692,14 +542,49 @@ mod tests {
     }
 
     #[test]
+    fn world_drawing_parts_show_under_their_own_labels() {
+        let mut meter = RenderTimingMeter::default();
+        meter.record(RenderPhases {
+            snapshot: Duration::from_millis(50),
+            terrain: Duration::from_millis(100),
+            objects: Duration::from_millis(300),
+            world: Duration::from_millis(200),
+            other: Duration::from_millis(20),
+            ..RenderPhases::default()
+        });
+        let areas = most_cpu(Duration::from_secs(1), None, &meter.totals());
+        assert_eq!(
+            areas,
+            [
+                ("VERA:CpuDrawObjects", 30.0),
+                ("VERA:CpuDrawWorld", 20.0),
+                ("VERA:CpuDrawTerrain", 10.0),
+                ("VERA:CpuDrawSnapshot", 5.0),
+                ("VERA:CpuDrawOther", 2.0)
+            ]
+        );
+        let labels: Vec<_> = areas.iter().map(area).collect();
+        assert_eq!(
+            labels,
+            [
+                "Draw objects 30%",
+                "Draw world 20%",
+                "Draw terrain 10%",
+                "Frame snapshot 5%",
+                "Draw other 2%"
+            ]
+        );
+    }
+
+    #[test]
     fn most_cpu_ranks_sim_and_render_areas_and_skips_a_restarted_profile() {
         let mut sim = [0u128; PHASE_COUNT];
         sim[crate::sim::frame_profile::phase::MOVEMENT] = 300_000_000;
         sim[crate::sim::frame_profile::phase::VISION] = 5_000_000;
         let mut render = [Duration::ZERO; RenderPhases::COUNT];
-        render[0] = Duration::from_millis(200);
-        render[9] = Duration::from_millis(400);
-        render[10] = Duration::from_millis(5);
+        render[3] = Duration::from_millis(200);
+        render[12] = Duration::from_millis(400);
+        render[13] = Duration::from_millis(5);
         assert_eq!(
             most_cpu(Duration::from_secs(1), Some(&sim), &render),
             [

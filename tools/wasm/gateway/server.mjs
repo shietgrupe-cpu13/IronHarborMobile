@@ -20,6 +20,13 @@ export const LIMITS = Object.freeze({
   controlFramesPerSecond: 64, totalControlFramesPerSecond: 1024,
 });
 
+// The request headers a browser may send: its bearer and body type, and what a
+// game says about itself at sign-in (sign_in_headers in the game's
+// src/app/shell_wol/live_service/http.rs). The lobby's trust headers, such as
+// vera-gateway-key and vera-client-address, come only from this gateway.
+const FORWARDED_HEADERS = Object.freeze(['authorization', 'content-type', 'vera-version',
+  'vera-build', 'vera-quick-match', 'vera-host-handover', 'vera-watch-ai', 'vera-language', 'vera-changes']);
+
 function originUrl(value, allowLocalHttp = false) {
   const url = new URL(value);
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
@@ -56,10 +63,15 @@ function shares(maximum) {
 }
 
 export function createGateway({
-  lobby, relays, legacyRelay, origin, allowHttp = false, clientIpHeader, lobbyKey, lanSignal,
+  lobby, relays, legacyRelay, origins, allowHttp = false, clientIpHeader, lobbyKey, lanSignal,
 }) {
   const upstream = originUrl(lobby, allowHttp);
-  const allowed = originUrl(origin, true).origin;
+  // Every site that serves the game: a request is answered under its own origin.
+  const allowed = new Set((Array.isArray(origins) ? origins : []).map(origin => {
+    try { return originUrl(origin, true).origin; }
+    catch { throw new Error(`VERA_WEB_ORIGIN: "${origin}" is not an HTTPS origin`); }
+  }));
+  if (allowed.size === 0) throw new Error('VERA_WEB_ORIGIN lists every web origin that serves the game');
   const endpoints = (Array.isArray(relays) ? relays : []).map(relay => [relay, relayEndpoint(relay)]);
   if (endpoints.length === 0 || endpoints.some(([, endpoint]) => !endpoint)) {
     throw new Error('VERA_RELAYS lists every relay the lobby grants as IPv4:port');
@@ -93,13 +105,14 @@ export function createGateway({
   const controls = fairBudget(LIMITS.totalControlFramesPerSecond, LIMITS.controlFramesPerSecond);
   const handshakes = rateLimit(512);
   const signaling = lanSignal
-    ? createSignaling({ origin: allowed, clientIpHeader, iceServers: lanSignal.iceServers }) : null;
+    ? createSignaling({ origins: allowed, clientIpHeader, iceServers: lanSignal.iceServers }) : null;
   let closing = false;
   const server = http.createServer({ maxHeaderSize: 16384 }, (req, res) => {
     if (closing) { res.writeHead(503).end(); return; }
-    if (req.headers.origin && req.headers.origin !== allowed) { res.writeHead(403).end(); return; }
-    if (req.headers.origin === allowed) {
-      res.setHeader('Access-Control-Allow-Origin', allowed);
+    const origin = req.headers.origin;
+    if (origin && !allowed.has(origin)) { res.writeHead(403).end(); return; }
+    if (origin) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
     }
     const requestPath = req.url ?? '';
@@ -107,14 +120,14 @@ export function createGateway({
     if (req.method === 'OPTIONS') {
       const headers = (req.headers['access-control-request-headers'] ?? '')
         .split(',').map(header => header.trim().toLowerCase()).filter(Boolean);
-      if (req.headers.origin !== allowed
+      if (!origin
         || !['GET', 'POST'].includes(req.headers['access-control-request-method'])
-        || headers.some(header => !['authorization', 'content-type'].includes(header))) {
+        || headers.some(header => !FORWARDED_HEADERS.includes(header))) {
         res.writeHead(403).end(); return;
       }
       res.writeHead(204, {
         'Access-Control-Allow-Methods': 'GET, POST',
-        'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+        'Access-Control-Allow-Headers': FORWARDED_HEADERS.join(', '),
         'Access-Control-Max-Age': '600',
         'Vary': 'Origin, Access-Control-Request-Method, Access-Control-Request-Headers',
       }).end();
@@ -162,7 +175,7 @@ export function createGateway({
     req.on('end', () => {
       if (ended) return;
       const headers = { 'accept': 'application/json', 'user-agent': 'VERA20k-wasm-gateway' };
-      for (const name of ['authorization', 'content-type']) {
+      for (const name of FORWARDED_HEADERS) {
         if (req.headers[name]) headers[name] = req.headers[name];
       }
       // The lobby keys its limits on this player's address
@@ -222,7 +235,7 @@ export function createGateway({
     const relay = routes.get(req.url);
     const network = networkOf(req);
     // Only an admissible upgrade spends the gateway's handshake budget.
-    if (closing || req.headers.origin !== allowed || !relay || network === null
+    if (closing || !allowed.has(req.headers.origin) || !relay || network === null
       || networkSockets.full(network) || closeSockets.size >= LIMITS.connections || !handshakes()) {
       socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
       return;
@@ -338,7 +351,7 @@ export function gatewayOptionsFromEnv(env) {
     lobby: env.VERA_LOBBY_URL ?? 'https://lobby.vera20k.org',
     relays: (env.VERA_RELAYS ?? '').split(',').map(relay => relay.trim()).filter(Boolean),
     legacyRelay: env.VERA_LEGACY_RELAY?.trim() || undefined,
-    origin: env.VERA_WEB_ORIGIN,
+    origins: (env.VERA_WEB_ORIGIN ?? '').split(',').map(origin => origin.trim()).filter(Boolean),
     allowHttp: env.VERA_ALLOW_LOCAL_HTTP === '1',
     clientIpHeader: env.VERA_CLIENT_IP_HEADER?.toLowerCase() || undefined,
     lobbyKey: env.VERA_GATEWAY_KEY || undefined,

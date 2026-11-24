@@ -1012,7 +1012,7 @@ fn opening_observation(state: &AppState) -> Result<Value> {
                 "estimated_health": entity.estimated_health.get(),
                 "sampled_power_health": entity.building_power_health_sample(),
                 "damaged_mode": entity.building_art.damage_state_active(),
-                "damage_smoke_system": entity.damage_smoke_system_id,
+                "damage_smoke_system": entity.seldom.damage_smoke_system_id,
                 "anim_slots": entity.building_art.anim_slots().iter().enumerate()
                     .filter_map(|(slot, id)| {
                         let id = (*id)?;
@@ -1058,7 +1058,7 @@ fn opening_observation(state: &AppState) -> Result<Value> {
                 "members": team.members().collect::<Vec<_>>(),
                 "transports": team.members().filter_map(|id| {
                     let entity = sim.entities().get(id)?;
-                    let cargo = entity.passenger_role.cargo()?;
+                    let cargo = entity.passenger_role().cargo()?;
                     Some(json!({"id": id, "cell": [entity.position.rx(), entity.position.ry()],
                         "passengers": cargo.passengers()}))
                 }).collect::<Vec<_>>(),

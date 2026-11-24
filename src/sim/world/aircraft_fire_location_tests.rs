@@ -200,7 +200,7 @@ fn fixture_with_art(input: &Value, art: &IniFile) -> (Simulation, RuleSet) {
         .veterancy
         .set_rank_for_test((input["veterancy"].as_u64().unwrap_or(0) * 100) as u16);
     if input["flag_3d4"].as_bool().unwrap_or(false) {
-        owner.mission_only.mark();
+        owner.seldom.mission_only.mark();
     }
     if input["carryall_target"].as_bool().unwrap_or(false) {
         owner
@@ -276,7 +276,11 @@ fn fixture_with_art(input: &Value, art: &IniFile) -> (Simulation, RuleSet) {
         e.set_gunner_selection_for_test(passenger["current"].as_i64().unwrap_or(0) as i32, -1);
         cargo.board_forced_chain(&[(id, 1.0)]);
     }
-    sim.substrate.entities.get_mut(1).unwrap().passenger_role = PassengerRole::transport(cargo);
+    sim.substrate
+        .entities
+        .get_mut(1)
+        .unwrap()
+        .set_passenger_role_for_test(PassengerRole::transport(cargo));
     // The original global Cell flags belong to CurrentHouse, even when the
     // searching aircraft belongs to a different house. No UI cache is built.
     let viewer = sim.interner.intern("CURRENT_HOUSE");
@@ -381,7 +385,7 @@ pub(super) fn reengagement_fixture_with_art(input: &Value, art: &IniFile) -> (Si
         .lift
         .set_swap_active_for_test(input["swap"].as_bool().unwrap_or(false));
     if input["open_transport"].as_bool().unwrap_or(false) {
-        entity.passenger_role = PassengerRole::inside_for_test(4, true);
+        entity.set_passenger_role_for_test(PassengerRole::inside_for_test(4, true));
     }
     if input["bunker"].as_bool().unwrap_or(false) {
         entity
@@ -729,8 +733,7 @@ fn retail_hornet_launch_move_ignores_an_unmarked_sinking_aegis() {
             &mut sim,
             &rules,
             carrier,
-            None,
-            FrameEffects::default(),
+            &mut FrameEffects::default(),
         );
     }
     let target = Some(NavTargetRef::cell(59, 64));
@@ -777,7 +780,7 @@ fn retail_hornet_launch_move_ignores_an_unmarked_sinking_aegis() {
             arg6: false,
         },
     );
-    sim.commit_noncombat_aoe_hits(&rules, None, &[hit], FrameEffects::default());
+    sim.commit_noncombat_aoe_hits(&rules, None, &[hit], &mut FrameEffects::default());
     let retained = sim.substrate.entities.get(ship).unwrap();
     assert!(retained.sinking.is_active());
     assert_eq!(retained.health.current(), 1);
@@ -796,7 +799,7 @@ fn retail_hornet_launch_move_ignores_an_unmarked_sinking_aegis() {
     );
     assert_eq!(sim.scenario_rng.logical_state(), before, "no ring search");
 
-    crate::sim::aircraft::dispatch_mission(&mut sim, hornet, &rules, ObjectAiCtx::default());
+    crate::sim::aircraft::dispatch_mission(&mut sim, hornet, &rules, &mut ObjectAiCtx::default());
     let actor = sim.substrate.entities.get(hornet).unwrap();
     assert_eq!(
         actor.mission.current().known(),

@@ -7,13 +7,12 @@
 //! path search workspaces) stays allocated between frames.
 
 use rayon::prelude::*;
+use std::num::NonZeroUsize;
 
-/// Set the global Rayon pool size before its first use. Android profiling APKs
-/// use this for controlled worker-count comparisons; ordinary builds leave
-/// Rayon to choose the process's available parallelism.
-pub fn configure_worker_count(
-    workers: std::num::NonZeroUsize,
-) -> Result<(), rayon::ThreadPoolBuildError> {
+/// Set the process-wide worker count before the first parallel operation.
+/// Android calls this during native startup; each operation still preserves
+/// the same item/result ordering independent of worker count.
+pub fn configure_worker_count(workers: NonZeroUsize) -> Result<(), rayon::ThreadPoolBuildError> {
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers.get())
         .build_global()
@@ -136,6 +135,16 @@ pub fn drop_on_pool<T: Send + 'static>(value: T) {
     rayon::spawn(move || drop(value));
     #[cfg(target_arch = "wasm32")]
     drop(value);
+}
+
+/// Run a fixture on the pool's only worker so deferred drops stay queued until it yields.
+#[cfg(all(not(target_arch = "wasm32"), any(test, feature = "test-support")))]
+pub fn on_single_worker_for_test(work: impl FnOnce() + Send) {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .expect("a worker pool")
+        .install(work);
 }
 
 #[cfg(all(test, tests_sim_p_s))]

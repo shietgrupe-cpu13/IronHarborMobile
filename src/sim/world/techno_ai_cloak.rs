@@ -25,7 +25,7 @@ impl Simulation {
     /// InfantryLoad521A0C and the other Techno class loads call NoInit6F4300
     /// for every retained object. Invoke this at the player-file boundary;
     /// internal continuations retain their progress clocks.
-    pub fn restart_cloak_progress_after_player_load(&mut self) {
+    pub(crate) fn restart_cloak_progress_after_player_load(&mut self) {
         let frame = self.session.binary_frame() as i32;
         for entity in self.substrate.entities.values_mut() {
             if let Some(cloak) = entity.cloak.as_mut() {
@@ -147,9 +147,9 @@ fn stock_cloak_tick_facts(
     };
     // CloakDisallowed10043A40 also refuses while the SonarTimer runs.
     let sonar_active = rules.ares()
-        && entity.ares.sonar_timer.start_frame() != -1
+        && entity.seldom.ares.sonar_timer.start_frame() != -1
         && entity
-            .ares
+            .seldom.ares
             .sonar_timer
             .remaining(sim.session.binary_frame() as i32)
             > 0;
@@ -170,7 +170,7 @@ fn stock_cloak_tick_facts(
     // resolving to a WeaponsFactory building (naval-yard repair contact), not
     // an arbitrary movement destination.
     let destination_is_weapons_factory = entity
-        .radio_contacts
+        .seldom.radio_contacts
         .slot(0)
         .is_some_and(|contact| sim.is_weapons_factory(contact, rules));
     let current_frame = sim.session.binary_frame() as i32;
@@ -215,7 +215,7 @@ fn stock_cloak_tick_facts(
         // it rejects before the retained-target weapon/range query.
         // Ares CloakAllowed10043990 asks recloak before weapon rearm.
         && (!rules.ares() || entity.cloak.as_ref().is_some_and(|cloak| cloak.recloak_delay().expired(current_frame)))
-        && entity.rearm_timer.timer().expired(current_frame)
+        && entity.seldom.rearm_timer.timer().expired(current_frame)
         // 4. `Target(+0x2B4) != 0 && CanFireAtTarget(vt+0x3AC)`.
         //    6FBEF4..6FBF01 calls the canonical selected-weapon/InRange owner
         //    (6F7780), not GetFireError. An ordinary Attack retains a distant
@@ -364,7 +364,7 @@ fn tick_building_cloak(
     id: u64,
     rules: &RuleSet,
     registry: Option<&crate::rules::overlay_types::OverlayTypeRegistry>,
-    effects: FrameEffects<'_>,
+    effects: &mut FrameEffects<'_>,
 ) {
     let Some((edge, state)) = sim
         .substrate
@@ -377,10 +377,9 @@ fn tick_building_cloak(
     };
     match edge {
         // 0x00454E7F..0x00454E9E: the system goes through its vt+0x20 with 1.
-        Some(BuildingFadeEdge::Cloaked) => sim.delete_natural_particle_system(
-            id,
-            UninitContext::new(rules, registry).with_effects(effects),
-        ),
+        Some(BuildingFadeEdge::Cloaked) => {
+            sim.delete_natural_particle_system(id, UninitContext::new(rules).with_effects(effects))
+        }
         // 0x00454F29..0x00454F6C: with no system and a NaturalParticleLocation=
         // other than the zero coordinate (0x0089C848), Unlimbo's constructor
         // runs again. A type with a system at the zero offset gets it at
@@ -437,7 +436,7 @@ fn tick_building_cloak(
         .and_then(|entity| entity.cloak.as_mut())
         .map(|cloak| cloak.start_cloaking(now, facts.cloaking_speed, false));
     if start.is_some_and(|start| start.transitioned) {
-        start_cloaking_detach(sim, id, rules, registry, effects);
+        start_cloaking_detach(sim, id, rules, effects);
     }
     if start.is_some_and(|start| start.play_sound) {
         emit_cloak_transition_sound(sim, id, rules, false);
@@ -544,9 +543,8 @@ pub(crate) fn sensor_reevaluate_stock_cloak(
     if fully_cloaked
         && player.is_some_and(|player| player != owner)
         && !sensor_visible_to_player(sim, id)
-        && let Some(entity) = sim.substrate.entities.get_mut(id)
     {
-        entity.selection.deselect();
+        sim.object_deselect(id);
     }
     // 6F4F46 checks the field before invoking CanAutoCloak and its range query.
     if !owner_cloak_field_bit(sim, owner, cell.0, cell.1) {
@@ -571,7 +569,7 @@ pub(crate) fn sensor_reevaluate_stock_cloak(
         // sensor-count resident callback `0x006F4EB0`, argument zero.
         .map(|cloak| cloak.start_cloaking(facts.current_frame, facts.cloaking_speed, false));
     if start.is_some_and(|start| start.transitioned) {
-        start_cloaking_detach(sim, id, rules, registry, FrameEffects::default());
+        start_cloaking_detach(sim, id, rules, &mut FrameEffects::default());
     }
     if start.is_some_and(|start| start.play_sound) {
         emit_cloak_transition_sound(sim, id, rules, false);
@@ -581,8 +579,7 @@ pub(crate) fn sensor_reevaluate_stock_cloak(
             targeter_id,
             Some(TargetKind::Entity(id)),
             rules,
-            registry,
-            FrameEffects::default(),
+            &mut FrameEffects::default(),
         );
     }
     SensorCloakReevaluation {
@@ -686,19 +683,17 @@ fn start_cloaking_detach(
     sim: &mut Simulation,
     id: u64,
     rules: &RuleSet,
-    registry: Option<&crate::rules::overlay_types::OverlayTypeRegistry>,
-    effects: FrameEffects<'_>,
+    effects: &mut FrameEffects<'_>,
 ) {
-    sim.detach_all(
-        id,
-        false,
-        UninitContext::new(rules, registry).with_effects(effects),
-    );
+    sim.detach_all(id, false, UninitContext::new(rules).with_effects(effects));
     let player = sim.session.current_house();
-    if let Some(entity) = sim.substrate.entities.get_mut(id)
-        && player != Some(entity.owner())
+    if sim
+        .substrate
+        .entities
+        .get(id)
+        .is_some_and(|entity| player != Some(entity.owner()))
     {
-        entity.selection.deselect();
+        sim.object_deselect(id);
     }
 }
 
@@ -864,7 +859,7 @@ pub(crate) fn emit_configured_cloak_sound(
         return;
     };
     sound_events.emit(crate::sim::world::SimSoundEvent::cloak_sound(
-        sound_name.to_owned(),
+        rules.sound_name(sound_name),
         &position,
     ));
 }
@@ -954,7 +949,7 @@ pub(super) fn tick_stock_cloak_producer(
     id: u64,
     rules: &RuleSet,
     registry: Option<&crate::rules::overlay_types::OverlayTypeRegistry>,
-    effects: FrameEffects<'_>,
+    effects: &mut FrameEffects<'_>,
 ) {
     let Some(entity) = sim.substrate.entities.get(id) else {
         return;
@@ -995,7 +990,7 @@ pub(super) fn tick_stock_cloak_producer(
         .and_then(|entity| entity.cloak.as_mut())
         .map(|cloak| cloak.tick(facts, &mut sim.scenario_rng));
     if result.is_some_and(|result| result.began_cloaking) {
-        start_cloaking_detach(sim, id, rules, registry, effects);
+        start_cloaking_detach(sim, id, rules, effects);
     }
     if result.is_some_and(|result| result.completed_cloak) {
         // The 1 → 2 completion at `0x006FBA98` snapshots the still-admitted
@@ -1006,17 +1001,12 @@ pub(super) fn tick_stock_cloak_producer(
         // each receiver's passive-acquire provenance byte `+0x50C` first, which
         // `represented_assign_target_admitted` reproduces.
         let retained = sensor_targeters_in_native_dispatch_order(sim, id);
-        sim.detach_all(
-            id,
-            false,
-            UninitContext::new(rules, registry).with_effects(effects),
-        );
+        sim.detach_all(id, false, UninitContext::new(rules).with_effects(effects));
         for targeter_id in retained {
             let _ = sim.assign_target_represented(
                 targeter_id,
                 Some(TargetKind::Entity(id)),
                 rules,
-                registry,
                 effects,
             );
         }

@@ -326,7 +326,7 @@ impl Simulation {
         target: TemporalShotTarget,
         rules: &RuleSet,
         registry: Option<&crate::rules::overlay_types::OverlayTypeRegistry>,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) {
         if !self.substrate.entities.contains(firer) {
             return;
@@ -399,7 +399,7 @@ impl Simulation {
         target: u64,
         rules: &RuleSet,
         registry: Option<&crate::rules::overlay_types::OverlayTypeRegistry>,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) {
         if self
             .substrate
@@ -410,7 +410,7 @@ impl Simulation {
             crate::sim::spawn_manager::kill_all_spawns_with_context(
                 self,
                 target,
-                UninitContext::new(rules, registry).with_effects(effects),
+                UninitContext::new(rules).with_effects(effects),
             );
         }
         if self
@@ -430,7 +430,7 @@ impl Simulation {
         target: Option<u64>,
         rules: &RuleSet,
         registry: Option<&crate::rules::overlay_types::OverlayTypeRegistry>,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) {
         let ares = rules.ares_form();
         // 0x0071AF2F..0x0071AF48: the target's spawns die and its captives
@@ -546,9 +546,10 @@ impl Simulation {
             target,
             ares,
         );
-        // 0x0071B16D: ObjectClass::Deselect.
-        if let Some(entity) = self.substrate.entities.get_mut(target) {
-            entity.selection.deselect();
+        // 0x0071B167..0x0071B175: with a current House (`0x00A83D4C`), the
+        // victim's Deselect (vt+0x150, `ObjectClass::Deselect`).
+        if self.session.current_house().is_some() {
+            self.object_deselect(target);
         }
     }
 
@@ -564,7 +565,7 @@ impl Simulation {
         target: u64,
         rules: &RuleSet,
         registry: Option<&crate::rules::overlay_types::OverlayTypeRegistry>,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) {
         let Some(entity) = self.substrate.entities.get(target) else {
             return;
@@ -647,6 +648,7 @@ impl Simulation {
                 return false;
             }
             let naval_factory = entity
+                .seldom
                 .radio_contacts
                 .slot(0)
                 .and_then(|contact| self.substrate.entities.get(contact))
@@ -665,7 +667,7 @@ impl Simulation {
         head: u64,
         rules: &RuleSet,
         registry: Option<&crate::rules::overlay_types::OverlayTypeRegistry>,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) {
         let Some(link) = Self::temporal_link(&self.substrate, head).cloned() else {
             return;
@@ -792,7 +794,7 @@ impl Simulation {
         self.substrate
             .entities
             .get(attacker)
-            .is_some_and(|entity| entity.passenger_role.in_open_transport())
+            .is_some_and(|entity| entity.passenger_role().in_open_transport())
     }
 
     /// The erase (`0x0071A895..0x0071AB02`).
@@ -802,7 +804,7 @@ impl Simulation {
         target: Option<u64>,
         rules: &RuleSet,
         registry: Option<&crate::rules::overlay_types::OverlayTypeRegistry>,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) {
         let ares = rules.ares_form();
         let Some(target) = target.filter(|&target| self.substrate.entities.contains(target)) else {
@@ -861,7 +863,7 @@ impl Simulation {
                 self.ares_kill_tunnel_feet_if_last(
                     target,
                     Some(head),
-                    UninitContext::new(rules, registry).with_effects(effects),
+                    UninitContext::new(rules).with_effects(effects),
                 );
             }
             // Temporal71A9A0..71A9A7: only positive true Occupants count
@@ -870,13 +872,13 @@ impl Simulation {
                 .substrate
                 .entities
                 .get(target)
-                .is_some_and(|entity| entity.passenger_role.occupants().count() > 0)
+                .is_some_and(|entity| entity.passenger_role().occupants().count() > 0)
             {
                 crate::sim::passenger::garrison_eject::kill_building_occupants(
                     self,
                     target,
                     None,
-                    UninitContext::new(rules, registry).with_effects(effects),
+                    UninitContext::new(rules).with_effects(effects),
                 );
             }
             // TemporalClass::Update (0x0071A9AC..0x0071A9DC) scalar-deletes Cargo
@@ -884,7 +886,7 @@ impl Simulation {
             // the admitted live object pass, whose active GameState is 1.
             self.scalar_delete_building_cargo(
                 target,
-                UninitContext::new(rules, registry).with_effects(effects),
+                UninitContext::new(rules).with_effects(effects),
                 1,
             );
             // 0x0071A9EE..0x0071AA15: a Tank Bunker releases its occupant
@@ -955,14 +957,11 @@ impl Simulation {
             target,
             crate::sim::combat::KillSource::Techno(Some(head)),
             crate::sim::combat::KillCallback::Terminal,
-            UninitContext::new(rules, registry).with_effects(effects),
+            UninitContext::new(rules).with_effects(effects),
         );
         let target_owner = self.substrate.entities.get(target).map(GameEntity::owner);
         // vtable +0xF8 UnInit: no death effects, no survivors.
-        self.uninit_with_context(
-            target,
-            UninitContext::new(rules, registry).with_effects(effects),
-        );
+        self.uninit_with_context(target, UninitContext::new(rules).with_effects(effects));
         //71AA5A..71AA60 requests the owner's House tail; the actual late
         //Building destructor separately calls hold/revoke43BEF0.
         if category == EntityCategory::Structure
@@ -1106,7 +1105,12 @@ impl Simulation {
     /// `Enter_Idle_Mode(0, 1)` (vtable `+0x484`) on an attacker. Every stock
     /// Temporal firer is a Foot; a building or aircraft firer has no VERA
     /// idle selector.
-    fn temporal_owner_idle(&mut self, attacker: u64, rules: &RuleSet, effects: FrameEffects<'_>) {
+    fn temporal_owner_idle(
+        &mut self,
+        attacker: u64,
+        rules: &RuleSet,
+        effects: &mut FrameEffects<'_>,
+    ) {
         #[cfg(any(test, feature = "test-support"))]
         IDLE_TRACE.with(|trace| trace.borrow_mut().push(attacker));
         if self.substrate.entities.get(attacker).is_some_and(|entity| {
@@ -1115,7 +1119,13 @@ impl Simulation {
                 EntityCategory::Unit | EntityCategory::Infantry
             )
         }) {
-            crate::sim::world::enter_idle_mode(self, attacker, rules, None, effects);
+            crate::sim::world::enter_idle_mode(
+                self,
+                attacker,
+                rules,
+                Some(rules.overlay_registry()),
+                effects,
+            );
         }
     }
 
@@ -1201,7 +1211,7 @@ impl Simulation {
         &mut self,
         attacker: u64,
         rules: &RuleSet,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) {
         // A link without a target faults natively (`0x0071ADE9` writes
         // through it); VERA stops, which also ends any walk of a cycle.
@@ -1249,7 +1259,7 @@ impl Simulation {
         &mut self,
         attacker: u64,
         rules: &RuleSet,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) {
         let Some(target) = Self::temporal_link(&self.substrate, attacker).map(|link| link.target)
         else {
@@ -1295,7 +1305,7 @@ impl Simulation {
         listener: u64,
         expired: u64,
         rules: &RuleSet,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) {
         let Some(target) = Self::temporal_link(&self.substrate, listener).map(|link| link.target)
         else {
@@ -1398,7 +1408,7 @@ impl Simulation {
         &mut self,
         id: u64,
         rules: &RuleSet,
-        ctx: crate::sim::world::ObjectAiCtx<'_>,
+        ctx: &mut crate::sim::world::ObjectAiCtx<'_>,
         bridge_state_changed: &mut bool,
     ) -> bool {
         let registry = ctx.overlay_registry;
@@ -1429,7 +1439,7 @@ impl Simulation {
             .get(id)
             .and_then(|entity| entity.temporal.head)
         {
-            self.temporal_update_head(head, rules, registry, ctx.effects);
+            self.temporal_update_head(head, rules, registry, &mut ctx.effects);
         }
         if matches!(category, EntityCategory::Unit | EntityCategory::Aircraft) {
             self.warp_foot_sparkle(id, rules);
@@ -1496,7 +1506,7 @@ impl Simulation {
             // Each frozen class calls virtual +3C8 (Infantry51BBEF), not
             // the Techno base write set. Its reached tail also clears a
             // Tesla Trooper's automatic charging intent at51B33F.
-            let _ = self.assign_target_represented(id, None, rules, registry, ctx.effects);
+            let _ = self.assign_target_represented(id, None, rules, &mut ctx.effects);
         }
         let clears_destination = category != EntityCategory::Structure
             && self
@@ -1505,7 +1515,7 @@ impl Simulation {
                 .get(id)
                 .is_some_and(|entity| entity.navigation.nav_com().is_some());
         if clears_destination {
-            self.assign_null_destination(id, rules, registry, ctx.effects);
+            self.assign_null_destination(id, rules, registry, &mut ctx.effects);
         }
         true
     }

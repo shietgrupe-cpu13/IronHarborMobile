@@ -112,7 +112,7 @@ fn initial_payload_fills_a_transport_once_and_garrisons_infantry_only() {
             .entities
             .get(transport)
             .unwrap()
-            .passenger_role
+            .passenger_role()
             .cargo()
             .unwrap()
             .passengers()
@@ -123,11 +123,11 @@ fn initial_payload_fills_a_transport_once_and_garrisons_infantry_only() {
         let passenger = sim.substrate.entities.get(passenger).unwrap();
         assert!(passenger.lifecycle.in_limbo());
         assert_eq!(
-            passenger.passenger_role.inside_transport_id(),
+            passenger.passenger_role().inside_transport_id(),
             Some(transport)
         );
     }
-    sim.create_ares_initial_payload(transport, &rules, None, FrameEffects::default());
+    sim.create_ares_initial_payload(transport, &rules, &mut FrameEffects::default());
     assert_eq!(cargo(&sim).len(), 3);
 
     let bunker = spawn(&mut sim, &rules, "NABNKR", "Americans", 16, 10);
@@ -136,11 +136,16 @@ fn initial_payload_fills_a_transport_once_and_garrisons_infantry_only() {
         .entities
         .get(bunker)
         .unwrap()
-        .passenger_role
+        .passenger_role()
         .occupants()
         .ids()
         .to_vec();
     assert_eq!(kinds(&sim, &occupants), ["E1"; 4]);
+    for id in occupants {
+        let rider = sim.entities().get(id).unwrap();
+        assert!(rider.lifecycle.in_limbo());
+        assert_eq!(rider.passenger_role().inside_transport_id(), Some(bunker));
+    }
 }
 
 /// CreateInitialPayload's Foot arm makes an `OpenTopped=` transport's
@@ -158,7 +163,7 @@ fn an_open_topped_transport_payload_rides_on_guard() {
         .entities
         .get(transport)
         .unwrap()
-        .passenger_role
+        .passenger_role()
         .cargo()
         .unwrap()
         .passengers()[0];
@@ -189,28 +194,28 @@ fn armory_capture_and_sale_each_kick_out_one_trainee() {
                 0,
                 0,
                 &rules,
-                FrameEffects::default(),
+                &mut FrameEffects::default(),
             )
             .unwrap();
         sim.substrate
             .entities
             .get_mut(trainee)
             .unwrap()
-            .passenger_role = PassengerRole::inside_for_test(armory, false);
+            .set_passenger_role_for_test(PassengerRole::inside_for_test(armory, false));
         trainee
     });
     sim.substrate
         .entities
         .get_mut(armory)
         .unwrap()
-        .passenger_role
+        .passenger_role_mut_for_test()
         .cargo_mut()
         .unwrap()
         .board_forced_chain(&[(trainees[0], 1.0), (trainees[1], 1.0)]);
     let in_limbo =
         |sim: &Simulation, id: u64| sim.substrate.entities.get(id).unwrap().lifecycle.in_limbo();
     let yuri = sim.interner.get("YuriCountry").unwrap();
-    sim.change_owner_with_rules(armory, yuri, &rules, None, FrameEffects::default());
+    sim.change_owner_with_rules(armory, yuri, &rules, None, &mut FrameEffects::default());
     assert!(!in_limbo(&sim, trainees[0]) && in_limbo(&sim, trainees[1]));
     let _ = crate::sim::production::sell_back(
         &mut sim,
@@ -218,7 +223,7 @@ fn armory_capture_and_sale_each_kick_out_one_trainee() {
         armory,
         crate::sim::production::SellOrder::Player,
         None,
-        FrameEffects::default(),
+        &mut FrameEffects::default(),
     );
     assert!(!in_limbo(&sim, trainees[1]));
     assert!(
@@ -226,7 +231,7 @@ fn armory_capture_and_sale_each_kick_out_one_trainee() {
             .entities
             .get(armory)
             .unwrap()
-            .passenger_role
+            .passenger_role()
             .cargo()
             .is_none_or(|cargo| cargo.is_empty())
     );

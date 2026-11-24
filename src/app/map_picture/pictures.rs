@@ -64,8 +64,15 @@ pub(crate) fn picture_for_map(state: &mut AppState, map_index: usize) -> Option<
         None => {
             let paths = &state.platform.game_config.as_ref()?.paths;
             let mods = &state.frontend.mods;
-            let folder =
-                super::generation_folder(&paths.map_pictures_dir(), &paths.ra2_dir, mods.dir());
+            let mod_folder = mods
+                .active
+                .as_ref()
+                .map(|active| paths.mods_dir().join(&active.folder));
+            let folder = super::generation_folder(
+                &paths.map_pictures_dir(),
+                &paths.ra2_dir,
+                mod_folder.as_deref(),
+            );
             state.frontend.map_pictures.mod_args = mods.child_args();
             state.frontend.map_pictures.folder = Some(folder.clone());
             folder
@@ -85,11 +92,19 @@ pub(crate) fn picture_for_map(state: &mut AppState, map_index: usize) -> Option<
     if let Some(picture) = super::read_png(&output) {
         return Some(picture);
     }
-    if let Some(map) = map {
-        want(
-            &mut state.frontend.map_pictures,
-            MapPictureRequest::for_menus(map, sha256, output),
-        );
+    // NativeActivity has no standalone VERA executable to render a picture.
+    // A cache miss still falls back to the map's own preview in the caller.
+    if !cfg!(target_os = "android")
+        && let Some(map) = map
+    {
+        let mut request = MapPictureRequest::for_menus(map, sha256, output);
+        request.prepared_mod = state.frontend.mods.active.as_ref().and_then(|active| {
+            active
+                .dir
+                .is_prepared()
+                .then(|| active.dir.path().to_path_buf())
+        });
+        want(&mut state.frontend.map_pictures, request);
     }
     None
 }
@@ -175,36 +190,28 @@ fn start(
     request: &MapPictureRequest,
     mod_args: &[std::ffi::OsString],
 ) -> Result<std::process::Child> {
-    // Android's current executable is the system app_process trampoline, not
-    // this library. Spawning it with desktop CLI arguments aborts in ART
-    // (`Error changing dalvik-cache ownership`). The NativeActivity already
-    // owns the process-wide winit loop, so map previews cannot use this helper.
-    #[cfg(target_os = "android")]
-    anyhow::bail!("Android cannot spawn the desktop map-picture helper");
-
-    #[cfg(not(target_os = "android"))]
+    let executable = std::env::current_exe().context("find VERA20k's executable")?;
+    let mut command = std::process::Command::new(executable);
+    command
+        .args(request.args())
+        // After the run's own arguments, which it is known by
+        // (`is_invocation`); start-up takes the switch out first.
+        .args(mod_args)
+        // The same game: RA2 mode reads other rules and theaters.
+        .args(crate::util::ra2_launch::enabled().then_some("-ra2"))
+        // The developer sandbox would start a different map at start-up.
+        .env_remove("RA2_QUICKPLAY")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(windows)]
     {
-        let executable = std::env::current_exe().context("find VERA20k's executable")?;
-        let mut command = std::process::Command::new(executable);
-        command
-            .args(request.args())
-            // After the run's own arguments, which it is known by
-            // (`is_invocation`); start-up takes the switch out first.
-            .args(mod_args)
-            // The developer sandbox would start a different map at start-up.
-            .env_remove("RA2_QUICKPLAY")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-        #[cfg(windows)]
-        {
-            // A console build would otherwise open a console window.
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            command.creation_flags(CREATE_NO_WINDOW);
-        }
-        Ok(command.spawn()?)
+        // A console build would otherwise open a console window.
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
     }
+    Ok(command.spawn()?)
 }
 
 /// Take a finished run and start the next. A new picture replaces the map's

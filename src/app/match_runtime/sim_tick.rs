@@ -17,7 +17,7 @@ use crate::app::match_runtime::session::SessionMode;
 use crate::app::types::SIM_TICK_MS;
 use crate::map::terrain;
 use crate::sim::production;
-use crate::sim::replay::ScenarioServiceInput;
+use crate::sim::replay::{ReplayLog, ScenarioServiceInput};
 use crate::sim::trigger_runtime::TriggerEffect;
 use crate::sim::world::{FrameEffects, LifecycleOutput, SimFrameOutput, TickLane};
 use crate::ui::game_screen::GameScreen;
@@ -39,12 +39,49 @@ const REPLAYS_DIR: &str = "replays";
 /// `_n` suffix instead of replacing a segment already published under the
 /// same `(tick, unix second)`.
 pub(crate) fn flush_replay_log(state: &mut AppState) {
-    let (session_tick, now) = replay_flush_facts(state);
-    match state
+    let can_finish_queue = state.match_state.live_network.is_some();
+    #[cfg(not(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown")))]
+    let can_finish_queue = can_finish_queue && state.frontend.graphics_lost.is_none();
+    let active = &mut state.match_state;
+    let session_tick = match replay_flush_facts(
+        &mut active.sim_runtime,
+        active.match_diagnostics.replay_log.as_mut(),
+        active.frame_stopped,
+        can_finish_queue,
+    ) {
+        ReplayFlush::Sealed(tick) => tick,
+        ReplayFlush::QueueHandoff(pending) => {
+            // The worker stopped before the network queue. Use the same
+            // live completion as an ordinary pass before sealing.
+            finish_threaded_output(state, pending, None);
+            let active = &mut state.match_state;
+            seal_replay_log(
+                &active.sim_runtime,
+                active.match_diagnostics.replay_log.as_mut(),
+                active.frame_stopped,
+            )
+        }
+    };
+    write_replay_log(state, session_tick);
+}
+
+/// A panicked frame may have written only a prefix. Keep the recorded
+/// diagnostic journal without resuming that frame or sealing its world.
+pub(crate) fn preserve_replay_after_panic(state: &mut AppState) {
+    let session_tick = state
         .match_state
-        .match_diagnostics
-        .flush_to(session_tick, Path::new(REPLAYS_DIR), now)
-    {
+        .sim_runtime
+        .runtime()
+        .map_or(0, |rt| rt.simulation.session().tick());
+    write_replay_log(state, session_tick);
+}
+
+fn write_replay_log(state: &mut AppState, session_tick: u64) {
+    match state.match_state.match_diagnostics.flush_to(
+        session_tick,
+        Path::new(REPLAYS_DIR),
+        replay_flush_time(),
+    ) {
         Ok(Some(flush)) => log::info!(
             "Deterministic diagnostic log flushed: {} ticks -> {}",
             flush.tick_count,
@@ -55,15 +92,66 @@ pub(crate) fn flush_replay_log(state: &mut AppState) {
     }
 }
 
+/// Capture the initial world before either a frame or a skirmish cheat can change it.
+pub(crate) fn prepare_replay_recording(state: &mut AppState) {
+    if let Some(rt) = state.match_state.sim_runtime.runtime() {
+        use crate::sim::replay::ReplayLaunchInput;
+        let campaign = state.match_state.session.network_authored_start();
+        let launch = campaign
+            .map(|campaign| ReplayLaunchInput::MapHouses(&campaign.authored))
+            .or_else(|| {
+                state
+                    .match_state
+                    .session
+                    .network_setup()
+                    .or_else(|| state.match_state.startup.offline_launch())
+                    .map(ReplayLaunchInput::Slots)
+            });
+        let _ = state.match_state.match_diagnostics.get_or_begin_replay(rt);
+        state.match_state.match_diagnostics.retain_replay_startup(
+            rt,
+            launch,
+            state.match_state.loaded_map_source.as_ref(),
+            state.match_state.loaded_map_hash,
+            crate::sim::replay::ReplayStartOptions {
+                every_frame_network: state
+                    .match_state
+                    .live_network
+                    .as_ref()
+                    .is_some_and(|live| live.dispatches_every_frame()),
+                quick_coop_starts: state
+                    .match_state
+                    .session
+                    .network_wol_start()
+                    .is_some_and(|start| start.quick_coop),
+                personal_rules: state
+                    .process_assets
+                    .native_rules()
+                    .map(|owner| owner.personal_rules().clone())
+                    .unwrap_or_default(),
+                campaign_carry_over: state.match_state.session.network_campaign_carry_over(),
+            },
+        );
+    }
+}
+
 /// Timeline-boundary close (new match install, in-scenario load): a write
 /// failure discards the segment instead of retaining it, so the next
 /// timeline can never append under the previous timeline's header.
 pub(crate) fn close_replay_segment_for_new_timeline(state: &mut AppState) {
-    let (session_tick, now) = replay_flush_facts(state);
+    // The client can continue in this scenario after a developer closes its
+    // replay. Deliver the frame's presentation and network tail as usual.
+    finish_threaded_tick(state, None);
+    let active = &mut state.match_state;
+    let session_tick = seal_replay_log(
+        &active.sim_runtime,
+        active.match_diagnostics.replay_log.as_mut(),
+        active.frame_stopped,
+    );
     match state
         .match_state
         .match_diagnostics
-        .close_segment_for_new_timeline(session_tick, Path::new(REPLAYS_DIR), now)
+        .close_segment_for_new_timeline(session_tick, Path::new(REPLAYS_DIR), replay_flush_time())
     {
         Ok(Some(flush)) => log::info!(
             "Deterministic diagnostic log flushed: {} ticks -> {}",
@@ -77,17 +165,52 @@ pub(crate) fn close_replay_segment_for_new_timeline(state: &mut AppState) {
     }
 }
 
-fn replay_flush_facts(state: &AppState) -> (u64, u64) {
-    let session_tick = state
-        .match_state
-        .sim_runtime
-        .runtime()
-        .map_or(0, |rt| rt.simulation.session().tick());
-    let now = crate::util::time::SystemTime::now()
+enum ReplayFlush {
+    Sealed(u64),
+    QueueHandoff(ThreadedTick),
+}
+
+fn replay_flush_facts(
+    host: &mut super::sim_host::SimHost,
+    mut replay_log: Option<&mut ReplayLog>,
+    mut frame_stopped: bool,
+    can_finish_queue: bool,
+) -> ReplayFlush {
+    // A lifecycle write may already have reclaimed the world. The result
+    // still belongs in the journal before the endpoint is read from it.
+    if let Some(pending) = take_threaded_tick(host, replay_log.as_deref_mut()) {
+        if can_finish_queue
+            && pending
+                .output
+                .as_ref()
+                .is_ok_and(|output| output.network_waiting)
+        {
+            return ReplayFlush::QueueHandoff(pending);
+        }
+        frame_stopped |= pending.output.is_err();
+    }
+    ReplayFlush::Sealed(seal_replay_log(host, replay_log, frame_stopped))
+}
+
+fn seal_replay_log(
+    host: &super::sim_host::SimHost,
+    replay_log: Option<&mut ReplayLog>,
+    frame_stopped: bool,
+) -> u64 {
+    let Some(rt) = host.home_runtime() else {
+        return 0;
+    };
+    if !frame_stopped && let Some(log) = replay_log {
+        log.finish(&rt.simulation);
+    }
+    rt.simulation.session().tick()
+}
+
+fn replay_flush_time() -> u64 {
+    crate::util::time::SystemTime::now()
         .duration_since(crate::util::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
-        .unwrap_or(0);
-    (session_tick, now)
+        .unwrap_or(0)
 }
 
 /// Route an admitted native result after its in-House Vox wait and callbacks.
@@ -95,6 +218,11 @@ fn replay_flush_facts(state: &AppState) -> (u64, u64) {
 pub(crate) fn drive_local_player_outcome_exit(state: &mut AppState, wall_ms: u64) {
     if !matches!(state.frontend.screen, GameScreen::InGame)
         || state.match_state.scenario_exit.is_some()
+        || state
+            .match_state
+            .match_presentation
+            .narrative_sync
+            .pending()
     {
         return;
     }
@@ -115,6 +243,14 @@ pub(crate) fn drive_local_player_outcome_exit(state: &mut AppState, wall_ms: u64
     let Some(outcome) = outcome.map(|outcome| outcome.kind) else {
         return;
     };
+    // docs/spawn.md "Watching": a launcher's watcher is none of the players,
+    // so the House it stands in deciding ends the watch with no verdict or
+    // score page of that player's, and its launch with no result.
+    if state.frontend.external_launch && super::watching::active(state) {
+        log::info!("The watched match is decided; the watcher leaves it");
+        crate::app::App::leave_network_wait_to_main_menu(state);
+        return;
+    }
     // The loser gets the last word. The simulation published this result on
     // its own frame, the same one a headless or replay run publishes, and no
     // further frame runs while it waits. With `Custom End Game Movie` on, only
@@ -176,12 +312,19 @@ pub(crate) fn drive_local_player_outcome_exit(state: &mut AppState, wall_ms: u64
 
     let entry = local_end_game_entry(state, outcome);
     let banner = entry.as_ref().and_then(|entry| entry.banner_art());
-    // The verdict's beat is the beat, card or not: a country that names no
-    // picture still gets the retail banner's three seconds over the still
-    // battlefield before the teardown takes the screen. Requiring the picture
-    // here instead skipped the beat entirely, and with it the retail banner —
-    // the frame froze and went straight to the score page.
-    let hold_banner = state.persistence.options_profile.custom_end_game_banner && entry.is_some();
+    // Tactical SetScreenText (6D4DB0) precedes the wait and GameExit.
+    // VERA can service both before drawing. Hold a visible skirmish on the
+    // battlefield if the last presented picture omitted this verdict.
+    // A custom country's entry still holds even if it has no picture.
+    let custom_banner = state.persistence.options_profile.custom_end_game_banner && entry.is_some();
+    let visible_skirmish = state.match_state.session_mode() == SessionMode::Skirmish
+        && !state.platform.window_hidden
+        && crate::app::presentation::outcome_banner::visible_verdict(state) == Some(outcome);
+    let hold_banner = state
+        .match_state
+        .match_presentation
+        .outcome_banner_presentation
+        .hold_on_exit(outcome, custom_banner, visible_skirmish);
     log::info!(
         "Match end: verdict entry={} card={} hold_banner={hold_banner}",
         entry.is_some(),
@@ -195,16 +338,20 @@ pub(crate) fn drive_local_player_outcome_exit(state: &mut AppState, wall_ms: u64
     start_verdict_theme(state, outcome, wall_ms);
     let title = crate::app::match_runtime::scenario_exit::outcome_title(outcome);
     let detail = crate::app::match_runtime::scenario_exit::outcome_detail(outcome);
-    let destination = crate::app::match_runtime::scenario_exit::scenario_exit_destination(
-        state.match_state.session_mode(),
-        outcome,
-        state.match_state.map_basic.skip_score.unwrap_or(false),
-        cooperative,
-        title,
-        detail,
-        || build_campaign_score_screen_model(state, elapsed_score_ticks),
-        || build_score_screen_model(state, elapsed_seconds, false),
-    );
+    let destination = if state.match_state.session.network_authored_start().is_some() {
+        super::scenario_exit::ScenarioExitDestination::AuthoredCampaignResult(outcome)
+    } else {
+        super::scenario_exit::scenario_exit_destination(
+            state.match_state.session_mode(),
+            outcome,
+            state.match_state.map_basic.skip_score.unwrap_or(false),
+            cooperative,
+            title,
+            detail,
+            || build_campaign_score_screen_model(state, elapsed_score_ticks),
+            || build_score_screen_model(state, elapsed_seconds, false),
+        )
+    };
     // Native campaign victories enter the standalone dialog `0x103`; campaign
     // defeats take a separate prompt path. Only GameMode!=0 takes the generic
     // `ScoreDialog__Run 0x5C9720` / SCORE-theme handoff.
@@ -223,11 +370,14 @@ pub(crate) fn drive_local_player_outcome_exit(state: &mut AppState, wall_ms: u64
     // under it, that beat is already spent and the fade may start as soon as
     // the clip ends; a verdict with no clip still gets the full beat from
     // here.
-    let cascade = match crate::app::commander_feedback::verdict_card_shown_at_ms(state) {
-        Some(card_at) => cascade.with_banner_hold_until(
+    let cascade = if custom_banner
+        && let Some(card_at) = crate::app::commander_feedback::verdict_card_shown_at_ms(state)
+    {
+        cascade.with_banner_hold_until(
             card_at.saturating_add(crate::app::match_runtime::scenario_exit::BANNER_HOLD_MS),
-        ),
-        None => cascade,
+        )
+    } else {
+        cascade
     };
     state.match_state.scenario_exit = Some(cascade);
 }
@@ -241,7 +391,7 @@ fn local_end_game_entry(
 ) -> Option<crate::rules::end_game::EndGamePresentation<'_>> {
     let sim = &state.match_state.sim_runtime.runtime()?.simulation;
     // A mission owns its own result screens; the match card is a match's.
-    if !sim.session().game_mode_nonzero() {
+    if sim.session().uses_campaign_world() {
         return None;
     }
     let house = sim
@@ -298,11 +448,11 @@ pub(crate) fn play_outcome_eva(
     state: &mut AppState,
     outcome: crate::sim::house_state::HouseOutcomeKind,
 ) {
-    let campaign = !state
+    let campaign = state
         .match_state
         .sim_runtime
         .runtime()
-        .is_some_and(|runtime| runtime.simulation.session().game_mode_nonzero());
+        .is_none_or(|runtime| runtime.simulation.session().uses_campaign_world());
     let event = crate::app::match_runtime::sound_dispatch::outcome_eva_event(outcome, campaign);
     let (Some(sfx), Some(catalog), Some(assets)) = (
         state.audio.sfx_player.as_mut(),
@@ -422,7 +572,7 @@ fn build_campaign_score_screen_model_from_sources(
 }
 
 fn resolve_campaign_score_label(state: &AppState, native_key: &str) -> String {
-    crate::app::frontend::shell_pass::resolve_csf(state, native_key).into_owned()
+    state.csf_text(native_key)
 }
 
 fn format_campaign_score_time(total_seconds: i32) -> String {
@@ -552,7 +702,7 @@ fn build_score_screen_model(
         snapshot.clone()
     };
     let raw_snapshot = &snapshot;
-    let computer = crate::app::frontend::shell_pass::resolve_csf(state, "TXT_COMPUTER");
+    let computer = state.csf_text("TXT_COMPUTER");
     let rows = resolve_score_rows(
         sim,
         raw_snapshot,
@@ -818,23 +968,6 @@ fn audio_pump_follows_main_tick(mode: SessionMode, match_admitted: bool, own_loo
     mode.is_single_player() && match_admitted && !own_loop
 }
 
-/// Pure modal-pump decision: should the simulation advance one frame while a
-/// modal dialog is open? Mirrors the pump body: advance only on the network
-/// branch (LAN/WOL), only when neither service-only blocker is set, and only
-/// when no fixed tick is already in progress. Offline campaign/skirmish freeze
-/// the world; message, input, and repaint still run in the surrounding loop.
-/// Pure and total, so it is unit-tested without an `AppState`. The live
-/// app-layer consumer is `decide_runtime_pass`, which composes it with the
-/// pacer timing answer and the remaining freeze predicates to gate the
-/// one-frame admission inside `advance_in_game_runtime`.
-pub fn modal_pump_should_advance_sim(
-    mode: SessionMode,
-    service_only_blocked: bool,
-    reentrancy_in_progress: bool,
-) -> bool {
-    mode.is_network() && !service_only_blocked && !reentrancy_in_progress
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct WallClockServiceAdmission {
     simulation: bool,
@@ -847,16 +980,18 @@ struct WallClockServiceAdmission {
 /// it stops simulation only and leaves ordinary per-render camera/placement
 /// updates admitted.
 ///
-/// gamemd-derived: modal service pump, verified `FUN_00623120 @ 0x00623120`.
+/// `ProcessModalServicePump @ 0x00623120` runs Main_Tick behind a modal only
+/// outside `g_GameMode` 0 and 5; offline, it services messages and repaints
+/// with the world frozen. Its other blockers, the lobby byte `0x00A8D60E`,
+/// the counter `0x00A8DAB4` and Main_Tick's reentrancy byte `0x00ABCD58`
+/// (read by `0x0055CBF0`), stay clear here: VERA's in-game modal pass never
+/// runs inside Main_Tick, event execution or the lobby.
 fn wall_clock_service_admission(
     paused: bool,
     modal_open: bool,
     mode: SessionMode,
-    service_only_blocked: bool,
-    reentrancy_in_progress: bool,
 ) -> WallClockServiceAdmission {
-    let tactical_mutation = !modal_open
-        || modal_pump_should_advance_sim(mode, service_only_blocked, reentrancy_in_progress);
+    let tactical_mutation = !modal_open || mode.is_network();
     WallClockServiceAdmission {
         simulation: if modal_open {
             tactical_mutation
@@ -941,16 +1076,8 @@ pub(crate) fn decide_runtime_pass(inputs: RuntimePassInputs) -> RuntimePassDecis
             sidebar_action: true,
         };
     }
-    // The session owner (`MatchSession`) carries no network service-only
-    // blocker yet; the in-game network service of a later networking stage
-    // supplies their combined state.
-    let service = wall_clock_service_admission(
-        inputs.paused,
-        inputs.menu_open,
-        inputs.session_mode,
-        false,
-        false,
-    );
+    let service =
+        wall_clock_service_admission(inputs.paused, inputs.menu_open, inputs.session_mode);
     let pacer_admitted = service.simulation && inputs.pacer_timing_admits;
     let scenario_blocks =
         super::scenario_pause::blocks_main_tick(inputs.session_mode, inputs.scenario_paused);
@@ -1117,7 +1244,13 @@ fn advance_in_game_runtime_mode(
     // exact stepping. The derived predicate becomes true only after the
     // entire barrier frame, including a retained network transaction, finishes.
     // Transport and UI continue in the outer service loop.
-    if state.match_state.multiplayer_paused() {
+    if state.match_state.multiplayer_paused()
+        || state
+            .match_state
+            .match_presentation
+            .narrative_sync
+            .pending()
+    {
         return false;
     }
     if !replaying {
@@ -1350,6 +1483,7 @@ fn advance_in_game_runtime_mode(
             if state.match_state.frame_stopped
                 || state.match_state.scenario_outcome.is_some()
                 || state.match_state.scenario_exit.is_some()
+                || crate::app::App::local_outcome_exit_ready(state)
                 || crate::app::App::house_outcome_wait_pending(state)
             {
                 break;
@@ -1555,10 +1689,9 @@ fn after_simulation_pass(
         .throttle_tail(wall_ms);
 
     // Ordered native source/global operations were applied with the frame
-    // output. Reconcile the detail option and any explicit tool mutations.
+    // output; they alone relight cells. Follow the detail option.
     refresh_cell_lighting(state);
 
-    crate::app::presentation::building_anim::update_radar_state(state);
     let sidebar_visits = crate::app::presentation::sidebar_gadgets::current_sidebar_action_visits(
         state,
         decision.sidebar_action,
@@ -1707,16 +1840,23 @@ pub(crate) fn debug_speed_allowed(state: &AppState) -> bool {
         && state.match_state.live_network.is_none()
 }
 
-/// Tick simulation: advance movement and animation systems.
-fn should_record_replay_tick(
-    tick_result: &crate::sim::world::TickResult,
-    due_commands: &[crate::sim::command::CommandEnvelope],
-    network_failure: bool,
-) -> bool {
-    !network_failure
-        && (tick_result.frame_committed
-            || !due_commands.is_empty()
-            || tick_result.terminal_score_finalized)
+fn should_record_replay_tick(tick_result: &crate::sim::world::TickResult) -> bool {
+    // The frame tail always emits a hash on a completed terminal frame,
+    // including Cooperative's result without a score snapshot. Suspended
+    // prefixes leave both the frame commit and hash for the resumed tail.
+    tick_result.frame_committed || tick_result.state_hash.is_some()
+}
+
+fn record_replay_frame(log: Option<&mut ReplayLog>, output: &mut SimFrameOutput) {
+    if let Some(log) = log
+        && should_record_replay_tick(&output.tick)
+    {
+        log.record_tick(
+            output.tick.tick,
+            output.take_admitted_commands(),
+            output.tick.state_hash,
+        );
+    }
 }
 
 /// Complete the exact frame suspended by ExecuteDoList's message box. Reuse
@@ -1754,6 +1894,25 @@ enum FrameResume {
     QueueHandoff,
 }
 
+impl FrameResume {
+    /// Run the frame this resume names with the caller's effects.
+    fn run(
+        self,
+        rt: &mut crate::sim::runtime::SimRuntime,
+        due_commands: &[crate::sim::command::CommandEnvelope],
+        tick_lane: TickLane,
+        effects: &mut FrameEffects<'_>,
+    ) -> Result<SimFrameOutput, crate::sim::world::FrameAdvanceError> {
+        match self {
+            Self::ChecksumModal => rt.resume_after_network_failure(effects),
+            Self::NetworkWait | Self::QueueHandoff => rt.resume_network_wait(effects),
+            Self::NetworkLeave => rt.leave_network_wait(effects),
+            Self::OutcomeWait => rt.resume_outcome_wait(effects),
+            Self::None => rt.advance_frame(due_commands, SIM_TICK_MS, tick_lane, effects),
+        }
+    }
+}
+
 /// House+56F9, the House colour an Ares `Beam.IsHouseColor` birth keeps
 /// (TechnoClass_FireRadBeam1, Ares.dll 10056010), through the shared
 /// colour-map lookup the other House+56F9 readers use.
@@ -1787,7 +1946,7 @@ fn house_laser_rgb(
     // CreateHouses gives the two literal special houses InitColor
     // (0x688320/0x688373, which writes +56F9 only) but no ComputeRemap, so
     // the constructor's white +56FC..+56FE (0x4F5C2E..0x4F5C54) stays.
-    if runtime.simulation.session().game_mode_nonzero()
+    if !runtime.simulation.session().uses_campaign_world()
         && (name.eq_ignore_ascii_case("Neutral") || name.eq_ignore_ascii_case("Special"))
     {
         return [0xFF; 3];
@@ -1858,26 +2017,7 @@ fn advance_one_simulation_frame(
         crate::app::presentation::building_anim::drain_pending_sound_events(state);
     }
 
-    if let Some(rt) = state.match_state.sim_runtime.runtime() {
-        let _ = state.match_state.match_diagnostics.get_or_begin_replay(rt);
-        state.match_state.match_diagnostics.retain_replay_startup(
-            rt,
-            // A network match's session owns its launch; an offline
-            // skirmish's stays with the startup that installed it.
-            state
-                .match_state
-                .session
-                .network_setup()
-                .or_else(|| state.match_state.startup.offline_launch()),
-            state.match_state.loaded_map_source.as_ref(),
-            state.match_state.loaded_map_hash,
-            state
-                .match_state
-                .live_network
-                .as_ref()
-                .is_some_and(|live| live.dispatches_every_frame()),
-        );
-    }
+    prepare_replay_recording(state);
 
     let unit_voice_owners = state
         .audio
@@ -1903,8 +2043,7 @@ fn advance_one_simulation_frame(
     // this sink; the frame tail handles the suffix. Both must be merged so
     // an EVA row is never lost just because its voice played early.
     let detailed_eva_text = state.persistence.options_profile.detailed_eva_text;
-    let prefix_eva_text: std::cell::RefCell<Vec<crate::app::input::messages::HudMessage>> =
-        std::cell::RefCell::new(Vec::new());
+    let prefix_eva_text = Vec::new();
     let fps_panel_shown = state.renderer.performance_overlay.is_visible();
     let observing_commands = state.match_state.match_diagnostics.observes_commands();
     // docs/sim-thread.md: a network frame lent to the simulation thread runs
@@ -1955,7 +2094,15 @@ fn advance_one_simulation_frame(
         drain_radar_terrain_marks(&mut state.match_state);
     }
     let hash_interval = play_hash_interval(state.match_state.live_network.is_some());
-    let Some((rt, frame_checksums)) = state.match_state.sim_runtime.tick_parts() else {
+    let slow_tick = crate::app::cncnet::SpawnSlowPc::of(state).tick;
+    // A lent tick publishes the frame the last read captured: until `lend`
+    // below, this dispatch writes nothing a frame records.
+    let parts = if threaded {
+        state.match_state.sim_runtime.lend_parts()
+    } else {
+        state.match_state.sim_runtime.tick_parts()
+    };
+    let Some((rt, frame_checksums)) = parts else {
         return threaded_finished.unwrap_or(false);
     };
     let sim = &mut rt.simulation;
@@ -1973,7 +2120,9 @@ fn advance_one_simulation_frame(
     // Report points need the ledger whether or not a dashboard is
     // attached; `publish_if_due` only runs with a client. Elsewhere
     // the performance panel's Most CPU row reads it while the panel shows.
-    sim.set_frame_profiling(cfg!(feature = "telemetry-dashboard") || fps_panel_shown);
+    sim.set_frame_profiling(
+        cfg!(feature = "telemetry-dashboard") || cfg!(feature = "perf") || fps_panel_shown,
+    );
     // Delay-zero AnimClass construction can emit StartSound during the
     // final map-load sweep. Keep it until this first tactical drain;
     // `drain(..)` below still consumes every event exactly once.
@@ -1988,12 +2137,16 @@ fn advance_one_simulation_frame(
     // Recorded whether or not a client is attached: the history ring
     // backfills a dashboard that connects mid-match.
     let advance_started = crate::util::time::Instant::now();
+    // A lent tick spends it on the simulation thread, inside its own cost.
+    if !threaded {
+        crate::app::cncnet::SpawnSlowPc::spend(slow_tick);
+    }
     let production_visits = state
         .match_state
         .match_presentation
         .sidebar_projection
         .production_factory_visits(&rt.simulation);
-    let finish = FrameFinish {
+    let mut finish = FrameFinish {
         native_frame,
         local_owner_for_fog,
         local_owner_name,
@@ -2005,10 +2158,11 @@ fn advance_one_simulation_frame(
     if threaded {
         let job = move |rt: &mut crate::sim::runtime::SimRuntime| -> super::sim_host::SimJobResult {
             let started = crate::util::time::Instant::now();
+            crate::app::cncnet::SpawnSlowPc::spend(slow_tick);
             let logic_started_ms = super::frame_pacer::wall_clock_ms();
             let deferred = finish
                 .deferred
-                .as_ref()
+                .as_mut()
                 .expect("a threaded tick defers its client effects");
             let due_commands = rt.simulation.take_due_commands();
             let output = run_deferred_tick(
@@ -2040,7 +2194,7 @@ fn advance_one_simulation_frame(
     }
     // F07: the runtime is the one production frame API — bound
     // resources, no caller-substitutable inputs.
-    let output = if let Some(deferred) = &finish.deferred {
+    let mut output = if let Some(deferred) = &mut finish.deferred {
         match run_deferred_tick(
             rt,
             deferred,
@@ -2060,55 +2214,50 @@ fn advance_one_simulation_frame(
             .match_state
             .match_diagnostics
             .playback_and_observations_mut();
-        let command_observations = std::cell::RefCell::new(observations);
-        let observing_commands = command_observations.borrow().is_some();
-        let command_applied = |sim: &crate::sim::world::Simulation,
-                               record: &crate::sim::command::CommandRecord,
-                               applied: bool| {
-            if let Some(log) = command_observations.borrow_mut().as_deref_mut() {
+        let mut observations = observations;
+        let observing_commands = observations.is_some();
+        let mut command_applied = |sim: &crate::sim::world::Simulation,
+                                   record: &crate::sim::command::CommandRecord,
+                                   applied: bool| {
+            if let Some(log) = observations.as_deref_mut() {
                 log.record(sim, record, applied);
             }
         };
         let active_tab = crate::app::persistence::commands::saved_active_tab(
             state.match_state.match_presentation.active_sidebar_tab,
         );
-        let sidebar =
-            std::cell::RefCell::new(&mut state.match_state.match_presentation.sidebar_projection);
         #[cfg(feature = "phobos")]
         let sw_sidebar_expanded = state.match_state.match_presentation.sw_sidebar.expanded;
-        let clear_production_request = |type_id| {
-            sidebar.borrow_mut().clear_production_request(type_id);
-        };
-        let elapsed_clock = std::cell::RefCell::new(&mut state.match_state.scenario_elapsed_clock);
-        let initial_save = std::cell::RefCell::new((initial_save, &mut state.persistence));
-        let before_logic = |sim: &crate::sim::world::Simulation| {
-            let mut save = initial_save.borrow_mut();
-            let (prepared, persistence) = &mut *save;
-            if let Some(Ok(prepared)) = prepared.as_mut() {
-                // Strip6A8F42 clears requests before MainTick55DBCD.
-                // Preparation preceded the input prefix; snapshot the
-                // same sidebar owner again at the actual save boundary.
-                let mut sidebar = sidebar.borrow_mut();
-                if let Some(owner) = sim.session().current_house() {
-                    sidebar.reconcile_factory_links(sim, owner);
+        let mut prepared = initial_save;
+        let persistence = &mut state.persistence;
+        let mut campaign_save =
+            |sim: &crate::sim::world::Simulation,
+             sidebar: &mut crate::app::sidebar_projection::SidebarProjectionState,
+             elapsed_clock: &mut super::frame_pacer::ScenarioElapsedClock| {
+                if let Some(Ok(prepared)) = prepared.as_mut() {
+                    // Strip6A8F42 clears requests before MainTick55DBCD.
+                    // Preparation preceded the input prefix; snapshot the
+                    // same sidebar owner again at the actual save boundary.
+                    if let Some(owner) = sim.session().current_house() {
+                        sidebar.reconcile_factory_links(sim, owner);
+                    }
+                    let order = sidebar
+                        .saved_order()
+                        .map(|order| order.with_active_tab(active_tab));
+                    #[cfg(feature = "phobos")]
+                    let order = order.map(|mut order| {
+                        order.set_sw_sidebar_expanded(sw_sidebar_expanded);
+                        order
+                    });
+                    prepared.refresh_sidebar_order(order);
                 }
-                let order = sidebar
-                    .saved_order()
-                    .map(|order| order.with_active_tab(active_tab));
-                #[cfg(feature = "phobos")]
-                let order = order.map(|mut order| {
-                    order.set_sw_sidebar_expanded(sw_sidebar_expanded);
-                    order
-                });
-                prepared.refresh_sidebar_order(order);
-            }
-            crate::app::persistence::commands::initial_campaign_save(
-                prepared.take(),
-                sim,
-                persistence,
-                &mut elapsed_clock.borrow_mut(),
-            );
-        };
+                crate::app::persistence::commands::initial_campaign_save(
+                    prepared.take(),
+                    sim,
+                    persistence,
+                    elapsed_clock,
+                );
+            };
         let playback = match (
             state.audio.sfx_player.as_mut(),
             state.process_assets.manager(),
@@ -2132,20 +2281,27 @@ fn advance_one_simulation_frame(
         };
         let has_radar = &mut state.match_state.match_presentation.has_radar;
         let radar_anim = &mut state.match_state.match_presentation.radar_anim;
-        let mut set_tactical_radar = |available| {
-            *has_radar = available;
-            radar_anim
-                .as_mut()
-                .and_then(|radar| radar.set_has_radar(available))
-        };
+        let mut set_tactical_radar =
+            |available: bool,
+             sfx: Option<&mut crate::audio::sfx::SfxPlayer>,
+             rules: &crate::rules::ruleset::RuleSet| {
+                crate::app::presentation::building_anim::set_tactical_radar(
+                    has_radar,
+                    radar_anim.as_mut(),
+                    sfx,
+                    rules,
+                    available,
+                )
+            };
         // Only Ares bounty or ProduceCashDisplay sums emit text, so this runs in every game.
         let flying_credits = &state.match_state.match_presentation.flying_credits;
-        let queue_bounty = |sim: &crate::sim::world::Simulation,
-                            rules: &crate::rules::ruleset::RuleSet,
-                            text: crate::sim::bounty::BountyText| {
-            flying_credits.borrow_mut().admit(sim, rules, text);
-        };
-        let boundary = super::frame_effects::FrameClientBoundary::new(
+        let mut queue_bounty =
+            |sim: &crate::sim::world::Simulation,
+             rules: &crate::rules::ruleset::RuleSet,
+             text: crate::sim::bounty::BountyText| {
+                flying_credits.borrow_mut().admit(sim, rules, text);
+            };
+        let mut boundary = super::frame_effects::FrameClientBoundary::new(
             playback,
             finish.local_owner_name.as_deref(),
             &mut state.match_state.match_audio.sound_events,
@@ -2161,35 +2317,29 @@ fn advance_one_simulation_frame(
         .with_live_network(state.match_state.live_network.as_mut())
         .with_scenario_pause(
             &mut state.match_state.match_presentation.scenario_pause,
-            &elapsed_clock,
+            &mut state.match_state.scenario_elapsed_clock,
             session_mode,
             other_local_pause,
         )
+        .with_sidebar(
+            &mut state.match_state.match_presentation.sidebar_projection,
+            Some(&mut campaign_save),
+        )
         .with_outcome_wait(&mut state.match_state.scenario_outcome)
+        .with_replay_playback(replaying)
         .with_deferred_verdict(defer_verdict_to_clip)
-        .with_eva_text(detailed_eva_text.then_some(&finish.prefix_eva_text))
+        .with_eva_text(detailed_eva_text.then_some(&mut finish.prefix_eva_text))
         .with_quiet_sounds(&mut state.match_state.match_audio.quiet);
-        let effects = FrameEffects::for_sound(&boundary)
-            .with_tactical_radar(&boundary)
-            .with_local_planning(&boundary)
-            .with_network_commands(&boundary)
-            .with_production_strip(&production_visits, &clear_production_request)
-            .with_before_logic(&before_logic);
-        let effects = effects.with_bounty_text(&queue_bounty);
-        // Recorded completion owns outcome timing during playback;
-        // a local audio wait cannot add a frame or change its hash.
-        let effects = if replaying {
-            effects
-        } else {
-            effects.with_outcome_wait(&boundary)
-        };
-        let effects = if observing_commands {
-            effects.with_command_applied(&command_applied)
+        let effects = FrameEffects::for_client(&mut boundary)
+            .with_production_strip(&production_visits)
+            .with_bounty_text(&mut queue_bounty);
+        let mut effects = if observing_commands {
+            effects.with_command_applied(&mut command_applied)
         } else {
             effects
         };
         if let Some(playback) = replay_playback {
-            match playback.advance(rt, effects) {
+            match playback.advance(rt, &mut effects) {
                 Ok(Some(output)) => output,
                 Ok(None) => return false,
                 Err(error) => {
@@ -2201,18 +2351,7 @@ fn advance_one_simulation_frame(
             }
         } else {
             let network = rt.simulation.session().game_mode().is_network();
-            let advanced = match resume {
-                FrameResume::ChecksumModal => rt.resume_after_network_failure(effects),
-                FrameResume::NetworkWait | FrameResume::QueueHandoff => {
-                    rt.resume_network_wait(effects)
-                }
-                FrameResume::NetworkLeave => rt.leave_network_wait(effects),
-                FrameResume::OutcomeWait => rt.resume_outcome_wait(effects),
-                FrameResume::None => {
-                    rt.advance_frame(&due_commands, SIM_TICK_MS, tick_lane, effects)
-                }
-            };
-            match advanced {
+            match resume.run(rt, &due_commands, tick_lane, &mut effects) {
                 Ok(advanced) => advanced,
                 Err(error) => {
                     stop_failed_frame(state, network, &error);
@@ -2230,6 +2369,10 @@ fn advance_one_simulation_frame(
             .frame_pacer
             .record_frame_cost(tick_cost, false);
     }
+    record_replay_frame(
+        state.match_state.match_diagnostics.replay_log.as_mut(),
+        &mut output,
+    );
     let committed = finish_simulation_frame(state, finish, output, tick_cost, mouse_scroll);
     threaded_finished.unwrap_or(false) | committed
 }
@@ -2242,7 +2385,7 @@ struct FrameFinish {
     defer_verdict_to_clip: bool,
     detailed_eva_text: bool,
     /// VERA-only EVA rows the frame's synchronous sound prefix posted.
-    prefix_eva_text: std::cell::RefCell<Vec<crate::app::input::messages::HudMessage>>,
+    prefix_eva_text: Vec<crate::app::input::messages::HudMessage>,
     deferred: Option<super::deferred_effects::DeferredClientEffects>,
 }
 
@@ -2254,6 +2397,20 @@ struct ThreadedTick {
     /// When the job started and ended (`wall_clock_ms`): for a network
     /// frame, the Logic visit that Queue_AI measures.
     logic_ms: (u64, u64),
+}
+
+fn take_threaded_tick(
+    host: &mut super::sim_host::SimHost,
+    replay_log: Option<&mut ReplayLog>,
+) -> Option<ThreadedTick> {
+    let result = host.take_job_result()?;
+    let mut tick = *result
+        .downcast::<ThreadedTick>()
+        .expect("the simulation thread runs only frame ticks");
+    if let Ok(output) = &mut tick.output {
+        record_replay_frame(replay_log, output);
+    }
+    Some(tick)
 }
 
 /// VERA-only: a failed frame must not crash the game. A peer's malformed
@@ -2275,15 +2432,25 @@ fn stop_failed_frame(state: &mut AppState, network: bool, error: &dyn std::fmt::
 /// Finish the tick the simulation thread ran, waiting for it if it still
 /// runs. `None` when no tick was out; else whether it committed.
 fn finish_threaded_tick(state: &mut AppState, mouse_scroll: Option<(f32, f32)>) -> Option<bool> {
-    let result = state.match_state.sim_runtime.take_job_result()?;
+    let active = &mut state.match_state;
+    let tick = take_threaded_tick(
+        &mut active.sim_runtime,
+        active.match_diagnostics.replay_log.as_mut(),
+    )?;
+    Some(finish_threaded_output(state, tick, mouse_scroll))
+}
+
+fn finish_threaded_output(
+    state: &mut AppState,
+    tick: ThreadedTick,
+    mouse_scroll: Option<(f32, f32)>,
+) -> bool {
     let ThreadedTick {
         finish,
         output,
         tick_cost,
         logic_ms: (logic_started_ms, logic_finished_ms),
-    } = *result
-        .downcast::<ThreadedTick>()
-        .expect("the simulation thread runs only frame ticks");
+    } = tick;
     let network = finish
         .deferred
         .as_ref()
@@ -2292,7 +2459,7 @@ fn finish_threaded_tick(state: &mut AppState, mouse_scroll: Option<(f32, f32)>) 
         Ok(output) => output,
         Err(error) => {
             stop_failed_frame(state, network, &error);
-            return Some(false);
+            return false;
         }
     };
     // MainTick55D3DA/55DE0D times the Logic visit up to Queue_AI. It ran on
@@ -2315,17 +2482,15 @@ fn finish_threaded_tick(state: &mut AppState, mouse_scroll: Option<(f32, f32)>) 
     // A network frame stopped at Queue_AI on the simulation thread; its
     // exchange, dispatch and commit continue here, with the live session.
     if !pending_network_wait(state) {
-        return Some(committed);
+        return committed;
     }
-    Some(
-        advance_one_simulation_frame(
-            state,
-            TickLane::Ordinary,
-            None,
-            FrameResume::QueueHandoff,
-            true,
-        ) | committed,
-    )
+    advance_one_simulation_frame(
+        state,
+        TickLane::Ordinary,
+        None,
+        FrameResume::QueueHandoff,
+        true,
+    ) | committed
 }
 
 fn pending_network_wait(state: &AppState) -> bool {
@@ -2340,41 +2505,43 @@ fn pending_network_wait(state: &AppState) -> bool {
 /// it borrows no app state, so it can run on the simulation thread.
 fn run_deferred_tick(
     rt: &mut crate::sim::runtime::SimRuntime,
-    deferred: &super::deferred_effects::DeferredClientEffects,
+    deferred: &mut super::deferred_effects::DeferredClientEffects,
     production_visits: &[production::ProductionFactoryVisit],
     due_commands: &[crate::sim::command::CommandEnvelope],
     tick_lane: TickLane,
     resume: FrameResume,
 ) -> Result<SimFrameOutput, crate::sim::world::FrameAdvanceError> {
-    let record_clear = |type_id| {
-        deferred.record(super::deferred_effects::DeferredEffect::ProductionRequestCleared(type_id));
-    };
-    // Only Ares bounty or ProduceCashDisplay sums emit text, so this runs in every game.
-    let record_bounty = |_: &crate::sim::world::Simulation,
-                         _: &crate::rules::ruleset::RuleSet,
-                         text: crate::sim::bounty::BountyText| {
-        deferred.record(super::deferred_effects::DeferredEffect::Bounty(text));
-    };
     // Sound plays from the frame tail; replay, the initial save and command
     // logs never reach this path, and a network frame stops at Queue_AI.
-    let effects = FrameEffects::empty()
-        .with_tactical_radar(deferred)
-        .with_local_planning(deferred)
-        .with_production_strip(production_visits, &record_clear)
-        .with_outcome_wait(deferred);
-    let effects = effects.with_bounty_text(&record_bounty);
-    let effects = if deferred.hands_off_queue() {
-        effects.with_network_commands(deferred)
-    } else {
-        effects
-    };
-    match resume {
-        FrameResume::ChecksumModal => rt.resume_after_network_failure(effects),
-        FrameResume::NetworkWait | FrameResume::QueueHandoff => rt.resume_network_wait(effects),
-        FrameResume::NetworkLeave => rt.leave_network_wait(effects),
-        FrameResume::OutcomeWait => rt.resume_outcome_wait(effects),
-        FrameResume::None => rt.advance_frame(due_commands, SIM_TICK_MS, tick_lane, effects),
+    let mut effects = FrameEffects::for_client(deferred).with_production_strip(production_visits);
+    resume.run(rt, due_commands, tick_lane, &mut effects)
+}
+
+/// Collect the HUD facts carried by this visit's sound batch, independently
+/// of whether its audio was already delivered by the synchronous boundary.
+fn frame_hud_messages(
+    output: &SimFrameOutput,
+    sim: &crate::sim::world::Simulation,
+    rules: &crate::rules::ruleset::RuleSet,
+    local_owner: Option<&str>,
+) -> Vec<crate::app::input::messages::HudMessage> {
+    let events = &output.sound_events;
+    let mut messages = super::sound_dispatch::hud_messages(events, sim.interner(), local_owner);
+    if rules.ares_form() {
+        messages.extend(super::sound_dispatch::ares_superweapon_messages(
+            events,
+            sim,
+            rules,
+            local_owner,
+        ));
     }
+    // The sim fills these labels only when Ares plays.
+    messages.extend(super::sound_dispatch::ares_tech_capture_messages(
+        events,
+        sim,
+        local_owner,
+    ));
+    messages
 }
 
 /// The frame tail on the main thread: the client takes the tick's output.
@@ -2391,7 +2558,7 @@ fn finish_simulation_frame(
         local_owner_name,
         defer_verdict_to_clip,
         detailed_eva_text,
-        prefix_eva_text,
+        mut prefix_eva_text,
         deferred,
     } = finish;
     let mut frame_committed = false;
@@ -2414,10 +2581,17 @@ fn finish_simulation_frame(
                 .match_presentation
                 .screen_shake
                 .apply_updates(&output.screen_shake_updates);
+            hud_messages = frame_hud_messages(
+                &output,
+                &rt.simulation,
+                &rt.resources.rules,
+                local_owner_name.as_deref(),
+            );
             if output.outcome_waiting {
-                // The simulation retains this frame's non-sound facts until
-                // the same House suffix finishes. Its sound prefix has already
-                // reached the synchronous boundary above exactly once.
+                // House4F860B/4F8732 pauses after MPlayer_Defeated has
+                // already posted its text (4FC271/4FC34F). The sim handed
+                // off this sound batch, which the resumed House won't return.
+                hud_messages.extend(prefix_eva_text.drain(..));
                 if let Some(deferred) = deferred {
                     // A deferred frame has no synchronous boundary: the
                     // sound facts of this visit, which the simulation has
@@ -2450,11 +2624,14 @@ fn finish_simulation_frame(
                         local_owner_name.as_deref(),
                         &mut admit_radar,
                         &mut state.match_state.match_audio.sound_events,
-                        None,
+                        detailed_eva_text.then_some(&mut hud_messages),
                     );
                     // Its client writes, the outcome wait it polled among
                     // them, still reach their owners.
                     deferred.apply(state);
+                }
+                for message in hud_messages {
+                    crate::app::input::messages::post_hud_message(state, message);
                 }
                 return false;
             }
@@ -2462,6 +2639,24 @@ fn finish_simulation_frame(
             // its cost from that thread's part; the exchange adds no sample.
             if let Some(tick_cost) = tick_cost {
                 let tick_ms = tick_cost.as_secs_f32() * 1000.0;
+                // Capture the committed tick's SIM snapshot while the runtime
+                // is home (this is the tick tail). The perf recorder reads this
+                // at present time, when the runtime may be lent to the SIM
+                // thread and `home_runtime()` is None.
+                #[cfg(feature = "perf")]
+                {
+                    use crate::app::diagnostics::perf_recorder::PerfTickSnapshot;
+                    let sim = rt.simulation.frame_profile().last_frame();
+                    let path = rt.simulation.path_batch_stats();
+                    state.diag.perf_last_tick = Some(PerfTickSnapshot {
+                        tick: rt.simulation.session().tick(),
+                        binary_frame: rt.simulation.session().binary_frame(),
+                        objects: rt.simulation.entities().len(),
+                        houses: rt.simulation.houses().len(),
+                        sim,
+                        path,
+                    });
+                }
                 state.match_state.network_quality.record_tick(tick_ms);
                 // The relay's pace reports carry the simulation's own cost.
                 if let Some(live) = state.match_state.live_network.as_mut() {
@@ -2503,7 +2698,6 @@ fn finish_simulation_frame(
                     }
                 }
             }
-            let admitted_commands = output.take_admitted_commands();
             let SimFrameOutput {
                 tick: tick_result,
                 trigger_effects: frame_trigger_effects,
@@ -2515,9 +2709,6 @@ fn finish_simulation_frame(
                 combat_lights,
                 lighting_events,
                 multiplayer_checksum,
-                network_failure,
-                network_waiting,
-                outcome_waiting,
                 ..
             } = output;
             // Queue_AI already published this checksum to the process session
@@ -2597,25 +2788,6 @@ fn finish_simulation_frame(
                 &resources.rules,
                 local_owner_name.as_deref(),
             );
-            hud_messages = super::sound_dispatch::hud_messages(
-                &frame_sound_events,
-                sim.interner(),
-                local_owner_name.as_deref(),
-            );
-            if resources.rules.ares_form() {
-                hud_messages.extend(super::sound_dispatch::ares_superweapon_messages(
-                    &frame_sound_events,
-                    sim,
-                    &resources.rules,
-                    local_owner_name.as_deref(),
-                ));
-            }
-            // The sim fills these labels only when Ares plays, so this runs in every game.
-            hud_messages.extend(super::sound_dispatch::ares_tech_capture_messages(
-                &frame_sound_events,
-                sim,
-                local_owner_name.as_deref(),
-            ));
             assert!(
                 sound_events_delivered <= frame_sound_events.len(),
                 "frame delivered more sound facts than it produced"
@@ -2654,7 +2826,7 @@ fn finish_simulation_frame(
             );
             // Frame order: the synchronously delivered prefix precedes the
             // frame-tail suffix. Both passes follow the same voice gates.
-            hud_messages.extend(prefix_eva_text.borrow_mut().drain(..));
+            hud_messages.extend(prefix_eva_text.drain(..));
             hud_messages.extend(eva_text_messages);
             super::super_selection::hide_placement_anims(
                 &mut state.match_state.match_presentation.hidden_super_anims,
@@ -2666,17 +2838,6 @@ fn finish_simulation_frame(
                 local_owner_name.as_deref(),
                 &mut state.match_state.match_audio.sound_events,
             );
-            // Both terminal routes belong to the deterministic stream even
-            // though Main_Tick skips its frame commit. EventClass EXIT carries
-            // a command; natural win/loss carries the one-shot score/RNG latch.
-            if should_record_replay_tick(
-                &tick_result,
-                &admitted_commands,
-                network_failure.is_some() || network_waiting || outcome_waiting,
-            ) && let Some(log) = &mut state.match_state.match_diagnostics.replay_log
-            {
-                log.record_tick(tick_result.tick, admitted_commands, tick_result.state_hash);
-            }
         }
         // The client writes a deferred frame recorded, in order, now that the
         // world is no longer borrowed.
@@ -3010,7 +3171,8 @@ fn atlas_check_finds_miss(state: &mut AppState) -> bool {
     miss
 }
 
-/// Refresh the presentation-owned light transaction from the committed runtime.
+/// The presentation-owned light transaction's pass work
+/// ([`MatchLighting::after_pass`](crate::app::presentation::lighting::MatchLighting::after_pass)).
 fn refresh_cell_lighting(state: &mut AppState) {
     let Some(runtime) = state.match_state.sim_runtime.runtime() else {
         return;
@@ -3019,7 +3181,7 @@ fn refresh_cell_lighting(state: &mut AppState) {
         return;
     };
     let presentation = &mut state.match_state.match_presentation;
-    presentation.lighting.refresh(
+    presentation.lighting.after_pass(
         terrain,
         &runtime.simulation,
         presentation.in_game_options.detail_level,
@@ -3064,9 +3226,22 @@ pub(crate) fn apply_trigger_effects(state: &mut AppState, effects: &[TriggerEffe
                 index,
                 pause_simulation,
             } => {
-                crate::app::radar_movie::enqueue(state, *index, *pause_simulation);
+                if !(*pause_simulation
+                    && super::narrative_sync::queue(
+                        state,
+                        super::narrative_sync::Clip::Radar(*index),
+                    ))
+                {
+                    crate::app::radar_movie::enqueue(state, *index, *pause_simulation);
+                }
             }
             TriggerEffect::FullscreenMovie { index } => {
+                if super::narrative_sync::queue(
+                    state,
+                    super::narrative_sync::Clip::Fullscreen(*index),
+                ) {
+                    continue;
+                }
                 let name = state
                     .process_assets
                     .native_rules()
@@ -3261,6 +3436,7 @@ pub(crate) fn update_building_placement_preview(state: &mut AppState, centre: Fo
         })
         .unwrap_or((1, 1, crate::rules::foundation::Foundation::default()));
     // Log at info level once per type_id change so it's visible in console.
+    // Process-wide, like the log it throttles.
     static LAST_LOG: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let hash: u64 = type_id
         .as_bytes()
@@ -3531,6 +3707,109 @@ mod tests {
             overlay_id,
             frame,
         }
+    }
+
+    #[test]
+    fn large_skirmish_outcome_wait_keeps_defeat_notices() {
+        use crate::app::input::messages::HudMessage;
+        use crate::rules::ini_parser::IniFile;
+        use crate::sim::house_state::{HouseOutcomeKind, HouseState};
+        use crate::sim::intern::InternedId;
+        use crate::sim::runtime::SimRuntime;
+        use crate::sim::scenario_session::ScenarioGameMode;
+        use crate::sim::world::{FrameEffects, OutcomeWaitBoundary, Simulation, TickLane};
+
+        struct HoldVoice;
+        impl OutcomeWaitBoundary for HoldVoice {
+            fn wait_complete(&mut self, _: InternedId, _: HouseOutcomeKind) -> bool {
+                false
+            }
+        }
+
+        // Make the last elimination and the start of the voice wait share a frame.
+        let patch = IniFile::from_str("[AudioVisual]\nSavourDelay=0\n");
+        let Some(retail) = crate::rules::retail_ini_fixture::retail_battle_rules_for_map_with_patch(
+            "Hills.mmx",
+            &patch,
+        ) else {
+            return;
+        };
+        let rules = retail.rules;
+        assert_eq!(rules.general.savour_delay_minutes, 0.0);
+        let mut sim = Simulation::with_seed(0x004F_C34F);
+        sim.intern_rule_type_ids(&rules);
+        sim.resolve_type_handles(&rules);
+        crate::sim::arena_fixture::flat_ground(&mut sim, &rules);
+        let last_slot = crate::skirmish_launch::SKIRMISH_MAX_SLOT_COUNT - 1;
+        let owners: Vec<_> = (0..last_slot)
+            .map(|slot| {
+                let owner = sim.intern(&format!("Computer{}", slot + 1));
+                sim.houses_mut_for_test()
+                    .register(HouseState::new(owner, 0, None, false, 0, 10));
+                owner
+            })
+            .collect();
+        let local = sim.intern("Player");
+        sim.houses_mut_for_test()
+            .register(HouseState::new(local, 0, None, true, 0, 10));
+        let session = sim.session_mut_for_test();
+        session.set_game_mode(ScenarioGameMode::Skirmish);
+        session.set_current_house_for_test(Some(local));
+        session.set_tick_for_test(20_000);
+        session.set_binary_frame_for_test(20_000);
+        sim.spawn_object("GACNST", "Player", 10, 10, 0, &rules)
+            .expect("the player holds a construction yard");
+
+        let mut runtime = SimRuntime::from_simulation(sim);
+        runtime.resources_mut().rules = rules;
+        let first = runtime
+            .advance_frame(
+                &[],
+                67,
+                TickLane::Ordinary,
+                &mut FrameEffects::empty().with_outcome_wait(&mut HoldVoice),
+            )
+            .unwrap();
+        assert!(first.outcome_waiting);
+        let messages = |output, runtime: &SimRuntime| {
+            super::frame_hud_messages(
+                output,
+                &runtime.simulation,
+                &runtime.resources.rules,
+                Some("Player"),
+            )
+        };
+        let defeats: Vec<_> = messages(&first, &runtime)
+            .into_iter()
+            .filter_map(|message| match message {
+                HudMessage::PlayerDefeated(house) => Some(house),
+                _ => None,
+            })
+            .collect();
+        let last = runtime
+            .resume_outcome_wait(&mut FrameEffects::empty())
+            .unwrap();
+        assert!(
+            messages(&last, &runtime)
+                .into_iter()
+                .all(|message| !matches!(message, HudMessage::PlayerDefeated(_)))
+        );
+        let verdict = runtime
+            .simulation
+            .ready_outcome_for_owner(local)
+            .unwrap()
+            .kind;
+        assert_eq!(verdict, HouseOutcomeKind::Victory);
+        let mut banner =
+            crate::app::presentation::outcome_banner::OutcomeBannerPresentation::default();
+        assert_eq!(
+            (defeats.len(), banner.hold_on_exit(verdict, false, true)),
+            (owners.len(), true),
+            "each defeat notice survives, and a verdict that had no draw gets a hold",
+        );
+        assert_eq!(defeats, owners);
+        banner.record_presented(Some(verdict));
+        assert!(!banner.hold_on_exit(verdict, false, true));
     }
 
     /// Online Neutral and Special keep the constructor's white laser colour.
@@ -3835,10 +4114,154 @@ mod camera_cadence_tests;
 #[cfg(all(test, tests_app_match))]
 mod modal_pump_tests {
     use super::{
-        SessionMode, audio_pump_follows_main_tick, modal_pump_should_advance_sim,
-        resolve_score_rows, score_title_key, should_record_replay_tick,
-        wall_clock_service_admission,
+        SessionMode, audio_pump_follows_main_tick, resolve_score_rows, score_title_key,
+        should_record_replay_tick, wall_clock_service_admission,
     };
+
+    fn lend_plain_frame(host: &mut crate::app::match_runtime::sim_host::SimHost) {
+        use super::{FrameEffects, FrameFinish, SIM_TICK_MS, ThreadedTick, TickLane};
+
+        assert!(host.lend(Box::new(|runtime| {
+            let native_frame = runtime.simulation.session().binary_frame();
+            Box::new(ThreadedTick {
+                finish: FrameFinish {
+                    native_frame,
+                    local_owner_for_fog: None,
+                    local_owner_name: None,
+                    defer_verdict_to_clip: false,
+                    detailed_eva_text: false,
+                    prefix_eva_text: Default::default(),
+                    deferred: None,
+                },
+                output: runtime.advance_frame(
+                    &[],
+                    SIM_TICK_MS,
+                    TickLane::Ordinary,
+                    &mut FrameEffects::empty(),
+                ),
+                tick_cost: Default::default(),
+                logic_ms: (0, 0),
+            })
+        })));
+        assert!(host.is_lent());
+        assert!(host.home_runtime().is_none());
+    }
+
+    #[test]
+    fn replay_flush_drains_and_records_a_lent_frame() {
+        use super::{ReplayFlush, replay_flush_facts};
+        use crate::app::match_diagnostics::MatchDiagnosticsState;
+        use crate::app::match_runtime::sim_host::SimHost;
+        use crate::sim::{runtime::SimRuntime, world::Simulation};
+
+        let mut sim = Simulation::new();
+        sim.hash_state_every(std::num::NonZeroU64::MIN);
+        let runtime = SimRuntime::from_simulation(sim);
+        let mut diagnostics = MatchDiagnosticsState::default();
+        let replay = diagnostics.get_or_begin_replay(&runtime).unwrap();
+        let mut host = SimHost::default();
+        host.install(Some(runtime));
+        lend_plain_frame(&mut host);
+
+        let ReplayFlush::Sealed(tick) = replay_flush_facts(&mut host, Some(replay), false, false)
+        else {
+            panic!("an offline frame does not hand off to the network queue");
+        };
+        assert!(!host.is_lent());
+        let runtime = host.home_runtime().unwrap();
+        assert_eq!(tick, 1);
+        assert_eq!(runtime.simulation.session().tick(), tick);
+        assert_eq!(replay.ticks.len(), 1);
+        assert_eq!(replay.ticks[0].tick, tick);
+        assert_eq!(
+            replay.ticks[0].state_hash,
+            Some(runtime.simulation.state_hash())
+        );
+    }
+
+    #[test]
+    #[ignore = "slow; verifies a lent frame's flushed replay against retail assets"]
+    fn flushing_lent_frame_verifies_its_completed_replay() {
+        use super::{
+            FrameEffects, ReplayFlush, SIM_TICK_MS, TickLane, record_replay_frame,
+            replay_flush_facts,
+        };
+        use crate::app::match_diagnostics::MatchDiagnosticsState;
+        use crate::app::match_runtime::sim_host::SimHost;
+        use crate::map::source::test_support::TestDirectory;
+        use crate::sim::replay::{ReplayLog, ReplayRunner};
+        use crate::sim::scenario_bootstrap::MatchLaunchDescriptor;
+        use crate::sim::scenario_session::ScenarioGameMode;
+
+        const MAP: &str = "XMP03T4.MAP";
+        let (retail, _) =
+            crate::rules::retail_ini_fixture::retail_assets().expect("retail RA2_DIR");
+        let launch = crate::headless_scenario::battle_session(
+            MAP,
+            &[(
+                crate::skirmish_launch::LaunchCountry::Russia,
+                crate::skirmish_launch::AiDifficulty::Normal,
+            )],
+        );
+        let mut scene = crate::headless_scenario::load_with_launch_and_ini(
+            &retail,
+            MAP,
+            73,
+            MatchLaunchDescriptor::from_resolved(launch.clone()).unwrap(),
+            &Default::default(),
+            ScenarioGameMode::Skirmish,
+            None,
+            None,
+        )
+        .unwrap();
+        let sim = &mut scene.runtime.simulation;
+        sim.batch_path_searches();
+        sim.batch_target_scans();
+        sim.present_effect_anims();
+        sim.sleep_idle_objects_in_match();
+        sim.hash_state_every(std::num::NonZeroU64::MIN);
+        let mut diagnostics = MatchDiagnosticsState::default();
+        diagnostics.get_or_begin_replay(&scene.runtime).unwrap();
+        diagnostics.retain_replay_startup(
+            &scene.runtime,
+            Some(crate::sim::replay::ReplayLaunchInput::Slots(&launch)),
+            Some(&scene.source),
+            Some(scene.map.ini.content_hash()),
+            Default::default(),
+        );
+        let mut first = scene
+            .runtime
+            .advance_frame(
+                &[],
+                SIM_TICK_MS,
+                TickLane::Ordinary,
+                &mut FrameEffects::empty(),
+            )
+            .unwrap();
+        record_replay_frame(diagnostics.replay_log.as_mut(), &mut first);
+        let mut host = SimHost::default();
+        host.install(Some(scene.runtime));
+        lend_plain_frame(&mut host);
+
+        let ReplayFlush::Sealed(tick) =
+            replay_flush_facts(&mut host, diagnostics.replay_log.as_mut(), false, false)
+        else {
+            panic!("offline flush must seal its completed worker frame");
+        };
+        let scratch = TestDirectory::new("lent-frame-replay");
+        let artifact = diagnostics
+            .flush_to(tick, scratch.path(), 1)
+            .unwrap()
+            .unwrap();
+        let replay = ReplayLog::load(&artifact.path).unwrap();
+        let verified = ReplayRunner::verify(&retail, &replay, None).unwrap();
+        assert_eq!(verified.final_tick, tick);
+        assert_eq!(verified.checked_hashes, 2);
+        assert_eq!(
+            verified.final_state_hash,
+            host.home_runtime().unwrap().simulation.state_hash()
+        );
+    }
 
     /// 0x005C9BE7: only GameMode 5 retitles 0x108.
     #[test]
@@ -3850,63 +4273,51 @@ mod modal_pump_tests {
     }
 
     #[test]
-    fn empty_natural_terminal_score_frame_is_recorded() {
+    fn completed_cooperative_terminal_frame_without_score_is_recorded() {
         let tick = crate::sim::world::TickResult {
             tick: 10,
             frame_committed: false,
             executed_commands: 0,
             state_hash: Some(123),
-            terminal_score_finalized: true,
+            terminal_score_finalized: false,
             spawned_entities: false,
             destroyed_structure: false,
             ownership_changed: false,
             bridge_state_changed: false,
         };
 
-        assert!(should_record_replay_tick(&tick, &[], false));
-        // A suspended prefix may already carry an outcome, but the complete
-        // admitted journal and final hash arrive only after Stop resumes it.
-        assert!(!should_record_replay_tick(&tick, &[], true));
-        assert!(!should_record_replay_tick(
-            &crate::sim::world::TickResult {
-                terminal_score_finalized: false,
-                ..tick
-            },
-            &[],
-            false
-        ));
+        assert!(should_record_replay_tick(&tick));
+        assert!(!should_record_replay_tick(&crate::sim::world::TickResult {
+            state_hash: None,
+            ..tick
+        }));
     }
 
     #[test]
     fn gsi_01_03_debug_pause_does_not_impersonate_an_offline_modal() {
-        let debug_pause =
-            wall_clock_service_admission(true, false, SessionMode::Skirmish, false, false);
+        let debug_pause = wall_clock_service_admission(true, false, SessionMode::Skirmish);
         assert!(!debug_pause.simulation);
         assert!(debug_pause.tactical_mutation);
 
-        let actual_modal =
-            wall_clock_service_admission(true, true, SessionMode::Skirmish, false, false);
+        let actual_modal = wall_clock_service_admission(true, true, SessionMode::Skirmish);
         assert!(!actual_modal.simulation);
         assert!(!actual_modal.tactical_mutation);
     }
 
     #[test]
     fn gsi_01_03_tactical_view_mutators_follow_modal_service_admission() {
-        // No modal means the ordinary app loop owns camera/placement updates;
-        // modal-pump blockers have no authority on that path.
+        let admitted = super::WallClockServiceAdmission {
+            simulation: true,
+            tactical_mutation: true,
+        };
+        // No modal means the ordinary app loop owns camera/placement updates.
         for mode in [
             SessionMode::Campaign,
             SessionMode::Skirmish,
             SessionMode::Lan,
             SessionMode::Wol,
         ] {
-            assert_eq!(
-                wall_clock_service_admission(false, false, mode, true, true),
-                super::WallClockServiceAdmission {
-                    simulation: true,
-                    tactical_mutation: true,
-                }
-            );
+            assert_eq!(wall_clock_service_admission(false, false, mode), admitted);
         }
 
         // The active offline Menu, Abort and Options callers all enter the
@@ -3914,7 +4325,7 @@ mod modal_pump_tests {
         // placement preview underneath the dialog.
         for mode in [SessionMode::Campaign, SessionMode::Skirmish] {
             assert_eq!(
-                wall_clock_service_admission(true, true, mode, false, false),
+                wall_clock_service_admission(true, true, mode),
                 super::WallClockServiceAdmission {
                     simulation: false,
                     tactical_mutation: false,
@@ -3922,29 +4333,9 @@ mod modal_pump_tests {
             );
         }
 
-        // Preserve the existing network-modal branch, including both native
-        // reasons it falls back to service-only work.
+        // A network match keeps running behind the modal.
         for mode in [SessionMode::Lan, SessionMode::Wol] {
-            let admitted = super::WallClockServiceAdmission {
-                simulation: true,
-                tactical_mutation: true,
-            };
-            let denied = super::WallClockServiceAdmission {
-                simulation: false,
-                tactical_mutation: false,
-            };
-            assert_eq!(
-                wall_clock_service_admission(true, true, mode, false, false),
-                admitted
-            );
-            assert_eq!(
-                wall_clock_service_admission(true, true, mode, true, false),
-                denied
-            );
-            assert_eq!(
-                wall_clock_service_admission(true, true, mode, false, true),
-                denied
-            );
+            assert_eq!(wall_clock_service_admission(true, true, mode), admitted);
         }
     }
 
@@ -3973,120 +4364,6 @@ mod modal_pump_tests {
             true,
             true
         ));
-    }
-
-    #[test]
-    fn only_network_modes_advance_behind_a_modal() {
-        // {3 LAN, 4 WOL} advance; {0 campaign, 5 skirmish} + Other freeze.
-        assert!(modal_pump_should_advance_sim(
-            SessionMode::Lan,
-            false,
-            false
-        ));
-        assert!(modal_pump_should_advance_sim(
-            SessionMode::Wol,
-            false,
-            false
-        ));
-        assert!(!modal_pump_should_advance_sim(
-            SessionMode::Campaign,
-            false,
-            false
-        ));
-        assert!(!modal_pump_should_advance_sim(
-            SessionMode::Skirmish,
-            false,
-            false
-        ));
-        assert!(!modal_pump_should_advance_sim(
-            SessionMode::Other,
-            false,
-            false
-        ));
-    }
-
-    #[test]
-    fn reentrancy_guard_blocks_advance_even_on_network() {
-        // The native reentrancy guard: a fixed tick already in progress means the
-        // pump skips advancing, even on the network branch.
-        assert!(!modal_pump_should_advance_sim(
-            SessionMode::Lan,
-            false,
-            true
-        ));
-        assert!(!modal_pump_should_advance_sim(
-            SessionMode::Wol,
-            false,
-            true
-        ));
-    }
-
-    #[test]
-    fn service_only_blockers_prevent_network_modal_advance() {
-        assert!(!modal_pump_should_advance_sim(
-            SessionMode::Lan,
-            true,
-            false
-        ));
-        assert!(!modal_pump_should_advance_sim(
-            SessionMode::Wol,
-            true,
-            false
-        ));
-    }
-
-    #[test]
-    fn pumped_tick_delta_is_zero_offline_and_n_on_network() {
-        // C2 acceptance at the decision level: the pump decision drives whether the
-        // world's fixed tick advances per pumped frame. `tick` stands in for
-        // `sim.session.tick`; the full headless-World assertion (incl. "no
-        // battlefield recomposite offline") lands with the live `service_tick` swap.
-        const FRAMES: u64 = 7;
-        let pumped = |mode: SessionMode| -> u64 {
-            let mut tick = 0u64;
-            for _ in 0..FRAMES {
-                if modal_pump_should_advance_sim(mode, false, false) {
-                    tick += 1; // one fixed step advanced this pumped frame
-                }
-            }
-            tick
-        };
-        // Offline freezes: zero advance over N pumped frames.
-        assert_eq!(pumped(SessionMode::Skirmish), 0);
-        assert_eq!(pumped(SessionMode::Campaign), 0);
-        // Network advances once per pumped frame.
-        assert_eq!(pumped(SessionMode::Lan), FRAMES);
-        assert_eq!(pumped(SessionMode::Wol), FRAMES);
-    }
-
-    #[test]
-    fn pumped_world_tick_freezes_offline_and_advances_on_network() {
-        use crate::sim::world::Simulation;
-
-        // C2 acceptance with a real headless World: drive `advance_tick` exactly
-        // when the pump decision is true, and assert `session.tick` motion.
-        // `advance_tick` commits one tick per call (no entities/rules needed).
-        const FRAMES: u64 = 7;
-        let pumped_world_delta = |mode: SessionMode| -> u64 {
-            let mut sim = Simulation::new();
-            let start = sim.session().tick();
-            for _ in 0..FRAMES {
-                if modal_pump_should_advance_sim(mode, false, false) {
-                    // `tick_ms` does not affect the asserted tick delta; a literal
-                    // matches the sim-test style and avoids the const dependency.
-                    sim.advance_tick(&[], None, None, None, 33);
-                }
-            }
-            sim.session().tick() - start
-        };
-
-        // Offline modes freeze the world behind the modal: zero tick advance.
-        assert_eq!(pumped_world_delta(SessionMode::Skirmish), 0);
-        assert_eq!(pumped_world_delta(SessionMode::Campaign), 0);
-        // Network modes advance one fixed tick per pumped frame (dead code this
-        // build; proves the contract for when multiplayer lands).
-        assert_eq!(pumped_world_delta(SessionMode::Lan), FRAMES);
-        assert_eq!(pumped_world_delta(SessionMode::Wol), FRAMES);
     }
 
     #[test]

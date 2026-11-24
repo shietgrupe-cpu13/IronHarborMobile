@@ -36,10 +36,6 @@ defaults.
 
 ## Intent and autonomy
 
-The user often thinks aloud. Follow intent, keep exact technical values literal,
-and treat proposed causes as hypotheses. Investigate contradictory observations.
-Push back briefly with evidence; respect informed decisions.
-
 Complete authorized work without routine approval. Resolve discoverable questions;
 ask only for missing authority or consequential, undiscoverable preferences.
 Research/review alone does not authorize implementation. Preserve scope amendments,
@@ -147,6 +143,15 @@ exchange keeps [Networking](docs/Networking.md) current and says in its PR what 
 released game, a mixed room and a rollback do with it: the older side is refused with
 a message or the feature stays off, and nothing hangs or crashes.
 
+Multiplayer rules: whatever a player's game can set that changes what a match plays (a
+file, an Options switch such as `PersonalRules`, an Ares or mod setting, a resource
+selection) enters the rules digest (`ProcessAssets::multiplayer_rules_digest`) and,
+in the same PR, the rules parts (`app::rules_parts`, docs/spawn.md "Rules parts"),
+named for players, so a refused start says what differs and not only that something
+does. A new part or setting keeps the parts' old form for a game without it (left
+out while off), and its PR says what the launcher's `src/lib/rulesDiff.ts` must add
+to name it; `every_personal_rules_switch_is_a_setting` holds `PersonalRules` to this.
+
 ## Architecture and delivery
 
 Use the simplest implementation that fully satisfies the required behavior. Avoid
@@ -189,6 +194,16 @@ state or decision logic, find existing writers and name the owner in the PR. Kee
 authoritative state private to its owning module and expose mutations through the
 owner. Extend or fix that owner instead of introducing competing state or duplicated
 decision logic, or widening visibility to reach its state or raw data.
+
+Write Rust, not C++ or Java in Rust syntax. When the borrow checker refuses code, fix
+who borrows what (split the borrow, pass a reference or an index, end a borrow sooner,
+reorder the writes) before reaching for `.clone()`, `Rc`, `RefCell`, `Arc` or a lock.
+Clone only where an owned copy is the intent, never per entity in a hot loop. Shared
+state gets an owner, not `Arc<Mutex<_>>`; parallel simulation work splits data by
+owner instead of sharing it behind a lock. Owners offer operations, not a `get_`/`set_`
+pair per field. Model gamemd's class tree with enums and data, not trait hierarchies.
+Loop with iterators; index where the index is itself the data (handles, slots,
+parallel arrays).
 
 Before porting a native function, search the code for its address (e.g. `703850`) and
 native name. Each native function has one Rust port, and new callers call it. Never
@@ -285,8 +300,9 @@ fix: write it first, or run it once with the fix reverted, and say so in the PR.
 Skip `cargo check` when a planned test answers the same question. A test run does not
 show that the game builds, though: tests switch on core's `test-support` code. When
 production code touches anything behind `test-support` or `#[cfg(test)]`, also run
-`python -m tools.cargo_run -- check -p vera20k --lib --bins`; for a file listed in
-`.github/workflows/wasm.yml`, the wasm check in the [Wasm guide](docs/wasm.md#checks).
+`python -m tools.cargo_run -- check -p vera20k --lib --bins`; for a file holding a
+browser switch (`feature = "wasm"` or `target_arch = "wasm32"`), the wasm check in the
+[Wasm guide](docs/wasm.md#checks). No pull request builds the browser package.
 
 - Working Rust: start with focused
   `python -m tools.cargo_run -- test -p <crate> --lib <module_path>::`, where `<crate>`

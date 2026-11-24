@@ -28,10 +28,18 @@ use crate::ui::sidebar::{SidebarChromeLayoutSpec, SidebarTab};
 pub(crate) struct MatchPresentationState {
     /// Native Techno+3CA waterline cache, captured by drawing and retained in
     /// the snapshot presentation supplement rather than simulation authority.
+    /// A `RefCell`: the unit visitor writes it while the Display-order
+    /// visitors share `&AppState` (`build_world_instances`).
     pub(crate) sinking_waterlines: std::cell::RefCell<crate::render::sinking::SinkingWaterlines>,
     /// The original voxel image caches and UseBuffer flag every voxel draw
     /// replays: which style and barrel pitch each type's stored images hold.
+    /// A `RefCell`: the unit, debris, building and bullet visitors, all alive
+    /// at once over `&AppState`, render through it in Display order.
     pub(crate) voxel_images: std::cell::RefCell<crate::render::voxel_image_cache::VoxelImageCache>,
+    /// The skip table of the building bodies the view's left edge cuts in
+    /// this picture, and the frames it decoded for them. A `RefCell`: the
+    /// building and fogged-object visitors fill it over `&AppState`.
+    pub(crate) zshape_skips: std::cell::RefCell<crate::render::zshape_skips::ZShapeSkips>,
     pub(crate) tile_atlas: Option<TileAtlas>,
     /// BUILDNGZ.SHA z-shape bound at group 2 of the Z-writing building draw.
     pub(crate) building_zshape: Option<crate::render::building_zshape::BuildingZShape>,
@@ -66,6 +74,8 @@ pub(crate) struct MatchPresentationState {
     /// the same tactical slot as the retail banner. `None` keeps the native
     /// art; the player's Custom End Game Banner switch is read at draw time.
     pub(crate) end_game_banner: Option<crate::app::presentation::outcome_banner::EndGameBanner>,
+    pub(crate) outcome_banner_presentation:
+        crate::app::presentation::outcome_banner::OutcomeBannerPresentation,
     pub(crate) software_cursor: Option<crate::app::presentation::render::SoftwareCursor>,
     pub(crate) terrain_grid: Option<TerrainGrid>,
     /// Overlay entries from map for per-frame instance generation.
@@ -91,6 +101,12 @@ pub(crate) struct MatchPresentationState {
     /// match by its hotkey command. Presentation only — every consumer is a
     /// draw, so it cannot affect determinism, networking, or replays.
     pub(crate) superweapon_building_timers: bool,
+    /// VERA's Convenience Help: draw the quick status rows (building repair,
+    /// ammo reload, more later) above friendly buildings and units. Started
+    /// from `[VERA] ConvenienceHelp=` when a scenario loads and flipped in a
+    /// match by Ctrl+Alt+H. Presentation only — every consumer is a draw, so
+    /// it cannot affect determinism, networking, or replays.
+    pub(crate) convenience_help: bool,
     /// Owner name → effective house-colour index under the relation-colours
     /// toggle ([`relation_house_colors`]). `None` while the toggle is off or
     /// there is no local house, so colour sites use `house_color_map`.
@@ -102,6 +118,8 @@ pub(crate) struct MatchPresentationState {
     pub(crate) lighting: super::lighting::MatchLighting,
     pub(crate) line_trails: super::line_trails::LineTrails,
     pub(crate) lasers: super::lasers::Lasers,
+    /// Ares DisplayCredits labels. A `RefCell`: the tick admits them through
+    /// the `Fn` bounty sink its frame-effect boundary calls (`sim_tick`).
     pub(crate) flying_credits: std::cell::RefCell<super::flying_credits::FlyingCredits>,
     pub(crate) talk_bubble: super::talk_bubble::TalkBubble,
     pub(crate) electric_bolts: super::electric_bolts::ElectricBolts,
@@ -117,8 +135,11 @@ pub(crate) struct MatchPresentationState {
     pub(crate) placement_range_pulse: crate::app::presentation::radial_indicators::RangePulse,
     pub(crate) superweapon_range_pulse: crate::app::presentation::radial_indicators::RangePulse,
     /// Native process-lived FPS counter and detail hysteresis, never sim state.
+    /// A `RefCell`: the particle, overlay-anim and light draws step it while
+    /// they read the presentation through `&`.
     pub(crate) detail: std::cell::RefCell<super::detail::DetailState>,
-    /// The water and ore sparkles' per-cell PixelFX and clock.
+    /// The water and ore sparkles' per-cell PixelFX and clock. A `RefCell`:
+    /// the sparkle draw steps it beside the world it reads through `&AppState`.
     pub(crate) pixel_fx: std::cell::RefCell<crate::render::pixel_fx_sparkles::PixelFxCells>,
     /// The client's AnimClass `+0x19D` for Supers' ChronoPlacement anims
     /// (`match_runtime::super_selection`): hidden anims, by id.
@@ -145,6 +166,7 @@ pub(crate) struct MatchPresentationState {
     pub(crate) commander_feedback: crate::app::commander_feedback::CommanderFeedback,
     pub(crate) chrono_screen: crate::app::chrono_screen::ChronoScreenPresentation,
     pub(crate) scenario_pause: crate::app::match_runtime::scenario_pause::ScenarioPauseClock,
+    pub(crate) narrative_sync: crate::app::match_runtime::narrative_sync::NarrativeSync,
     /// Requested-versus-resolved atlas identity used to construct `radar_anim`.
     ///
     /// Kept beside the animation so tactical evidence never reconstructs
@@ -181,7 +203,8 @@ pub(crate) struct MatchPresentationState {
     /// the client half of the placement-time enhancer ring switch.
     #[cfg(feature = "phobos")]
     pub(crate) show_power_plant_enhancer_range: bool,
-    /// Phobos placement preview SHP cache for the current placing type.
+    /// Phobos placement preview SHP cache for the current placing type. A
+    /// `RefCell`: the placement-preview draw fills it over `&AppState`.
     #[cfg(feature = "phobos")]
     pub(crate) placement_preview_art:
         std::cell::RefCell<super::placement_preview::PlacementPreviewArt>,
@@ -267,7 +290,11 @@ pub(crate) struct MatchPresentationState {
     /// (`0x0048CAA1`); see `App::state_machine_admission`.
     pub(crate) modal_latch: bool,
     pub(crate) pause_menu_has_saves: bool,
-    pub(crate) pause_menu_interaction: crate::ui::shell::pause_menu::PauseMenuInteraction,
+    /// The controls of the open scenario modal (B5/BBA/FF, B6, 0x73, 0x10C
+    /// and the Surrender box), rebuilt at every in-scenario state change.
+    pub(crate) dialog_ui: crate::ui::shell::controller::DialogController,
+    /// The connection dialog 0xEA's controls, over whatever modal is open.
+    pub(crate) connection_ui: crate::ui::shell::controller::DialogController,
     /// The template 4F10E0 chose when state 1 last opened; it stays for that
     /// dialog's lifetime.
     pub(crate) pause_menu_template: crate::ui::shell::pause_menu::PauseMenuTemplate,
@@ -282,23 +309,17 @@ pub(crate) struct MatchPresentationState {
     /// its stored results stay for that dialog's lifetime.
     pub(crate) abort_secondary: crate::ui::shell::abort::AbortSecondary,
     pub(crate) sound_dialog: Option<crate::ui::shell::sound::SoundState>,
-    pub(crate) abort_buttons:
-        crate::ui::shell::button::ShellButtonInteraction<crate::ui::shell::abort::AbortButton>,
-    /// The WOL tournament Surrender box's buttons (state 2).
-    pub(crate) surrender_buttons: crate::ui::shell::button::ShellButtonInteraction<
-        crate::app::input::surrender::SurrenderButton,
-    >,
-    pub(crate) diplomacy: crate::ui::shell::diplomacy::DiplomacyInteraction,
-    /// Restate 0x10C's pointer state.
-    pub(crate) restate: crate::ui::shell::restate::RestateInteraction,
+    /// The page 0x73 shows of VERA's paged rows.
+    pub(crate) diplomacy_page: crate::ui::shell::paging::RowPage,
     /// `[0xB04CA0]`: the briefing text 0x10C shows, resolved once at open.
     pub(crate) restate_text: String,
     pub(crate) saved_game_browser:
         Option<crate::ui::skirmish_shell::SavedSeedBrowserState<std::path::PathBuf>>,
     /// What BBB's init (4E1FE0) reads when the menu opens: the [Options]
     /// values, the speed context and whether the Game Speed row shows.
-    /// `game_speed` mirrors the launched sim; a moved Game Speed on the menu's
-    /// Game Controls page queues an authoritative transition on close.
+    /// `game_speed` mirrors the world's speed, which BBB's init reads again
+    /// (`app::input::in_game_options`); a moved Game Speed on the menu's Game
+    /// Controls page queues an authoritative transition on close.
     pub(crate) in_game_options: crate::ui::shell::in_game_options_state::InGameOptionsState,
 }
 

@@ -96,14 +96,16 @@ fn cncnet_campaign_keeps_logical_identity_for_loose_and_archived_missions() {
     );
     assert_eq!(metadata.load_message_key(), "MISSION:AL1");
 
-    let next = startup.next_mission(
-        "ALL02uMd.map".into(),
-        2,
-        1,
-        3,
-        crate::sim::campaign_carry_over::CampaignCarryOver::CLEARED,
-        &mut OrdinaryMatchSeedClock,
-    );
+    let next = startup
+        .next_mission(
+            "ALL02uMd.map".into(),
+            2,
+            1,
+            3,
+            crate::sim::campaign_carry_over::CampaignCarryOver::CLEARED,
+            &mut OrdinaryMatchSeedClock,
+        )
+        .unwrap();
     assert_eq!(next.scenario(), "ALL02UMD.MAP");
     let loaded =
         load_map_by_name_or_path_with_assets(retail.path(), next.selected_map_file(), &assets)
@@ -112,14 +114,16 @@ fn cncnet_campaign_keeps_logical_identity_for_loose_and_archived_missions() {
         matches!(loaded.source, LoadedMapSource::Loose { path, .. } if path == client.path().join("ALL02uMd.map"))
     );
 
-    let archived = next.next_mission(
-        "all03md.map".into(),
-        3,
-        1,
-        3,
-        crate::sim::campaign_carry_over::CampaignCarryOver::CLEARED,
-        &mut OrdinaryMatchSeedClock,
-    );
+    let archived = next
+        .next_mission(
+            "all03md.map".into(),
+            3,
+            1,
+            3,
+            crate::sim::campaign_carry_over::CampaignCarryOver::CLEARED,
+            &mut OrdinaryMatchSeedClock,
+        )
+        .unwrap();
     let loaded =
         load_map_by_name_or_path_with_assets(retail.path(), archived.selected_map_file(), &assets)
             .unwrap();
@@ -196,7 +200,7 @@ fn client_skirmish_preserves_roster_options_and_native_indices() {
     assert_eq!(session.local_slot().team, LaunchTeam::Team(0));
     assert_eq!(session.opponents[1].team, LaunchTeam::None);
     assert_eq!(session.required_start_count(), 3);
-    assert_eq!(session.pre_fill_house_roster.created_house_count(), 5);
+    assert_eq!(session.pre_fill_house_roster().created_house_count(), 5);
     assert!(session.house_roster_is_consistent());
     assert_eq!(session.options.starting_credits, 5000);
     assert!(!session.options.super_weapons);
@@ -579,6 +583,102 @@ fn two_player_relay_file_admits_the_grant_in_canonical_source_order() {
     assert_eq!(relay.service_url, "http://127.0.0.1:8080");
 }
 
+/// A `[Relay]` section holding a watch ticket of match 1111… with the
+/// match's own certificate (docs/spawn.md "Watching").
+fn watch_relay_section(sources_mask: u32) -> String {
+    use crate::net::udp::{OrderingCertificate, RelayWatchTicket, test_support::SecretKey};
+    use base64::Engine;
+    let encode = |bytes: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+    let key = SecretKey::new([9; 32]);
+    let ticket = RelayWatchTicket {
+        room: [0x11; 16],
+        expires: 300,
+        nonce: [3; 16],
+        watcher: [0x44; 16],
+        delay_seconds: 0,
+    }
+    .sign(&key)
+    .unwrap();
+    let certificate = OrderingCertificate {
+        room: [0x11; 16],
+        sources_mask,
+        tick_hz: 45,
+        expires: 86400,
+        pacing: Default::default(),
+        ordered_alone: false,
+    }
+    .sign(&key)
+    .unwrap();
+    format!(
+        "[Relay]\nAddress=203.0.113.5:5000\nMatchId=11111111-1111-1111-1111-111111111111\n\
+         PlayerId=44444444-4444-4444-4444-444444444444\nTicket={}\nPacketKey={}\nPayloadKey={}\n\
+         OrderingCertificate={}\nServiceUrl=https://match.example.com/\nToken=watch-secret\n",
+        encode(&ticket),
+        encode(&[5; 32]),
+        encode(&[7; 32]),
+        encode(&certificate)
+    )
+}
+
+/// A watcher's spawn.ini is the lowest source's own file with a watch
+/// ticket (docs/spawn.md "Watching"): it parses to that player's session,
+/// AI included, and a watcher's relay spawn, whose bearer only renews.
+#[test]
+fn a_watchers_file_is_the_first_players_with_a_watch_ticket() {
+    let ai = "[HouseHandicaps]\nMulti3=1\n[HouseCountries]\nMulti3=3\n[HouseColors]\nMulti3=6\n";
+    let two_and_ai = network_spawn(2, 0, &format!("{ai}{}", watch_relay_section(0b11))).replacen(
+        "[Settings]\n",
+        "[Settings]\nAIPlayers=1\n",
+        1,
+    );
+    // One person against AI, which the relay orders alone (docs/spawn.md).
+    let one_and_ai = network_spawn(
+        1,
+        0,
+        &format!(
+            "{}{}",
+            ai.replace("Multi3", "Multi2"),
+            watch_relay_section(0b1)
+        ),
+    )
+    .replacen("[Settings]\n", "[Settings]\nAIPlayers=1\n", 1);
+    for (text, humans, ai) in [
+        (one_and_ai, 1, 1),
+        (two_and_ai.clone(), 2, 1),
+        (network_spawn(2, 0, &watch_relay_section(0b11)), 2, 0),
+    ] {
+        let network = parse_network(&text);
+        assert_eq!(network.session.local_player_index, 0);
+        assert_eq!(network.session.humans.len(), humans);
+        assert_eq!(network.session.opponents.len(), ai);
+        let SpawnTransport::Relay(relay) = network.transport else {
+            panic!("relay transport")
+        };
+        assert!(relay.watch);
+        assert_eq!(relay.token, "watch-secret");
+        assert_eq!(relay.resume, None);
+        assert_eq!(relay.grant.payload_key, [7; 32]);
+        assert!(relay.grant.federation.is_none());
+    }
+    // A player's file is no watcher's.
+    let SpawnTransport::Relay(player) =
+        parse_network(&network_spawn(2, 0, &relay_section(0, 0b11))).transport
+    else {
+        panic!("relay transport")
+    };
+    assert!(!player.watch);
+    // A watcher joins one relay as no returning player, of its own match,
+    // whose certificate names every human.
+    for broken in [
+        format!("{two_and_ai}Federation=AAAA\n"),
+        format!("{two_and_ai}ResumePings=0,0\nResumeCursor=4\n"),
+        two_and_ai.replacen("MatchId=11111111", "MatchId=33333333", 1),
+        network_spawn(2, 0, &watch_relay_section(0b111)),
+    ] {
+        assert!(SpawnRequest::parse(&broken).is_err(), "{broken}");
+    }
+}
+
 #[test]
 fn four_player_direct_files_agree_on_one_session_with_house_teams() {
     // Sources 0+2 and 1+3 are teams; each file keys them by its own houses.
@@ -826,38 +926,81 @@ fn single_player_spawn_keeps_its_offline_admission() {
     for append in [relay_section(0, 1), "[Other12]\nName=Remote\n".into()] {
         assert!(SpawnRequest::parse(&format!("{SKIRMISH}\n{append}")).is_err());
     }
-    // A network room's thirty waypoints bound a single-player start too.
+    // A start past the eight retail waypoints is admitted.
     let far = SKIRMISH.replacen("Multi2=0\n[Multi1", "Multi2=8\n[Multi1", 1);
     assert!(SpawnRequest::parse(&far).is_ok());
 }
 
-/// One human against `ai` AI houses in `mode`, as a lobby writes it without a relay.
-fn one_human(mode: i32, ai: usize) -> String {
+/// `[HouseHandicaps]`, `[HouseCountries]` and `[HouseColors]` of `ai` AI
+/// houses after `humans` human houses.
+fn ai_houses(humans: usize, ai: usize) -> String {
     let rows = |value: fn(usize) -> usize| -> String {
-        (2..=ai + 1)
+        (humans + 1..=humans + ai)
             .map(|house| format!("Multi{house}={}\n", value(house)))
             .collect()
     };
     format!(
-        "[Settings]\nName=Solo\nScenario=spawnmap.ini\nPlayerCount=1\nGameMode={mode}\n\
-         Side=0\nColor=0\nAIPlayers={ai}\nSpecialHouseIsAlly=No\n\
-         [HouseHandicaps]\n{}[HouseCountries]\n{}[HouseColors]\n{}",
+        "[HouseHandicaps]\n{}[HouseCountries]\n{}[HouseColors]\n{}",
         rows(|_| 1),
         rows(|house| house % 9),
         rows(|house| house % 8),
     )
 }
 
+/// One human against `ai` AI houses in `mode`, as a lobby writes it without a relay.
+fn one_human(mode: i32, ai: usize) -> String {
+    format!(
+        "[Settings]\nName=Solo\nScenario=spawnmap.ini\nPlayerCount=1\nGameMode={mode}\n\
+         Side=0\nColor=0\nAIPlayers={ai}\nSpecialHouseIsAlly=No\n{}",
+        ai_houses(1, ai)
+    )
+}
+
+/// Source 0's file of a relay game of `humans` humans and `ai` AI houses.
+fn relayed(humans: usize, ai: usize) -> String {
+    let relay = relay_section(0, (1 << humans) - 1);
+    let text = network_spawn(humans, 0, &relay).replacen(
+        "[Settings]\n",
+        &format!("[Settings]\nAIPlayers={ai}\n"),
+        1,
+    );
+    format!("{text}\n{}", ai_houses(humans, ai))
+}
+
 /// A lobby plays every one-human game without a relay, so one human takes what
-/// a network room admits: thirty houses, and modes Skirmish does not list.
+/// offline Skirmish seats: 120 houses, with starts and teams to match, and
+/// modes Skirmish does not list. A relay keeps the network room's thirty.
 #[test]
-fn one_human_spawn_admits_thirty_houses_and_unlisted_modes() {
-    let SpawnGame::Skirmish(full) = SpawnRequest::parse(&one_human(1, 29)).unwrap().game else {
+fn one_human_spawn_admits_offline_skirmish_houses_and_unlisted_modes() {
+    let last = SKIRMISH_MAX_SLOT_COUNT;
+    let text = format!(
+        "{}[SpawnLocations]\nMulti{last}=119\n[HouseTeams]\nMulti1=119\nMulti{last}=119\n",
+        one_human(1, last - 1)
+    );
+    let SpawnGame::Skirmish(full) = SpawnRequest::parse(&text).unwrap().game else {
         panic!("one human stays a skirmish")
     };
-    assert_eq!(full.opponents.len(), 29);
+    assert_eq!(full.opponents.len(), 119);
+    let far = full.opponents.last().unwrap();
+    assert_eq!(far.raw_slot_index, 119);
+    assert_eq!(far.start_position, LaunchStartPosition::Position(119));
+    assert_eq!(far.team, LaunchTeam::Team(119));
+    assert_eq!(full.local_slot().team, LaunchTeam::Team(119));
     assert!(full.house_roster_is_consistent());
-    assert!(SpawnRequest::parse(&one_human(1, 30)).is_err());
+    assert!(SpawnRequest::parse(&one_human(1, last)).is_err());
+    for (humans, ai) in [(1, 29), (2, 28)] {
+        let request = SpawnRequest::parse(&relayed(humans, ai)).unwrap();
+        assert!(matches!(request.game, SpawnGame::Network(_)));
+    }
+    for (humans, ai) in [(1, 30), (2, 29)] {
+        assert!(
+            SpawnRequest::parse(&relayed(humans, ai)).is_err(),
+            "{humans} relay humans and {ai} AI"
+        );
+    }
+    let start = |waypoint: usize| format!("{}[SpawnLocations]\nMulti2={waypoint}\n", relayed(1, 1));
+    assert!(SpawnRequest::parse(&start(29)).is_ok());
+    assert!(SpawnRequest::parse(&start(30)).is_err());
     let SpawnGame::Skirmish(coop) = SpawnRequest::parse(&one_human(3, 2))
         .and_then(|request| request.admit_loaded_modes(&[]))
         .unwrap()
@@ -1009,14 +1152,20 @@ fn network_spectators_watch_without_ai_start_or_team() {
             .collect::<Vec<_>>(),
         observers
     );
-    for broken in [
-        network_spawn(
+    // A spectator may watch AI play beside the players.
+    let with_ai = parse_network(
+        &network_spawn(
             3,
             0,
             "[IsSpectator]\nMulti3=Yes\n[HouseHandicaps]\nMulti4=1\n\
              [HouseCountries]\nMulti4=3\n[HouseColors]\nMulti4=6\n",
         )
         .replacen("[Settings]\n", "[Settings]\nAIPlayers=1\n", 1),
+    )
+    .session;
+    assert!(with_ai.humans[2].is_observer());
+    assert_eq!(with_ai.opponents.len(), 1);
+    for broken in [
         network_spawn(2, 0, "[IsSpectator]\nMulti2=Yes\n"),
         network_spawn(
             3,

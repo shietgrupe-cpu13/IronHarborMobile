@@ -31,7 +31,7 @@ async function fixture(t, { otherRelays = [], ...extra } = {}) {
     req.on('end', () => {
       if (req.url === '/v1/hold') { held.push(res); return; }
       requests.push({ path: req.url, method: req.method, auth: req.headers.authorization,
-        cookie: req.headers.cookie, address: req.headers['vera-client-address'],
+        build: req.headers['vera-build'], cookie: req.headers.cookie, address: req.headers['vera-client-address'],
         key: req.headers['vera-gateway-key'], body: Buffer.concat(chunks) });
       if (req.url === '/v1/oversize') { res.end(Buffer.alloc(LIMITS.responseBytes + 1)); return; }
       res.writeHead(409, { 'content-type': 'application/json' });
@@ -41,7 +41,7 @@ async function fixture(t, { otherRelays = [], ...extra } = {}) {
   await listen(upstream);
   const relay = `127.0.0.1:${udp.address().port}`;
   const options = { lobby: `http://127.0.0.1:${upstream.address().port}`, allowHttp: true,
-    relays: [relay, ...otherRelays], origin, ...extra };
+    relays: [relay, ...otherRelays], origins: [origin], ...extra };
   const serverSockets = [];
   const emit = WebSocketServer.prototype.emit;
   t.mock.method(WebSocketServer.prototype, 'emit', function (event, ...args) {
@@ -76,22 +76,26 @@ test('lobby HTTP remains byte-for-byte, bounded and restricted to its configured
   assert.throws(() => createGateway({ ...options, lobby: 'https://user:password@lobby.example' }), /HTTPS/);
   const body = '{ "request_id": "7", "payload": {"text":"中文"} }';
   const response = await fetch(`${base}/v1/commands?after=2`, {
-    method: 'POST', headers: { origin, authorization: 'Bearer test-token', cookie: 'must-not-forward=1' }, body,
+    method: 'POST', headers: { origin, authorization: 'Bearer test-token', 'vera-build': '0.3.6:ab:0000',
+      cookie: 'must-not-forward=1' }, body,
   });
   assert.equal(response.status, 409);
   assert.equal(response.headers.get('access-control-allow-origin'), origin);
   assert.equal(await response.text(), '{"error":{"code":"map_pending"}}');
   // Without the lobby key the gateway names no client address.
   assert.deepEqual(requests[0], { path: '/v1/commands?after=2', method: 'POST', auth: 'Bearer test-token',
-    cookie: undefined, address: undefined, key: undefined, body: Buffer.from(body) });
-  const preflight = await fetch(`${base}/v1/commands`, { method: 'OPTIONS', headers: {
-    origin, 'access-control-request-method': 'POST', 'access-control-request-headers': 'Authorization, Content-Type',
+    build: '0.3.6:ab:0000', cookie: undefined, address: undefined, key: undefined, body: Buffer.from(body) });
+  // What a browser game's sign-in sends (sign_in_headers in the game).
+  const signIn = 'Content-Type, Vera-Version, Vera-Build, Vera-Quick-Match, Vera-Host-Handover, Vera-Watch-AI, Vera-Language';
+  const preflight = await fetch(`${base}/v1/sessions`, { method: 'OPTIONS', headers: {
+    origin, 'access-control-request-method': 'POST', 'access-control-request-headers': signIn,
   } });
   assert.equal(preflight.status, 204);
-  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Authorization, Content-Type');
+  assert.match(preflight.headers.get('access-control-allow-headers'), /^authorization, content-type, vera-version/);
   assert.equal((await fetch(`${base}/v1/events`, { headers: { origin: 'https://foreign.example' } })).status, 403);
+  // The lobby trusts this header only from the gateway itself.
   assert.equal((await fetch(`${base}/v1/events`, { method: 'OPTIONS', headers: {
-    origin, 'access-control-request-method': 'POST', 'access-control-request-headers': 'x-target-host',
+    origin, 'access-control-request-method': 'POST', 'access-control-request-headers': 'vera-client-address',
   } })).status, 403);
   assert.equal((await fetch(`${base}/v1/commands`, { method: 'POST', body: Buffer.alloc(LIMITS.requestBytes + 1) })).status, 413);
   assert.equal(requests.length, 1);
@@ -249,6 +253,31 @@ test('one network holds at most a tenth of the game sockets and of the lobby exc
 test('without a client address header, loopback peers are a local proxy or test and are not capped', { timeout: 10000 }, async t => {
   const { socket } = await fixture(t);
   for (let i = 0; i <= LIMITS.networkConnections; i++) await socket();
+});
+
+test('each listed web origin is answered under its own name; others stay refused', { timeout: 10000 }, async t => {
+  const second = 'https://second.example';
+  const { relay, base, options } = await fixture(t, { origins: [origin, second], lanSignal: { iceServers: [] } });
+  assert.throws(() => createGateway({ ...options, origins: [] }), /VERA_WEB_ORIGIN/);
+  assert.throws(() => createGateway({ ...options, origins: [origin, 'second.example'] }), /VERA_WEB_ORIGIN: "second.example"/);
+  assert.deepEqual(gatewayOptionsFromEnv({ VERA_WEB_ORIGIN: `${origin}, ${second}` }).origins, [origin, second]);
+  for (const site of [origin, second]) {
+    const response = await fetch(`${base}/v1/events`, { headers: { origin: site } });
+    assert.equal(response.headers.get('access-control-allow-origin'), site);
+    const preflight = await fetch(`${base}/v1/sessions`, { method: 'OPTIONS', headers: {
+      origin: site, 'access-control-request-method': 'POST', 'access-control-request-headers': 'vera-build',
+    } });
+    assert.equal(preflight.status, 204);
+    assert.equal(preflight.headers.get('access-control-allow-origin'), site);
+    for (const path of [`/game/primary/${relay}`, '/lan/signal']) {
+      const ws = new WebSocket(`${base.replace('http:', 'ws:')}${path}`, { origin: site });
+      t.after(() => ws.terminate());
+      await once(ws, 'open');
+    }
+  }
+  const foreign = { origin: 'https://foreign.example' };
+  assert.equal((await fetch(`${base}/v1/events`, { headers: foreign })).status, 403);
+  await once(new WebSocket(`${base.replace('http:', 'ws:')}/lan/signal`, foreign), 'error');
 });
 
 test('WS rejects foreign origins, text and oversized messages', { timeout: 10000 }, async t => {

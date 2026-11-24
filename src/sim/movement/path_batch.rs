@@ -177,7 +177,6 @@ use super::movement_tick::FootPathRequest;
 use crate::map::entities::EntityCategory;
 use crate::map::resolved_terrain::ResolvedTerrainGrid;
 use crate::rules::locomotor_type::{LocomotorKind, MovementZone, SpeedType};
-use crate::rules::overlay_types::OverlayTypeRegistry;
 use crate::rules::ruleset::RuleSet;
 use crate::sim::combat::TargetKind;
 use crate::sim::components::{DriveCoord, NavTargetRef};
@@ -525,7 +524,7 @@ struct ReadySlot {
 #[derive(Clone, Debug, PartialEq)]
 struct BatchedSearch {
     key: FootSearchKey,
-    found: Result<Vec<(u16, u16)>, MovePathFailure>,
+    found: Result<Vec<i32>, MovePathFailure>,
 }
 
 /// What a core search reads from its request and its mover besides the
@@ -563,7 +562,7 @@ struct FootSearchKey {
 pub(super) fn code2_ladder_destination(actor: &GameEntity) -> Option<DriveCoord> {
     let loco = actor.locomotor.as_ref()?;
     match loco.active_kind() {
-        LocomotorKind::Walk => Some(
+        LocomotorKind::Walk | LocomotorKind::Mech => Some(
             loco.walk_destination()
                 .unwrap_or(super::foot_coordinate::NULL_COORD),
         ),
@@ -579,7 +578,7 @@ pub(super) fn code2_ladder_destination(actor: &GameEntity) -> Option<DriveCoord>
 fn no_queue_destination(actor: &GameEntity) -> Option<DriveCoord> {
     let loco = actor.locomotor.as_ref()?;
     match loco.active_kind() {
-        LocomotorKind::Walk => loco.walk_destination(),
+        LocomotorKind::Walk | LocomotorKind::Mech => loco.walk_destination(),
         LocomotorKind::Drive | LocomotorKind::Ship => super::track_path::track_destination(actor),
         _ => None,
     }
@@ -692,7 +691,13 @@ impl Simulation {
         &mut self,
         request: &FootPathRequest,
         goal: DriveCoord,
-    ) -> Option<Result<Vec<(u16, u16)>, MovePathFailure>> {
+        rules: &RuleSet,
+    ) -> Option<Result<Vec<i32>, MovePathFailure>> {
+        // Only ordinary zero-prefix requests register with the batch. A
+        // train extending its last queued step has a different search origin.
+        if request.retain_head {
+            return None;
+        }
         let id = request.entity_id;
         if !self
             .path_batch
@@ -703,7 +708,7 @@ impl Simulation {
         {
             return None;
         }
-        let key = self.foot_search_key(request, goal)?;
+        let key = self.foot_search_key(request, goal, rules)?;
         let batch = self.path_batch.as_mut()?;
         let slot = batch.ready.get_mut(&id)?;
         if slot.answer.as_ref()?.key != key {
@@ -721,23 +726,14 @@ impl Simulation {
     /// last frame, at most [`SEARCHES_PER_PASS`] of them besides their code-2
     /// re-paths, which take a turn per urgency within
     /// [`REPATH_STEPS_PER_PASS`] each.
-    pub(crate) fn answer_batched_path_searches(
-        &mut self,
-        rules: &RuleSet,
-        registry: Option<&OverlayTypeRegistry>,
-    ) {
+    pub(crate) fn answer_batched_path_searches(&mut self, rules: &RuleSet) {
         let _area = crate::sim::frame_profile::area(crate::sim::frame_profile::phase::PATHFINDING);
-        self.answer_path_searches_within(rules, registry, REPATH_STEPS_PER_PASS);
+        self.answer_path_searches_within(rules, REPATH_STEPS_PER_PASS);
     }
 
     /// [`Self::answer_batched_path_searches`] with a budget of
     /// `repath_steps` expansions, at least 1, for each re-path turn.
-    fn answer_path_searches_within(
-        &mut self,
-        rules: &RuleSet,
-        registry: Option<&OverlayTypeRegistry>,
-        repath_steps: u64,
-    ) {
+    fn answer_path_searches_within(&mut self, rules: &RuleSet, repath_steps: u64) {
         let Some(batch) = self.path_batch.as_mut() else {
             return;
         };
@@ -794,7 +790,7 @@ impl Simulation {
         let searched = turn.len();
         let (turns, expanded, repaths_made) = match self.path_grid_snapshot() {
             Some(grid) if self.overlay_grid.is_some() && self.resolved_terrain.is_some() => {
-                self.search_batch(&turn, repaths, repath_steps, rules, registry, &grid)
+                self.search_batch(&turn, repaths, repath_steps, rules, &grid)
             }
             _ => (Vec::new(), 0, [0; 2]),
         };
@@ -899,7 +895,6 @@ impl Simulation {
         repaths: [usize; 2],
         repath_steps: u64,
         rules: &RuleSet,
-        registry: Option<&OverlayTypeRegistry>,
         grid: &PathGrid,
     ) -> (Vec<Turn>, u64, [u64; 2]) {
         // One blocker plane for every search. With an overlay grid movers
@@ -955,7 +950,6 @@ impl Simulation {
                         id,
                         request,
                         rules,
-                        registry,
                         grid,
                         counts,
                         Some(facts),
@@ -1030,7 +1024,6 @@ impl Simulation {
         id: u64,
         request: WaitingRequest,
         rules: &RuleSet,
-        registry: Option<&OverlayTypeRegistry>,
         grid: &PathGrid,
         counts: &BlockerNeighborCounts,
         facts: Option<&EntryFacts>,
@@ -1043,9 +1036,7 @@ impl Simulation {
             | WaitingRequest::StraightReentry { .. } => self.no_queue_request(id)?,
         };
         let goal = request.destination;
-        let answer = self
-            .find_path_target_answer(id, goal, rules, registry)
-            .ok()??;
+        let answer = self.find_path_target_answer(id, goal, rules).ok()??;
         if self
             .find_path_redirect(id, goal, answer, rules)
             .ok()?
@@ -1057,7 +1048,6 @@ impl Simulation {
             &request,
             goal,
             rules,
-            registry,
             grid,
             counts,
             MoverLift::Emulated,
@@ -1076,7 +1066,7 @@ impl Simulation {
             return None;
         }
         Some(BatchedSearch {
-            key: self.foot_search_key(&request, goal)?,
+            key: self.foot_search_key(&request, goal, rules)?,
             found,
         })
     }
@@ -1118,6 +1108,7 @@ impl Simulation {
         &self,
         request: &FootPathRequest,
         goal: DriveCoord,
+        rules: &RuleSet,
     ) -> Option<FootSearchKey> {
         let actor = self.substrate.entities.get(request.entity_id)?;
         let snap = request.snapshot();
@@ -1139,8 +1130,11 @@ impl Simulation {
             speed_type: snap.speed_type,
             movement_zone: snap.movement_zone,
             crushers: (snap.regular_crusher, snap.omni_crusher),
-            locomotor: snap.locomotor.as_ref().map(|loco| loco.active_kind()),
-            allow_zone_hierarchy: self.foot_search_allows_hierarchy(request),
+            locomotor: snap.locomotor_kind,
+            allow_zone_hierarchy: self.foot_search_allows_hierarchy(
+                request,
+                self.interner.object_type(actor.type_ref(), rules)?.is_train,
+            ),
             threat_coefficient: self.foot_path_threat_coefficient(request.entity_id).bits(),
             owner: actor.owner(),
             veterancy: actor.veterancy.rank(),
@@ -1148,7 +1142,7 @@ impl Simulation {
             mission: actor.mission.current(),
             nav_com: actor.navigation.nav_com(),
             attack_target: actor.attack_target.target(),
-            radio_contacts: actor.radio_contacts.clone(),
+            radio_contacts: actor.seldom.radio_contacts.clone(),
         })
     }
 }

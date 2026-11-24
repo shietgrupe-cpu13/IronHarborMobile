@@ -26,8 +26,10 @@
 //! lobby as Quit does, and the pair goes on through Use Saved Campaign.
 
 use crate::app::frontend::skirmish_session::cooperative::CooperativeMissionRow;
-use crate::app::match_runtime::session::{CooperativeRoundEvent, CooperativeRoundStep};
-use crate::app::shell_network_setup::CooperativeResume;
+use crate::app::match_runtime::network_match::participant_name;
+use crate::app::match_runtime::session::{
+    CooperativeRoundEvent, CooperativeRoundStep, MatchSession, SessionMode,
+};
 use crate::app::{App, AppState, GameScreen};
 use crate::ui::coop_score_shell::{CoopScoreAction, CoopScoreModel, CoopScorePage};
 use crate::ui::lan_shell::LanChatLine;
@@ -35,13 +37,25 @@ use crate::ui::lan_shell::LanChatLine;
 /// A network Cooperative match: the router calls the mode's `+0xA0`
 /// before GameExit (`0x0055D0C5..0x0055D0E2`, GameMode 3 or 4).
 pub(crate) fn applies(state: &AppState) -> bool {
-    state.match_state.session_mode().is_network()
-        && state
+    runs_cooperative_progress(
+        &state.match_state.session,
+        state.match_state.session_mode(),
+        state
             .match_state
             .sim_runtime
             .runtime()
-            .and_then(|runtime| runtime.simulation.session().multiplayer_mode_class())
-            == Some(crate::skirmish_modes::MpModeClass::Cooperative)
+            .and_then(|runtime| runtime.simulation.session().multiplayer_mode_class()),
+    )
+}
+
+fn runs_cooperative_progress(
+    session: &MatchSession,
+    mode: SessionMode,
+    class: Option<crate::skirmish_modes::MpModeClass>,
+) -> bool {
+    !session.local_connection_watches()
+        && mode.is_network()
+        && class == Some(crate::skirmish_modes::MpModeClass::Cooperative)
 }
 
 /// Cooperative `+0xA0` (`0x005C3710`) at the terminal edge, with the
@@ -167,11 +181,12 @@ pub(crate) fn open_result(state: &mut AppState, victory: bool) {
                 .map(|runtime| runtime.simulation.save_campaign_carry_over())
         })
         .flatten();
+    let next_scenario = state.frontend.multiplayer_shell_runtime.scenario_index();
     let next_map = state
         .frontend
         .scenario_catalog
         .records()
-        .get(state.frontend.multiplayer_shell_runtime.scenario_index())
+        .get(next_scenario)
         .map(|record| record.file_name.clone());
     let rows = model.rows.len();
     let campaign_end = victory
@@ -179,14 +194,15 @@ pub(crate) fn open_result(state: &mut AppState, victory: bool) {
         .flatten();
     // BC6 keeps the match's route; the shared teardown then finds no match
     // transport to return.
-    crate::app::lan_service::cooperative::hold_transport(state);
+    crate::app::lan_service::hold_transport_for_continuation(state);
     App::retire_finished_scenario(state);
-    if let Err(error) =
-        state
-            .match_state
-            .session
-            .enter_cooperative_round(next_map, can_continue, rows)
-    {
+    if let Err(error) = state.match_state.session.enter_cooperative_round(
+        next_map,
+        can_continue,
+        rows,
+        next_scenario,
+        saved,
+    ) {
         log::error!("Could not open the co-op result dialog: {error:#}");
         return_to_shell(state);
         return;
@@ -209,7 +225,6 @@ pub(crate) fn open_result(state: &mut AppState, victory: bool) {
         model,
         ui: Default::default(),
         victory,
-        saved,
         campaign_end,
     });
     state.frontend.screen = GameScreen::MissionResult {
@@ -219,7 +234,7 @@ pub(crate) fn open_result(state: &mut AppState, victory: bool) {
     state
         .frontend
         .shell_controller
-        .reset_to(crate::ui::coop_score_shell::COOP_SCORE_DIALOG, false);
+        .reset_to(crate::ui::coop_score_shell::COOP_SCORE_DIALOG);
 }
 
 /// The tail `0x0046EE17`'s texts: rows sorted by score (`0x0046DC90`), the
@@ -227,9 +242,8 @@ pub(crate) fn open_result(state: &mut AppState, victory: bool) {
 /// mission and map names (`A8B322`, the scenario `+0xA0` selected), the
 /// game type and `NAME:COOPDESC<campaign+1><map+1>`.
 fn build_model(state: &AppState, can_continue: bool, elapsed: i32) -> Option<CoopScoreModel> {
-    use crate::app::frontend::shell_pass::resolve_csf;
     let sim = &state.match_state.sim_runtime.runtime()?.simulation;
-    let computer = resolve_csf(state, "TXT_COMPUTER");
+    let computer = state.csf_text("TXT_COMPUTER");
     let sources = crate::app::presentation::house_ui::HouseUiSources::from_state(state, &computer);
     let mut rows: Vec<_> = sim
         .cooperative_score_rows()
@@ -252,7 +266,7 @@ fn build_model(state: &AppState, can_continue: bool, elapsed: i32) -> Option<Coo
     };
     let time = crate::ui::score_shell::format_elapsed(
         &time_model,
-        &resolve_csf(state, "TXT_TIME_FORMAT_HOURS"),
+        &state.csf_text("TXT_TIME_FORMAT_HOURS"),
     );
     let side = crate::app::input::commands::preferred_local_owner_name(state)
         .as_deref()
@@ -286,18 +300,14 @@ fn build_model(state: &AppState, can_continue: bool, elapsed: i32) -> Option<Coo
         .cooperative_setup_view()
         .description
         .map(|(campaign, stage)| {
-            resolve_csf(
-                state,
-                &format!("NAME:COOPDESC{}{}", campaign + 1, stage + 1),
-            )
-            .into_owned()
+            state.csf_text(&format!("NAME:COOPDESC{}{}", campaign + 1, stage + 1))
         })
         .unwrap_or_default();
     Some(CoopScoreModel {
         rows,
         time,
         next_mission: map_name.clone(),
-        mode_label: resolve_csf(state, &mode_key).into_owned(),
+        mode_label: state.csf_text(&mode_key),
         map_label: map_name,
         description,
         side,
@@ -319,10 +329,9 @@ fn build_campaign_end(
     state: &AppState,
     side: i32,
 ) -> Option<crate::ui::campaign_score_shell::CampaignEndModel> {
-    use crate::app::frontend::shell_pass::resolve_csf;
     use crate::assets::csf_file::{CsfArg, format_csf};
     let sim = &state.match_state.sim_runtime.runtime()?.simulation;
-    let computer = resolve_csf(state, "TXT_COMPUTER");
+    let computer = state.csf_text("TXT_COMPUTER");
     let sources = crate::app::presentation::house_ui::HouseUiSources::from_state(state, &computer);
     let houses: Vec<_> = sim
         .cooperative_score_rows()
@@ -373,12 +382,11 @@ fn build_campaign_end(
             elapsed_seconds: (time / 60) as u32,
             ..Default::default()
         },
-        &resolve_csf(state, "TXT_TIME_FORMAT_HOURS"),
+        &state.csf_text("TXT_TIME_FORMAT_HOURS"),
     );
     let difficulty = match runtime.cooperative_difficulty() {
         level @ 0..=2 => {
-            let level = resolve_csf(
-                state,
+            let level = state.csf_text(
                 [
                     "TXT_DIFFICULTY_EASY",
                     "TXT_DIFFICULTY_MEDIUM",
@@ -386,22 +394,22 @@ fn build_campaign_end(
                 ][level as usize],
             );
             format_csf(
-                &resolve_csf(state, "GUI:DifficultyString"),
+                &state.csf_text("GUI:DifficultyString"),
                 &[CsfArg::Str(&level)],
             )
         }
-        _ => resolve_csf(state, "GUI:Blank").into_owned(),
+        _ => state.csf_text("GUI:Blank"),
     };
     let campaign_name = usize::try_from(campaign)
         .ok()
         .and_then(|campaign| runtime.cooperative_campaign_name(campaign))
-        .map(|key| App::csf_label(state, key, key))
+        .map(|key| state.csf_label(key, key))
         .unwrap_or_default();
     Some(crate::ui::campaign_score_shell::CampaignEndModel {
         side,
         campaign_name,
         campaign_number: format_csf(
-            &resolve_csf(state, "GUI:CampaignLabel"),
+            &state.csf_text("GUI:CampaignLabel"),
             &[CsfArg::Int(i64::from(campaign) + 1)],
         ),
         difficulty,
@@ -455,9 +463,9 @@ pub(crate) fn view(state: &AppState) -> Option<CoopScoreView> {
             (
                 crate::ui::multiplayer_setup::SetupChoice {
                     value: -2,
-                    text: crate::app::frontend::shell_pass::resolve_csf(state, "GUI:Random")
-                        .into_owned(),
+                    text: state.csf_text("GUI:Random"),
                     swatch: None,
+                    greyed: false,
                 },
                 -2,
             )
@@ -512,7 +520,7 @@ pub(crate) fn view(state: &AppState) -> Option<CoopScoreView> {
 /// A BC6 control's intent.
 pub(crate) fn apply_action(state: &mut AppState, action: CoopScoreAction) {
     let result = match action {
-        CoopScoreAction::Continue => continue_pressed(state),
+        CoopScoreAction::Continue => state.match_state.session.continue_cooperative_round(),
         // 0x0046E28C: 0x24 to every node, result 0.
         CoopScoreAction::Quit => state
             .match_state
@@ -531,33 +539,11 @@ pub(crate) fn apply_action(state: &mut AppState, action: CoopScoreAction) {
     state.platform.window.request_redraw();
 }
 
-fn continue_pressed(state: &mut AppState) -> anyhow::Result<CooperativeRoundStep> {
-    anyhow::ensure!(
-        state
-            .match_state
-            .session
-            .cooperative_round_continue_enabled(),
-        "Continue is disabled"
-    );
-    let difficulty = state
-        .frontend
-        .multiplayer_shell_runtime
-        .cooperative_difficulty();
-    state
-        .match_state
-        .session
-        .continue_cooperative_round(difficulty)
-}
-
 /// One decoded BC6 packet from a peer.
 pub(crate) fn service_event(
     state: &mut AppState,
     event: CooperativeRoundEvent,
 ) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        state.frontend.coop_score_page.is_some(),
-        "no co-op result dialog"
-    );
     let difficulty = state
         .frontend
         .multiplayer_shell_runtime
@@ -571,18 +557,26 @@ pub(crate) fn service_event(
     Ok(())
 }
 
+pub(crate) fn poll_start_deadline(state: &mut AppState, now: u32) {
+    let step = state.match_state.session.poll_cooperative_round_start(now);
+    run_step(state, step);
+}
+
 fn run_step(state: &mut AppState, step: CooperativeRoundStep) {
     match step {
         CooperativeRoundStep::None => {}
         CooperativeRoundStep::Assign => {
             // Native cannot fail here. A refused assignment has sent no
             // begin; leaving with `0x24` returns every peer's Quit.
-            if let Err(error) = assign(state) {
-                log::error!("co-op round assignment failed: {error:#}");
-                if let Err(error) = state.match_state.session.quit_cooperative_round() {
-                    log::warn!("co-op round quit refused: {error:#}");
+            match assign(state) {
+                Ok(next) => run_step(state, next),
+                Err(error) => {
+                    log::error!("co-op round assignment failed: {error:#}");
+                    if let Err(error) = state.match_state.session.quit_cooperative_round() {
+                        log::warn!("co-op round quit refused: {error:#}");
+                    }
+                    finish(state);
                 }
-                finish(state);
             }
         }
         CooperativeRoundStep::OptionsApplied { difficulty, .. } => state
@@ -591,8 +585,8 @@ fn run_step(state: &mut AppState, step: CooperativeRoundStep) {
             .set_cooperative_difficulty(difficulty),
         CooperativeRoundStep::PeerLeft { source } => {
             // 0x005E2700(-1, GUI:PlayerLeftCoop, name).
-            let name = participant_name(state, source);
-            let format = crate::app::frontend::shell_pass::resolve_csf(state, "GUI:PlayerLeftCoop");
+            let name = participant_name(&state.match_state.session, source);
+            let format = state.csf_text("GUI:PlayerLeftCoop");
             let text = crate::assets::csf_file::format_csf(
                 &format,
                 &[crate::assets::csf_file::CsfArg::Str(&name)],
@@ -604,40 +598,30 @@ fn run_step(state: &mut AppState, step: CooperativeRoundStep) {
             text,
             color,
         } => {
-            let name = participant_name(state, source);
+            let name = participant_name(&state.match_state.session, source);
             append_line(state, format!("{name}: {text}"), color);
         }
         CooperativeRoundStep::Exit(true) => begin_next_mission(state),
         CooperativeRoundStep::Exit(false) => finish(state),
-        CooperativeRoundStep::ContinueInRoom => {
-            // The room the host gets back takes the round's mode and the
-            // stage `+0xA0` selected, the mission BC6 would have loaded.
-            let resume =
-                state
-                    .match_state
-                    .session
-                    .network_setup()
-                    .map(|launch| CooperativeResume {
-                        mode_id: launch.mode.id,
-                        scenario: state.frontend.multiplayer_shell_runtime.scenario_index(),
-                    });
-            if let Some(visit) = state
-                .frontend
-                .wol
-                .as_mut()
-                .filter(|visit| visit.back_to_room)
-            {
-                visit.cooperative_resume = resume;
-            }
+        CooperativeRoundStep::TimedOut => {
             finish(state);
+            let text = state.csf_text("TXT_SYSTEM_NOT_RESPONDING");
+            crate::app::shell_lan::append_chat(
+                state,
+                crate::ui::lan_shell::LanChatLine {
+                    text: text.encode_utf16().collect(),
+                    color: u32::MAX,
+                },
+            );
         }
+        CooperativeRoundStep::ContinueInRoom => finish(state),
     }
 }
 
 /// The master's all-ready (`0x0046FD47`): mode `+0x68` and
 /// `SessionClass::ProcessRandomAssignments` (`0x0069B8C0`) on the gameplay
 /// Scenario stream the match returned, then its own ack and `0x32`.
-fn assign(state: &mut AppState) -> anyhow::Result<()> {
+fn assign(state: &mut AppState) -> anyhow::Result<CooperativeRoundStep> {
     let launch = state
         .match_state
         .session
@@ -684,10 +668,10 @@ fn assign(state: &mut AppState) -> anyhow::Result<()> {
         .frontend
         .multiplayer_shell_runtime
         .cooperative_difficulty();
-    state
-        .match_state
-        .session
-        .cooperative_round_assigned(difficulty)
+    state.match_state.session.cooperative_round_assigned(
+        difficulty,
+        crate::app::match_runtime::frame_pacer::wall_clock_bucket(),
+    )
 }
 
 /// Result 1: `+0xAC` keeps the agreed seed and takes the continuation
@@ -699,9 +683,7 @@ fn assign(state: &mut AppState) -> anyhow::Result<()> {
 /// PreMapSelect after a victory, Lose after a defeat, then Intro/Brief and
 /// Action on a victory) have no owner. No retail co-op map sets them.
 fn begin_next_mission(state: &mut AppState) {
-    let Some(page) = state.frontend.coop_score_page.take() else {
-        return;
-    };
+    state.frontend.coop_score_page = None;
     let game_speed = state
         .match_state
         .session
@@ -714,7 +696,7 @@ fn begin_next_mission(state: &mut AppState) {
     match state
         .match_state
         .session
-        .freeze_cooperative_round(max_ahead, latency_fudge, page.saved)
+        .freeze_cooperative_round(max_ahead, latency_fudge)
     {
         Ok(startup) => crate::app::loading::pump::begin_loading(
             state,
@@ -806,16 +788,6 @@ fn send_chat(state: &mut AppState, text: Vec<u16>) {
     state.match_state.session.request_chat(recipients, text);
 }
 
-fn participant_name(state: &AppState, source: usize) -> String {
-    state
-        .match_state
-        .session
-        .network_setup()
-        .and_then(|launch| launch.humans.get(source))
-        .map(|human| human.name.clone())
-        .unwrap_or_default()
-}
-
 /// `0x005E2700` with a `COLORREF` (-1 the list's default) into BC6's list
 /// `0x53F`.
 fn append_line(state: &mut AppState, text: String, color: u32) {
@@ -828,18 +800,49 @@ fn append_line(state: &mut AppState, text: String, color: u32) {
     let Some(page) = state.frontend.coop_score_page.as_mut() else {
         return;
     };
-    let chat = &mut page.ui.chat;
-    let visible = chat
-        .list
-        .geometry(rect, chat.lines.len(), scale)
-        .visible_rows;
-    chat.append_message(
+    let controller = &mut state.frontend.shell_controller;
+    let dialog = crate::ui::coop_score_shell::COOP_SCORE_DIALOG;
+    let list = controller.control(dialog, crate::ui::coop_score_shell::CHAT_LOG);
+    // The log's list keeps the view, following new lines at the bottom.
+    page.ui.chat.append_message(
         LanChatLine {
             text: text.encode_utf16().collect(),
             color,
         },
         scale.base_rect(rect).w,
-        visible,
         |units| font.text_width(&String::from_utf16_lossy(units)) as i32,
+        crate::ui::lan_shell::log_to(controller.gui_mut(), list),
     );
+}
+
+#[cfg(all(test, tests_app))]
+mod tests {
+    use super::*;
+    use crate::app::match_runtime::session::NetworkReturnContext;
+    use crate::skirmish_modes::MpModeClass;
+    use std::net::{Ipv4Addr, SocketAddrV4};
+
+    #[test]
+    fn cooperative_result_progress_only_runs_for_a_playing_connection() {
+        let mut session = MatchSession::default();
+        session.enter_network(NetworkReturnContext::Wol);
+        session
+            .accept_network_setup(
+                crate::headless_scenario::battle_session("test.map", &[]),
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+        let class = Some(MpModeClass::Cooperative);
+        assert!(runs_cooperative_progress(&session, SessionMode::Wol, class));
+        session
+            .admit_local_network_watcher(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 30_010))
+            .unwrap();
+        assert!(!runs_cooperative_progress(
+            &session,
+            SessionMode::Wol,
+            class
+        ));
+    }
 }

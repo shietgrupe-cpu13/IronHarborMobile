@@ -13,7 +13,6 @@
 //! the active Building update reaches the inline44010D body.
 
 use crate::map::entities::EntityCategory;
-use crate::rules::overlay_types::OverlayTypeRegistry;
 use crate::rules::ruleset::RuleSet;
 use crate::sim::combat::TargetKind;
 use crate::sim::intern::StringInterner;
@@ -193,8 +192,7 @@ impl Simulation {
         &mut self,
         id: u64,
         rules: &RuleSet,
-        registry: Option<&OverlayTypeRegistry>,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) -> bool {
         let Some(entity) = self.substrate.entities.get(id) else {
             return false;
@@ -247,13 +245,13 @@ impl Simulation {
                 id,
                 Some(TargetKind::Entity(building)),
                 rules,
-                registry,
                 effects,
             );
             self.substrate
                 .entities
                 .get_mut(id)
                 .unwrap()
+                .seldom
                 .tesla_charger
                 .active = true;
             let _ = self.mission_queue_exact(

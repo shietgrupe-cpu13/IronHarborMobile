@@ -92,7 +92,7 @@ fn ambient_events_poll_current_signed_scalar_and_include_equality() {
         sim.advance_triggers(
             crate::rules::ruleset::RuleSet::empty_for_test(),
             None,
-            FrameEffects::default(),
+            &mut FrameEffects::default(),
         );
         assert_eq!(
             sim.trigger_local_is_set_for_test(0),
@@ -124,10 +124,9 @@ fn saved_pending_ambient_event_fires_after_the_production_frame_fade() {
         .advance_app_frame(
             &[],
             &rules,
-            None,
             67,
             TickLane::Ordinary,
-            FrameEffects::default(),
+            &mut FrameEffects::default(),
         )
         .unwrap();
     assert!(first.tick.frame_committed);
@@ -151,10 +150,9 @@ fn saved_pending_ambient_event_fires_after_the_production_frame_fade() {
             .advance_app_frame(
                 &[],
                 &rules,
-                None,
                 67,
                 TickLane::Ordinary,
-                FrameEffects::default(),
+                &mut FrameEffects::default(),
             )
             .unwrap();
         assert!(frame.tick.frame_committed);

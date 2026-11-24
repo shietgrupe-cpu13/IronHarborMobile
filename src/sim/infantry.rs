@@ -300,7 +300,7 @@ impl crate::sim::world::Simulation {
         id: u64,
         rules: &crate::rules::ruleset::RuleSet,
         registry: Option<&crate::rules::overlay_types::OverlayTypeRegistry>,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) -> Result<bool, String> {
         let Some(actor) = self.substrate.entities.get(id) else {
             return Ok(false);
@@ -399,7 +399,7 @@ impl crate::sim::world::Simulation {
                         .houses
                         .get(&actor.owner())
                         .ok_or("Infantry fear requires its native House")?
-                        .is_controlled_by_human(self.session.game_mode_nonzero());
+                        .is_controlled_by_human(self.session.rule_policy());
                     //52018E..1BA: only a human owner tests these separate
                     // inputs. A movement order is not IsMoving+10.
                     let under_way = human
@@ -638,7 +638,7 @@ impl crate::sim::world::Simulation {
         id: u64,
         rules: &crate::rules::ruleset::RuleSet,
         registry: Option<&crate::rules::overlay_types::OverlayTypeRegistry>,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) -> Result<bool, String> {
         let Some(actor) = self.substrate.entities.get(id) else {
             return Ok(false);
@@ -702,12 +702,12 @@ impl crate::sim::world::Simulation {
         &mut self,
         id: u64,
         rules: &crate::rules::ruleset::RuleSet,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) {
         let Some(actor) = self.substrate.entities.get(id) else {
             return;
         };
-        if actor.selection.is_selected() || !self.house_is_human_player(actor.owner()) {
+        if actor.seldom.selection.is_selected() || !self.house_is_human_player(actor.owner()) {
             return;
         }
         let Some(comment) = self
@@ -720,7 +720,7 @@ impl crate::sim::world::Simulation {
             return;
         }
         let event = crate::sim::world::SimSoundEvent::voc_at_location(
-            comment.clone(),
+            rules.sound_name(comment),
             actor,
             self.resolved_terrain.as_ref(),
         );
@@ -749,7 +749,7 @@ pub(crate) fn tick_idle_actions(
         let Some(entity) = entities.get_mut(id) else {
             continue;
         };
-        if (entity.lifecycle.in_limbo() && !entity.passenger_role.in_open_transport())
+        if (entity.lifecycle.in_limbo() && !entity.passenger_role().in_open_transport())
             || !entity.is_active()
             || entity.ai_frozen()
         {
@@ -759,9 +759,9 @@ pub(crate) fn tick_idle_actions(
         let Some(obj) = rules.object(type_name) else {
             continue;
         };
-        let controlled_by_human = houses
-            .get(&entity.owner())
-            .is_some_and(|house| house.is_controlled_by_human(false));
+        let controlled_by_human = houses.get(&entity.owner()).is_some_and(|house| {
+            house.is_controlled_by_human(crate::rules::rule_policy::RulePolicy::stock_campaign())
+        });
         if let IdleTurn::Fidget(action) = select_idle_action(
             entity,
             obj,
@@ -994,7 +994,7 @@ mod tests {
             ),
         );
         sim.scenario_rng = SimRng::new(31);
-        sim.main_rng = SimRng::new(31).into();
+        sim.main_rng = SimRng::new(31);
         sim.mapgen_rng = SimRng::new(31);
         let owner = sim.interner.intern("FearOwner");
         let mut house = HouseState::new(
@@ -1118,8 +1118,13 @@ mod tests {
             .unwrap();
         let (mut sim, rules) = fear_fixture(row);
         assert!(
-            !sim.infantry_fear_turn(1, &rules, None, crate::sim::world::FrameEffects::default())
-                .unwrap()
+            !sim.infantry_fear_turn(
+                1,
+                &rules,
+                None,
+                &mut crate::sim::world::FrameEffects::default()
+            )
+            .unwrap()
         );
         assert_native_fear_state(&sim, row);
     }
@@ -1150,8 +1155,13 @@ mod tests {
                 );
             }
             let (changed, draws) = trace_draws(|| {
-                sim.infantry_fear_turn(1, &rules, None, crate::sim::world::FrameEffects::default())
-                    .unwrap()
+                sim.infantry_fear_turn(
+                    1,
+                    &rules,
+                    None,
+                    &mut crate::sim::world::FrameEffects::default(),
+                )
+                .unwrap()
             });
             assert!(!changed);
             assert!(
@@ -1183,8 +1193,13 @@ mod tests {
             let mut terrain = crate::map::resolved_terrain::test_retail_clear_grid(4, 4);
             terrain.cell_mut_for_test(0, 0).unwrap().land_type = land.as_index();
             sim.install_resolved_terrain_for_new_map(terrain);
-            sim.infantry_fear_turn(1, &rules, None, crate::sim::world::FrameEffects::default())
-                .unwrap();
+            sim.infantry_fear_turn(
+                1,
+                &rules,
+                None,
+                &mut crate::sim::world::FrameEffects::default(),
+            )
+            .unwrap();
             let infantry = sim.entities().get(1).unwrap().infantry.as_ref().unwrap();
             assert_eq!(infantry.is_prone, prone, "{land:?}");
         }
@@ -1201,8 +1216,13 @@ mod tests {
             .unwrap();
         let (mut sim, rules) = fear_fixture(row);
         assert!(
-            !sim.infantry_fear_turn(1, &rules, None, crate::sim::world::FrameEffects::default())
-                .unwrap()
+            !sim.infantry_fear_turn(
+                1,
+                &rules,
+                None,
+                &mut crate::sim::world::FrameEffects::default()
+            )
+            .unwrap()
         );
         assert_native_fear_state(&sim, row);
     }
@@ -1283,7 +1303,7 @@ mod tests {
                     1,
                     &rules,
                     None,
-                    crate::sim::world::FrameEffects::default()
+                    &mut crate::sim::world::FrameEffects::default()
                 )
                 .unwrap()
             );
@@ -1394,7 +1414,7 @@ mod tests {
                     civilian,
                     &rules,
                     None,
-                    crate::sim::world::FrameEffects::default(),
+                    &mut crate::sim::world::FrameEffects::default(),
                 )
                 .unwrap()
             });
@@ -1464,9 +1484,9 @@ mod tests {
                 crate::sim::mission::MissionTimer::armed(frame, 0);
             sim.scenario_rng = SimRng::new(scenario_seed);
             sim.sound_events.clear_for_test();
-            let before = sim.main_rng.snapshot_for_test();
+            let before = sim.main_rng.clone();
             assert!(
-                sim.infantry_idle_action(man, &rules, None, Default::default())
+                sim.infantry_idle_action(man, &rules, None, &mut Default::default())
                     .unwrap()
             );
             let comments: Vec<String> = sim
@@ -1474,7 +1494,7 @@ mod tests {
                 .iter()
                 .filter_map(|event| match event {
                     crate::sim::world::SimSoundEvent::VocAt { sound_id, .. } => {
-                        Some(sound_id.clone())
+                        Some(sound_id.name_in(&rules).to_string())
                     }
                     _ => None,
                 })
@@ -1631,7 +1651,7 @@ mod tests {
                     1,
                     &rules,
                     None,
-                    crate::sim::world::FrameEffects::default(),
+                    &mut crate::sim::world::FrameEffects::default(),
                 )
                 .unwrap()
             });

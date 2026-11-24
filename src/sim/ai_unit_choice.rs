@@ -245,7 +245,7 @@ fn harvester_choice(sim: &Simulation, rules: &RuleSet, owner: InternedId) -> Opt
             current_iq: house.current_iq(),
             iq_harvester: rules.general.iq_harvester,
             no_ore: house.harvester_no_ore(),
-            human: house.is_controlled_by_human(sim.session.game_mode_nonzero()),
+            human: house.is_controlled_by_human(sim.session.rule_policy()),
             tech_level: house.tech_level(),
         },
         rules.ares_form(),
@@ -481,7 +481,7 @@ fn is_recruitable(
             .team_for_member(entity.stable_id())
             .is_none()
         && crate::sim::mission::control::mission_recruitable(rules, entity.mission.effective())
-        && entity.base_defense_response.recruitable_a()
+        && entity.seldom.base_defense_response.recruitable_a()
 }
 
 /// The choice among `candidates` (`0x004FED6E..0x004FEECB`), with `draw` as

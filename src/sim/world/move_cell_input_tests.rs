@@ -126,8 +126,7 @@ fn ground_walk_order_preserves_native_human_deploy_refusal() {
         id,
         Some(crate::sim::components::NavTargetRef::cell(11, 10)),
         &rules,
-        None,
-        crate::sim::world::FrameEffects::default(),
+        &mut crate::sim::world::FrameEffects::default(),
     );
     let actor = sim.substrate.entities.get(id).unwrap();
     let walk = actor.locomotor.as_ref().unwrap();
@@ -177,6 +176,59 @@ fn retail_scene(type_name: &str) -> Option<(Simulation, RuleSet, InternedId, u64
     Some((sim, rules, owner, gi, id))
 }
 
+/// Foot ClickedAction 4D81A9..4D8231 orders Move beyond the opposite mouth.
+#[test]
+fn infantry_and_unit_click_through_a_tunnel_but_jumpjet_infantry_cannot() {
+    use crate::map::tube_facts::{TubeFact, TubeId};
+    use crate::rules::terrain_rules::LandType;
+    let Some((mut sim, rules, owner, gi, tank)) = retail_scene("MTNK") else {
+        return;
+    };
+    let rocket = sim
+        .spawn_object("JUMPJET", "Local", 6, 6, 0, &rules)
+        .unwrap();
+    let terrain = sim.resolved_terrain().unwrap();
+    let mut cells = terrain.cells().iter().cloned().collect::<Vec<_>>();
+    let mouths = [(7u16, 5u16), (11, 5)];
+    for (id, &(x, y)) in mouths.iter().enumerate() {
+        let cell = &mut cells[usize::from(y) * 16 + usize::from(x)];
+        cell.land_type = LandType::Tunnel.as_index();
+        cell.tube_index = Some(TubeId(id as u16));
+    }
+    sim.install_resolved_terrain_for_new_map(ResolvedTerrainGrid::from_cells_with_tubes(
+        16,
+        16,
+        cells,
+        vec![
+            TubeFact::explicit(mouths[0], mouths[1], 2, vec![2; 4]),
+            TubeFact::explicit(mouths[1], mouths[0], 6, vec![6; 4]),
+        ],
+    ));
+    for unit in [gi, tank] {
+        assert_eq!(
+            sim.cell_move_action(owner, unit, mouths[0], query(true, false), &rules)
+                .unwrap()
+                .native(),
+            0x23
+        );
+        assert_eq!(
+            sim.cell_click_destination(owner, unit, mouths[0], true, &rules)
+                .unwrap(),
+            Some((12, 5))
+        );
+        assert!(
+            !sim.cell_click_flashes_move(owner, unit, mouths[0], true, &rules)
+                .unwrap()
+        );
+    }
+    assert_eq!(
+        sim.cell_move_action(owner, rocket, mouths[0], query(true, false), &rules)
+            .unwrap()
+            .native(),
+        0
+    );
+}
+
 fn query(mouse_over: bool, shift: bool) -> CellActionQuery {
     CellActionQuery { mouse_over, shift }
 }
@@ -192,14 +244,14 @@ fn only_the_click_asks_can_enter_cell() {
         return;
     };
     let ask = |mouse_over, shift| {
-        sim.cell_move_action(owner, tank, (9, 5), query(mouse_over, shift), &rules, None)
+        sim.cell_move_action(owner, tank, (9, 5), query(mouse_over, shift), &rules)
             .unwrap()
     };
     assert_eq!(ask(true, false), MoveAction::Move);
     assert_eq!(ask(false, false), MoveAction::NoMove);
     assert_eq!(ask(false, true), MoveAction::Move);
     let goal = sim
-        .cell_click_destination(owner, tank, (9, 5), false, &rules, None)
+        .cell_click_destination(owner, tank, (9, 5), false, &rules)
         .unwrap()
         .unwrap();
     assert!(goal.0 < 8, "{goal:?}");
@@ -215,11 +267,11 @@ fn an_aircraft_click_keeps_a_river_cell() {
         return;
     };
     assert_eq!(
-        sim.cell_click_destination(owner, harrier, (9, 5), false, &rules, None),
+        sim.cell_click_destination(owner, harrier, (9, 5), false, &rules),
         Ok(Some((9, 5)))
     );
     let goal = sim
-        .cell_click_destination(owner, gi, (9, 5), false, &rules, None)
+        .cell_click_destination(owner, gi, (9, 5), false, &rules)
         .unwrap()
         .unwrap();
     assert!(goal.0 < 8, "{goal:?}");
@@ -258,11 +310,11 @@ fn a_teleporter_keeps_a_cell_it_can_enter() {
     };
     assert!(rules.object("CLEG").unwrap().teleporter);
     assert_eq!(
-        sim.cell_click_destination(owner, legionnaire, (11, 5), false, &rules, None),
+        sim.cell_click_destination(owner, legionnaire, (11, 5), false, &rules),
         Ok(Some((11, 5)))
     );
     let goal = sim
-        .cell_click_destination(owner, legionnaire, (10, 5), false, &rules, None)
+        .cell_click_destination(owner, legionnaire, (10, 5), false, &rules)
         .unwrap()
         .unwrap();
     assert!(goal.0 < 8, "{goal:?}");
@@ -292,18 +344,18 @@ fn shroud_bars_a_type_without_move_to_shroud() {
     assert!(!sim.fog.is_cell_revealed(owner, shrouded.0, shrouded.1));
     for mouse_over in [true, false] {
         let ask = |id| {
-            sim.cell_move_action(owner, id, shrouded, query(mouse_over, false), &rules, None)
+            sim.cell_move_action(owner, id, shrouded, query(mouse_over, false), &rules)
                 .unwrap()
         };
         assert_eq!(ask(legionnaire), MoveAction::NoMove);
         assert_eq!(ask(tank), MoveAction::Move);
     }
     assert_eq!(
-        sim.cell_click_destination(owner, legionnaire, shrouded, false, &rules, None),
+        sim.cell_click_destination(owner, legionnaire, shrouded, false, &rules),
         Ok(None)
     );
     assert!(
-        sim.cell_click_destination(owner, tank, shrouded, false, &rules, None)
+        sim.cell_click_destination(owner, tank, shrouded, false, &rules)
             .unwrap()
             .is_some()
     );
@@ -346,15 +398,8 @@ fn harvesters_answer_harvest_over_mapped_tiberium() {
     sim.fog = crate::sim::vision::FogState::new(16, 16);
     sim.fog.reveal_cells_for_owner(owner, all());
     let ask = |sim: &Simulation, id, cell, mouse_over| {
-        sim.cell_move_action(
-            owner,
-            id,
-            cell,
-            query(mouse_over, false),
-            &rules,
-            Some(&registry),
-        )
-        .unwrap()
+        sim.cell_move_action(owner, id, cell, query(mouse_over, false), &rules)
+            .unwrap()
     };
     for id in [war, chrono, slave] {
         assert_eq!(ask(&sim, id, open, false), MoveAction::Harvest);
@@ -364,11 +409,11 @@ fn harvesters_answer_harvest_over_mapped_tiberium() {
     assert_eq!(ask(&sim, war, taken, false), MoveAction::NoMove);
     assert_eq!(ask(&sim, war, taken, true), MoveAction::Harvest);
     assert_eq!(
-        sim.cell_click_destination(owner, war, open, false, &rules, Some(&registry)),
+        sim.cell_click_destination(owner, war, open, false, &rules),
         Ok(None)
     );
     assert_eq!(
-        sim.cell_click_flashes_move(owner, war, open, false, &rules, Some(&registry)),
+        sim.cell_click_flashes_move(owner, war, open, false, &rules),
         Ok(false)
     );
 

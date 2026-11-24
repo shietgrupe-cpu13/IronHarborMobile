@@ -45,6 +45,8 @@ pub struct ModePolicy {
     /// (`0x00653918..0x00653938`). Cooperative (`0x007EE27C`) overrides base
     /// `0x005C0E30`/`0x005C0E40` (false) with `0x005C4EE0`/`0x005C4EF0` (true).
     pub restates_mission_for_diplomacy: bool,
+    /// At launch, pair human Houses with humans and AI Houses with AI.
+    pub allies_starting_houses_by_role: bool,
     /// Whether VERA's network room seats players into numbered teams when
     /// alliances are allowed outside clan rooms.
     pub room_teams: bool,
@@ -59,6 +61,8 @@ pub struct ModePolicy {
     /// contenders are allied and a human survives, defeated human allies win
     /// too.
     pub shared_allied_victory: bool,
+    /// Whether VERA's mod additions apply to authored maps in this mode.
+    pub allows_mod_map_additions: bool,
 }
 
 impl MpModeClass {
@@ -80,10 +84,12 @@ impl MpModeClass {
                 setup_player_limit: None,
                 permits_all_allied: false,
                 restates_mission_for_diplomacy: false,
+                allies_starting_houses_by_role: false,
                 room_teams: true,
                 shared_start_positions: true,
                 skips_network_score_dialog: false,
                 shared_allied_victory: false,
+                allows_mod_map_additions: true,
             },
             Self::ManBattle | Self::Siege | Self::Unholy => ModePolicy {
                 lists_in_skirmish: false,
@@ -91,10 +97,12 @@ impl MpModeClass {
                 setup_player_limit: None,
                 permits_all_allied: false,
                 restates_mission_for_diplomacy: false,
+                allies_starting_houses_by_role: false,
                 room_teams: true,
                 shared_start_positions: true,
                 skips_network_score_dialog: false,
                 shared_allied_victory: false,
+                allows_mod_map_additions: true,
             },
             Self::Cooperative => ModePolicy {
                 lists_in_skirmish: false,
@@ -102,10 +110,12 @@ impl MpModeClass {
                 setup_player_limit: Some(2),
                 permits_all_allied: true,
                 restates_mission_for_diplomacy: true,
+                allies_starting_houses_by_role: true,
                 room_teams: false,
                 shared_start_positions: false,
                 skips_network_score_dialog: true,
                 shared_allied_victory: true,
+                allows_mod_map_additions: false,
             },
         }
     }
@@ -179,12 +189,16 @@ impl MpModeClass {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SkirmishModeLoadError {
-    #[error("MPModesMD.ini is missing from the configured retail archive stack")]
-    MissingRoster,
-    #[error("MPModesMD.ini from {archive} could not be parsed: {message}")]
-    InvalidRoster { archive: String, message: String },
-    #[error("MPModesMD.ini from {archive} did not contain any usable mode rows")]
-    EmptyRoster { archive: String },
+    #[error("{name} is missing from the configured archive stack")]
+    MissingRoster { name: String },
+    #[error("{name} from {archive} could not be parsed: {message}")]
+    InvalidRoster {
+        name: String,
+        archive: String,
+        message: String,
+    },
+    #[error("{name} from {archive} did not contain any usable mode rows")]
+    EmptyRoster { name: String, archive: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -302,18 +316,24 @@ pub fn parse_mpmodes_ini(ini: &IniFile) -> Vec<SkirmishGameMode> {
 pub fn skirmish_modes_from_assets(
     assets: &AssetManager,
 ) -> Result<Vec<SkirmishGameMode>, SkirmishModeLoadError> {
-    let roster_name = assets.ini_roots().modes();
-    let (data, source) = assets
-        .get_with_source(roster_name)
-        .ok_or(SkirmishModeLoadError::MissingRoster)?;
-    log::info!(
-        "Loading {} ({} bytes) from {}",
-        roster_name,
-        data.len(),
-        source
-    );
+    let name = assets.ini_roots().modes();
+    if assets.resolve_ref(name).is_none()
+        && assets
+            .client_install()
+            .is_some_and(|client| !client.maps.is_empty())
+    {
+        return skirmish_modes_from_selected_ini(assets, &IniFile::empty(), "client map catalog");
+    }
+    let (data, source) =
+        assets
+            .get_with_source(name)
+            .ok_or_else(|| SkirmishModeLoadError::MissingRoster {
+                name: name.to_owned(),
+            })?;
+    log::info!("Loading {} ({} bytes) from {}", name, data.len(), source);
     let roster_ini =
         IniFile::from_bytes(&data).map_err(|err| SkirmishModeLoadError::InvalidRoster {
+            name: name.to_owned(),
             archive: source.clone(),
             message: err.to_string(),
         })?;
@@ -328,7 +348,7 @@ pub fn skirmish_modes_from_selected_ini(
     roster_ini: &IniFile,
     source: &str,
 ) -> Result<Vec<SkirmishGameMode>, SkirmishModeLoadError> {
-    let modes = parse_mpmodes_ini_with_overrides(roster_ini, |name| {
+    let mut modes = parse_mpmodes_ini_with_overrides(roster_ini, |name| {
         let Some((data, override_source)) = assets.get_with_source(name) else {
             log::warn!(
                 "Skirmish MPMode override {name} is missing; using native constructor defaults"
@@ -350,9 +370,66 @@ pub fn skirmish_modes_from_selected_ini(
             })
             .ok()
     });
+    if let Some(client) = assets
+        .client_install()
+        .filter(|client| !client.maps.is_empty())
+    {
+        let mut next_id = modes.iter().map(|mode| mode.id).max().unwrap_or(0);
+        let mut client_modes = Vec::new();
+        for client_mode in &client.modes {
+            if !client.maps.iter().any(|map| {
+                map.game_modes
+                    .iter()
+                    .any(|name| name.eq_ignore_ascii_case(&client_mode.name))
+            }) {
+                continue;
+            }
+            let mut mode = if let Some(native) = modes
+                .iter()
+                .find(|mode| mode.map_filter.eq_ignore_ascii_case(&client_mode.name))
+            {
+                if !native.class.policy().lists_in_skirmish {
+                    continue;
+                }
+                native.clone()
+            } else {
+                let Some(id) = next_id.checked_add(1) else {
+                    break;
+                };
+                next_id = id;
+                SkirmishGameMode {
+                    class: MpModeClass::Battle,
+                    id,
+                    ui_name_key: client_mode.name.clone(),
+                    tooltip_key: String::new(),
+                    override_file: String::new(),
+                    map_filter: client_mode.name.clone(),
+                    random_maps_allowed: false,
+                    allies_allowed: true,
+                    must_ally: false,
+                    wonline_tournament_allowed: false,
+                    wonline_clan_tournament_allowed: false,
+                }
+            };
+            mode.random_maps_allowed = false;
+            if client_mode.map_code.is_some() {
+                mode.override_file = client_mode.override_key();
+                if let Ok(selected) =
+                    crate::rules::retail_sources::select_ini(assets, &mode.override_file)
+                {
+                    apply_common_override(&mut mode, &selected.ini);
+                }
+            }
+            client_modes.push(mode);
+        }
+        if !client_modes.is_empty() {
+            modes = client_modes;
+        }
+    }
 
     if modes.is_empty() {
         Err(SkirmishModeLoadError::EmptyRoster {
+            name: assets.ini_roots().modes().to_owned(),
             archive: source.to_owned(),
         })
     } else {
@@ -376,6 +453,19 @@ pub fn stock_skirmish_modes() -> Vec<SkirmishGameMode> {
             "[MultiplayerDialogSettings]\n{settings}"
         )))
     })
+}
+
+/// Default for generic process consumers that have no selected mode: prefer
+/// the loaded row at the usual id, then the first row the Skirmish menu admits.
+/// This never manufactures a stock mode for a custom catalog.
+pub fn default_skirmish_mode(modes: &[SkirmishGameMode]) -> Option<&SkirmishGameMode> {
+    mode_by_id(modes, crate::skirmish_launch::BATTLE_MODE_ID)
+        .filter(|mode| mode.class.policy().lists_in_skirmish)
+        .or_else(|| {
+            modes
+                .iter()
+                .find(|mode| mode.class.policy().lists_in_skirmish)
+        })
 }
 
 pub fn mode_by_id(modes: &[SkirmishGameMode], id: i32) -> Option<&SkirmishGameMode> {

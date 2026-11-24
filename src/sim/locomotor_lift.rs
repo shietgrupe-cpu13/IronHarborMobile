@@ -290,7 +290,6 @@ impl Simulation {
     /// strength 1 vs Size 1.5 refuses; strength 2 vs 1.5 accepts; equality
     /// and unordered comparisons refuse. The `ReadDouble` owner preserves
     /// Size, and this arm uses the shared masked x87 compare.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn locomotor_detonation(
         &mut self,
         owner: u64,
@@ -300,7 +299,7 @@ impl Simulation {
         jumpjet_override: &crate::rules::jumpjet_params::JumpjetOverride,
         rules: &RuleSet,
         registry: Option<&OverlayTypeRegistry>,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) {
         let Some(firer) = self.substrate.entities.get(owner) else {
             return;
@@ -390,7 +389,6 @@ impl Simulation {
     ///    (`0x00710386`) and, for a computer house that is not
     ///    `MultiplayPassive=` and a type that is not a gatherer, Hunt
     ///    (`0x007103D5`).
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn imbue_locomotor(
         &mut self,
         firer: u64,
@@ -399,7 +397,7 @@ impl Simulation {
         jumpjet_override: &crate::rules::jumpjet_params::JumpjetOverride,
         rules: &RuleSet,
         registry: Option<&OverlayTypeRegistry>,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) {
         if !self.substrate.entities.contains(target) {
             return;
@@ -407,7 +405,7 @@ impl Simulation {
         crate::sim::spawn_manager::kill_all_spawns_with_context(
             self,
             target,
-            UninitContext::new(rules, registry).with_effects(effects),
+            UninitContext::new(rules).with_effects(effects),
         );
         let naval_eater = self
             .substrate
@@ -535,20 +533,18 @@ impl Simulation {
             target,
             Some(NavTargetRef::object(firer)),
             rules,
-            registry,
             effects,
         ) {
             log::debug!("lifted {target} destination: {error:?}");
         }
-        if let Some(entity) = self.substrate.entities.get_mut(target) {
-            entity.selection.deselect();
-        }
+        // The target's Deselect (vt+0x150, `0x00710334`).
+        self.object_deselect(target);
         self.leave_team(target, false, rules, effects);
         let Some(entity) = self.substrate.entities.get_mut(target) else {
             return;
         };
         entity.lift.swap_active = true;
-        let building_contact = entity.radio_contacts.slot(0).is_some_and(|contact| {
+        let building_contact = entity.seldom.radio_contacts.slot(0).is_some_and(|contact| {
             self.substrate
                 .entities
                 .get(contact)
@@ -609,7 +605,7 @@ impl Simulation {
         clear_target: bool,
         rules: &RuleSet,
         registry: Option<&OverlayTypeRegistry>,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) {
         let Some(firer_entity) = self.substrate.entities.get(firer) else {
             return;
@@ -632,14 +628,11 @@ impl Simulation {
             Some(height) if height > 0 => {
                 if let Some(entity) = self.substrate.entities.get_mut(held) {
                     entity.crash.raise();
-                    entity.drop_credit.being_manipulated = true;
-                    entity.drop_credit.manipulated_by = Some(firer);
-                    entity.drop_credit.warped_by_house = Some(firer_house);
+                    entity.seldom.drop_credit.being_manipulated = true;
+                    entity.seldom.drop_credit.manipulated_by = Some(firer);
+                    entity.seldom.drop_credit.warped_by_house = Some(firer_house);
                 }
-                self.stun(
-                    held,
-                    UninitContext::new(rules, registry).with_effects(effects),
-                );
+                self.stun(held, UninitContext::new(rules).with_effects(effects));
                 self.assign_null_destination(held, rules, registry, effects);
             }
             Some(_) => {
@@ -655,7 +648,7 @@ impl Simulation {
             firer.lift.target = None;
         }
         if clear_target {
-            let _ = self.assign_target_represented(firer, None, rules, registry, effects);
+            let _ = self.assign_target_represented(firer, None, rules, effects);
         }
     }
 
@@ -677,17 +670,18 @@ impl Simulation {
         expired: u64,
         rules: &RuleSet,
         registry: Option<&OverlayTypeRegistry>,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) {
         let Some(entity) = self.substrate.entities.get(listener) else {
             return;
         };
         let holds = entity.lift.target() == Some(expired);
-        if entity.drop_credit.manipulated_by() == Some(expired) {
+        if entity.seldom.drop_credit.manipulated_by() == Some(expired) {
             self.substrate
                 .entities
                 .get_mut(listener)
                 .expect("same listener")
+                .seldom
                 .drop_credit
                 .manipulated_by = None;
         }
@@ -749,8 +743,8 @@ impl Simulation {
             return false;
         };
         match (
-            entity.drop_credit.manipulated_by(),
-            entity.drop_credit.warped_by_house(),
+            entity.seldom.drop_credit.manipulated_by(),
+            entity.seldom.drop_credit.warped_by_house(),
         ) {
             (Some(killer), _) => {
                 self.record_the_kill(
@@ -799,7 +793,7 @@ impl Simulation {
         id: u64,
         rules: &RuleSet,
         registry: Option<&OverlayTypeRegistry>,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) -> DroppedImpact {
         let Some(entity) = self.substrate.entities.get(id) else {
             return DroppedImpact::default();
@@ -834,7 +828,7 @@ impl Simulation {
                 bridge_state_changed: false,
             },
             Some(EntityCategory::Infantry) => {
-                self.dropped_crush(id, first, rules, registry, effects);
+                self.dropped_crush(id, first, rules, effects);
                 DroppedImpact::default()
             }
             _ => DroppedImpact {
@@ -852,8 +846,7 @@ impl Simulation {
         id: u64,
         first: CellObjectMember,
         rules: &RuleSet,
-        registry: Option<&OverlayTypeRegistry>,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) {
         let mut cursor = Some(first);
         while let Some(member) = cursor {
@@ -881,8 +874,8 @@ impl Simulation {
                     &mut self.sound_events,
                 );
             }
-            let context = UninitContext::new(rules, registry).with_effects(effects);
-            if !self.record_manipulated_kill(victim, id, context) {
+            let mut context = UninitContext::new(rules).with_effects(effects);
+            if !self.record_manipulated_kill(victim, id, context.reborrow()) {
                 self.record_the_kill(
                     victim,
                     KillSource::Techno(Some(id)),
@@ -896,7 +889,6 @@ impl Simulation {
                     reason: UninitReason::Crush,
                 },
                 rules,
-                registry,
                 effects,
             );
         }
@@ -911,14 +903,14 @@ impl Simulation {
         target: CellObjectMember,
         rules: &RuleSet,
         registry: Option<&OverlayTypeRegistry>,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) -> bool {
         let Some(owner) = self.substrate.entities.get(id) else {
             return false;
         };
-        let (attacker, house) = match owner.drop_credit.manipulated_by() {
+        let (attacker, house) = match owner.seldom.drop_credit.manipulated_by() {
             Some(magnetron) => (magnetron, None),
-            None => (id, owner.drop_credit.warped_by_house()),
+            None => (id, owner.seldom.drop_credit.warped_by_house()),
         };
         let warhead = self.interner.intern(&rules.bridge_warheads.crush_name);
         let receiver = match target {
@@ -975,7 +967,7 @@ impl Simulation {
         id: u64,
         rules: &RuleSet,
         registry: Option<&OverlayTypeRegistry>,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) {
         self.begin_living_ship_sinking(
             id,
@@ -987,13 +979,9 @@ impl Simulation {
             .substrate
             .entities
             .get(id)
-            .and_then(|entity| entity.drop_credit.manipulated_by());
+            .and_then(|entity| entity.seldom.drop_credit.manipulated_by());
         self.free_slaves(id, killer, None, rules, registry, effects);
-        self.record_manipulated_kill(
-            id,
-            id,
-            UninitContext::new(rules, registry).with_effects(effects),
-        );
+        self.record_manipulated_kill(id, id, UninitContext::new(rules).with_effects(effects));
     }
 }
 

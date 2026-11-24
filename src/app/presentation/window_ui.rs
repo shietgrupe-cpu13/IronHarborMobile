@@ -34,7 +34,8 @@ use crate::render::shell_text::{ScissorRect, TextRect};
 pub(crate) struct WindowUi {
     camera_buffer: wgpu::Buffer,
     camera: wgpu::BindGroup,
-    /// The in-match page's text, laid out for the window.
+    /// The in-match page's text, laid out for the window. A `RefCell`, like
+    /// `drawn`: the window passes record into it through `&RendererState`.
     page_texts: RefCell<Vec<(ScissorRect, Option<(wgpu::Buffer, u32)>)>>,
     /// This frame's draws but the cursor's.
     drawn: RefCell<Vec<WindowDraw>>,
@@ -95,7 +96,7 @@ impl WindowUi {
             world_height: 1.0,
             _pad: 0.0,
             native_z_origin_y: 0.0,
-            _native_z_pad: 0.0,
+            native_z_pan: 0.0,
         };
         gpu.queue
             .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera));

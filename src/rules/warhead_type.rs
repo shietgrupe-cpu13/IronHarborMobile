@@ -332,6 +332,9 @@ pub struct WarheadType {
     /// General Airburst child emission (`0x00469EBA..0x0046A28A`) is a
     /// separate later mechanism.
     pub debris_types: Vec<String>,
+    /// Derived: `debris_types` as the RuleSet that holds the warhead
+    /// resolved it (`RuleSet::resolve_handles`).
+    resolved_debris: crate::rules::ruleset::ResolvedDebris,
     /// Per-type debris count cap.
     ///
     /// gamemd-derived: `WarheadTypeClass::ReadINI` "DebrisMaximums" @
@@ -513,6 +516,20 @@ impl WarheadAttachEffectRules {
 }
 
 impl WarheadType {
+    /// `debris_types` as its RuleSet resolved it; reads go through
+    /// `RuleSet::warhead_debris_types`, which checks the resolving set.
+    pub(crate) fn resolved_debris(&self) -> &crate::rules::ruleset::ResolvedDebris {
+        &self.resolved_debris
+    }
+
+    /// Store `debris_types` resolved against the current `[VoxelAnims]`.
+    pub(crate) fn project_resolved_debris(
+        &mut self,
+        debris: crate::rules::ruleset::ResolvedDebris,
+    ) {
+        self.resolved_debris = debris;
+    }
+
     pub(crate) fn ares_rules(&self) -> Option<&crate::rules::ares_warhead::AresWarheadRules> {
         self.ares.as_ref()
     }
@@ -615,8 +632,12 @@ impl WarheadType {
         // (`0x0084439C`) and `MinDebris` (`0x00844390`). No stock `[Warheads]`
         // section mis-spells either — only `Smashing` and `TRexWH` author them
         // at all — so this changes nothing in retail and is right in principle.
-        let max_debris = section.read_int("MaxDebris", 0);
-        let min_debris = section.read_int("MinDebris", 0).max(0);
+        let max_debris = section
+            .read_int("MaxDebris", 0)
+            .min(crate::rules::object_type::DEBRIS_LIMIT);
+        let min_debris = section
+            .read_int("MinDebris", 0)
+            .clamp(0, crate::rules::object_type::DEBRIS_LIMIT);
         let max_debris = max_debris.max(min_debris);
 
         Self {
@@ -702,6 +723,7 @@ impl WarheadType {
 
             // List fields
             debris_types: Vec::new(),
+            resolved_debris: Default::default(),
             debris_maximums,
             min_debris,
             max_debris,

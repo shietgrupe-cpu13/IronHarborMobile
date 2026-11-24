@@ -7,7 +7,7 @@
 //! the slots see and applies their effects (the country refresh, a changed
 //! scenario, the `C0` text).
 
-use super::{NetworkSetupProtocol, NetworkSetupRequest};
+use super::NetworkSetupRequest;
 use crate::app::AppState;
 use crate::app::frontend::skirmish_session::cooperative::{
     CooperativeCampaignText, CooperativeSlotContext, SavedCampaignJoin, SavedCampaignLeave,
@@ -15,15 +15,7 @@ use crate::app::frontend::skirmish_session::cooperative::{
 use crate::skirmish_launch::SkirmishLaunchMode;
 use crate::skirmish_modes::MpModeClass;
 
-/// VERA: what BC6's Continue in a WOL room leaves for the room's return:
-/// the round's Cooperative mode and the scenario `+0xA0` selected, the
-/// mission BC6 would have loaded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct CooperativeResume {
-    pub(crate) mode_id: i32,
-    pub(crate) scenario: usize,
-}
-
+use crate::app::match_runtime::session::CooperativeResume;
 /// What the slots read from the session: the scenario file names in catalog
 /// order (`[0xA8B8CC]`), the nodes' names local first (`0xA8DA78`), the
 /// current scenario (`[0xA8B254]`) and whether Choose Map is on top.
@@ -129,7 +121,6 @@ fn refresh_rows(state: &mut AppState, ai_rows: bool) -> anyhow::Result<()> {
         .match_state
         .session
         .reset_network_countries(country, ai_rows)?;
-    state.platform.window.request_redraw();
     Ok(())
 }
 
@@ -234,9 +225,7 @@ pub(crate) fn resume(state: &mut AppState, resume: CooperativeResume) -> anyhow:
         parts.progress.publish(parts.registry, setup)
     };
     publish(state, published)?;
-    if let Some(protocol) = state.frontend.network_setup_protocol.as_mut() {
-        protocol.await_cooperative_rematch_seat();
-    }
+    state.match_state.session.await_cooperative_rematch_seat();
     Ok(())
 }
 
@@ -354,7 +343,7 @@ pub(crate) fn chooser_rows(
                     .cooperative_campaign_name(campaign)
                     .unwrap_or_default()
                     .to_owned();
-                let name = crate::app::App::csf_label(state, &key, &key);
+                let name = state.csf_label(&key, &key);
                 (row.record, format!("{}. {}", campaign + 1, name))
             })
             .collect(),
@@ -362,7 +351,7 @@ pub(crate) fn chooser_rows(
 }
 
 fn saved_row_label(state: &AppState) -> String {
-    crate::app::App::csf_label(state, "TXT_COOP_USE_SAVE", "TXT_COOP_USE_SAVE")
+    state.csf_label("TXT_COOP_USE_SAVE", "TXT_COOP_USE_SAVE")
 }
 
 /// Every scenario record's file name, as `[0xA8B8CC]` holds them.
@@ -440,12 +429,7 @@ pub(super) fn guest_joined(state: &mut AppState) -> anyhow::Result<()> {
         inputs.with(|_, nodes| parts.progress.join(parts.registry, parts.rng, nodes, setup))
     };
     publish(state, published)?;
-    if state
-        .frontend
-        .network_setup_protocol
-        .as_mut()
-        .is_some_and(NetworkSetupProtocol::take_cooperative_rematch_seat)
-    {
+    if state.match_state.session.take_cooperative_rematch_seat() {
         return Ok(());
     }
     let save = state.frontend.multiplayer_shell_runtime.cooperative_save();
@@ -463,11 +447,7 @@ pub(super) fn guest_joined(state: &mut AppState) -> anyhow::Result<()> {
     match tail {
         SavedCampaignJoin::Nothing => {}
         SavedCampaignJoin::Notice => {
-            let text = crate::app::App::csf_label(
-                state,
-                "TXT_SAVE_CAMP_AVAILABLE",
-                "TXT_SAVE_CAMP_AVAILABLE",
-            );
+            let text = state.csf_label("TXT_SAVE_CAMP_AVAILABLE", "TXT_SAVE_CAMP_AVAILABLE");
             crate::app::shell_lan::append_room_chat(
                 state,
                 crate::ui::lan_shell::LanChatLine {
@@ -486,7 +466,6 @@ pub(super) fn guest_joined(state: &mut AppState) -> anyhow::Result<()> {
             {
                 modal.push_row(record, label);
             }
-            state.platform.window.request_redraw();
         }
     }
     Ok(())
@@ -544,7 +523,6 @@ pub(super) fn guest_left(state: &mut AppState) -> anyhow::Result<()> {
             {
                 modal.pop_row();
             }
-            state.platform.window.request_redraw();
         }
         SavedCampaignLeave::Scenario(token) => {
             let index = scenario_files(state).into_iter().find_map(|(index, file)| {

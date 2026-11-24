@@ -76,7 +76,7 @@ fn native_click_shroud_controls_match_cursor_and_both_object_pickers() {
             entity.set_on_bridge(on_bridge);
             entity.lifecycle.set_object_alive_for_test(true);
             entity.lifecycle.set_in_limbo_for_test(false);
-            assert!(!entity.discovery.discovered_by_current_house());
+            assert!(!entity.seldom.discovery.discovered_by_current_house());
             let (sx, sy) =
                 crate::render::locomotor_visual::ground_screen_position(&entity.position);
             sim.entities_mut_for_test().insert(entity);
@@ -219,10 +219,9 @@ fn sov01_trigger_revealed_hill_bunkers_can_be_targeted_without_tank_sight() {
     let viewer_name = sim.resolve(viewer).to_owned();
     // SP4.4b_Reveal Allied, 0885994C: the actual eight Action17 waypoints.
     for waypoint in [63, 66, 71, 99, 100, 114, 437, 647] {
-        assert!(sim.trigger_reveal_at_waypoint(
-            waypoint,
-            crate::sim::world::UninitContext::with_rules(rules),
-        ));
+        assert!(
+            sim.trigger_reveal_at_waypoint(waypoint, crate::sim::world::UninitContext::new(rules),)
+        );
     }
     let terrain = sim.resolved_terrain().unwrap();
 

@@ -23,6 +23,41 @@ fn snapshot(description: &str, timestamp: u64) -> Vec<u8> {
 }
 
 #[test]
+fn migration_backs_up_original_before_decoding_the_old_world() {
+    use super::save_migration::SaveMigrationError;
+
+    let mut header = GameSnapshot::read_header(&snapshot("old", 1)).unwrap();
+    header.layout = 0xFD30_A463;
+    if !SaveRepository::can_migrate(&header) {
+        return;
+    }
+    // The header qualifies, but there is no body to convert.
+    let original = crate::util::save_codec::serialize(&header).unwrap();
+    let repository = fixture("migration-backup");
+    let source = repository.write_named("old.sav", &original).unwrap();
+    let backups = repository.directory().join("backups");
+
+    std::fs::write(&backups, b"obstruction").unwrap();
+    assert!(matches!(
+        repository.migrate_for_load(&source),
+        Err(SaveMigrationError::Backup(_))
+    ));
+    std::fs::remove_file(&backups).unwrap();
+
+    assert!(matches!(
+        repository.migrate_for_load(&source),
+        Err(SaveMigrationError::Convert(_))
+    ));
+    let mut copies = std::fs::read_dir(&backups).unwrap();
+    let copy = copies.next().unwrap().unwrap().path();
+    assert_eq!(std::fs::read(copy).unwrap(), original);
+    assert!(copies.next().is_none());
+    assert_eq!(repository.read(&source).unwrap(), original);
+    assert_eq!(repository.browser_entries().len(), 1);
+    std::fs::remove_dir_all(repository.directory()).unwrap();
+}
+
+#[test]
 fn explicit_overwrite_replaces_selected_save_and_refreshes_exact_description() {
     let repository = fixture("explicit-overwrite");
     let original = snapshot("original", 1);
@@ -228,15 +263,17 @@ fn initial_campaign_paths_preserve_parent_and_fail_without_creating_it() {
         relative,
         repository.directory().join("missions/ALL01UMD.sav")
     );
-    let absolute = repository.directory().join("absolute.sav");
-    std::fs::write(&absolute, snapshot("older automatic slot", 0)).unwrap();
-    assert_eq!(
-        repository
-            .write_initial_campaign(absolute.to_str().unwrap(), &bytes)
-            .unwrap(),
-        absolute
-    );
-    assert_eq!(repository.read(&absolute).unwrap(), bytes);
+    // VERA: a mission name that would leave the save folder writes nothing,
+    // where native 67CF13 creates the file wherever the name points.
+    let outside = repository
+        .directory()
+        .with_file_name(format!("outside-{}.sav", std::process::id()));
+    let sibling = format!("../{}", outside.file_name().unwrap().to_str().unwrap());
+    for escaping in [sibling.as_str(), outside.to_str().unwrap()] {
+        let refused = repository.write_initial_campaign(escaping, &bytes).is_err();
+        let written = std::fs::remove_file(&outside).is_ok();
+        assert!(refused && !written, "{escaping}");
+    }
     std::fs::remove_dir_all(repository.directory()).unwrap();
 }
 

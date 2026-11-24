@@ -54,7 +54,7 @@ use crate::util::native_x87::{
 /// The fire state of an occupied building attacker
 /// ([`super::combat_weapon::is_occupied`]), read in Phase 1. Its weapon is
 /// GetWeapon's, read live ([`super::combat_weapon::get_weapon`]).
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub(crate) struct GarrisonSnapshot {
     /// `+0x69C`, the firing occupant's index: the shot's muzzle port.
     pub fire_index: i32,
@@ -64,7 +64,7 @@ pub(crate) struct GarrisonSnapshot {
 
 /// Snapshot of an attacker's state for target scanning.
 /// Extracted to avoid borrow conflicts during entity iteration.
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub(crate) struct AttackerSnapshot {
     pub stable_id: u64,
     pub owner: InternedId,
@@ -299,7 +299,7 @@ pub(crate) fn should_retaliate(
     };
     let house = world.houses.get(&victim.owner());
     let human =
-        house.is_some_and(|house| house.is_controlled_by_human(world.session.game_mode_nonzero()));
+        house.is_some_and(|house| house.is_controlled_by_human(world.session.rule_policy()));
     // `0x007087DD` CanRetaliate; `0x007087EB` a slave (SlaveOwner `+0x2DC`);
     // `0x007087F9` a slaver (SlaveManager `+0x2D8`). A slave freed by its
     // master's death (`0x006B0B73`) retaliates again.
@@ -308,7 +308,7 @@ pub(crate) fn should_retaliate(
         return false;
     }
     if !victim_type.can_retaliate
-        || victim.slave.owner().is_some()
+        || victim.seldom.slave.owner().is_some()
         || victim.slave_manager.is_some()
     {
         return false;
@@ -353,7 +353,6 @@ pub(crate) fn should_retaliate(
     let mut subject = super::fire_error_world::FireSubject {
         world,
         rules,
-        overlay_registry: None,
         fog: Some(world.fog.fire_view(&world.house_alliances)),
         firer: victim,
         obj: victim_type,

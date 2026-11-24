@@ -378,10 +378,6 @@ pub(crate) fn build_sidebar_view_with_spec(
 
 /// One strip's retained entries in its cameo order, each with the name its
 /// cameo draws under.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the strip's inputs are the view builder's own"
-)]
 fn strip_entries<'a>(
     tab: SidebarTab,
     queue_items: &[QueueItemView],
@@ -416,10 +412,6 @@ fn strip_entries<'a>(
 /// view: each shows one tab's strip from its own scroll row, clamped to the
 /// rows the strip has. The sidebar's own grid, tabs and scroll row are as the
 /// builder left them.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the strip's inputs are the view builder's own"
-)]
 pub(crate) fn append_added_grids(
     view: &mut SidebarView,
     layout_spec: SidebarChromeLayoutSpec,
@@ -631,6 +623,9 @@ fn collect_build_entries(
     let mut sw_entries: Vec<BuildEntry> = Vec::new();
     if category == ProductionCategory::Defense {
         for sw in sw_views {
+            if !sw.ares_show_cameo {
+                continue;
+            }
             // The existing type identity selects its own atlas namespace. An
             // image filename cannot identify two types with different fallbacks.
             let type_id = interner.map_or_else(
@@ -762,6 +757,7 @@ mod tests {
                 constraints_blocked: false,
                 ares_refusal: None,
                 ready_shots: 0,
+                ares_show_cameo: true,
             }];
             let entries = super::collect_build_entries(
                 ProductionCategory::Defense,

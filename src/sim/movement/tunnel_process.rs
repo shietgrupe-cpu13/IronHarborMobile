@@ -100,7 +100,7 @@ impl Simulation {
         coord: DriveCoord,
         rules: &RuleSet,
         registry: Option<&OverlayTypeRegistry>,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) {
         self.foot_set_location_marked(id, coord, rules, registry, effects);
     }
@@ -146,7 +146,7 @@ impl Simulation {
         if let Some(sound) = sound {
             self.sound_events
                 .emit(crate::sim::world::SimSoundEvent::voc_at_location(
-                    sound,
+                    rules.sound_name(&sound),
                     entity,
                     self.resolved_terrain.as_ref(),
                 ));
@@ -220,7 +220,7 @@ impl Simulation {
         to: DriveCoord,
         rules: &RuleSet,
         registry: Option<&OverlayTypeRegistry>,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) {
         let frame = self.session.binary_frame();
         let Some(actor) = self.substrate.entities.get(id) else {
@@ -269,7 +269,7 @@ impl Simulation {
         id: u64,
         rules: &RuleSet,
         registry: Option<&OverlayTypeRegistry>,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) {
         let Some(runtime) = self.tunnel_runtime_mut(id) else {
             return;
@@ -378,7 +378,7 @@ impl Simulation {
         id: u64,
         rules: &RuleSet,
         registry: Option<&OverlayTypeRegistry>,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) -> TunnelProcessOutcome {
         let mut outcome = TunnelProcessOutcome::default();
         let Some(state) = self
@@ -411,7 +411,7 @@ impl Simulation {
                     self.tunnel_set_speed_fraction(id, true);
                     self.tunnel_set_state(id, TunnelState::DugIn);
                     self.tunnel_dig_effects(id, DigEffects::DIG_IN, rules);
-                    let context = UninitContext::new(rules, registry).with_effects(effects);
+                    let context = UninitContext::new(rules).with_effects(effects);
                     self.detach_all(id, false, context);
                 }
             }
@@ -538,7 +538,7 @@ impl Simulation {
         coord_z: i32,
         rules: &RuleSet,
         registry: Option<&OverlayTypeRegistry>,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) {
         let Some(location) = self.tunnel_location(id) else {
             return;
@@ -567,7 +567,7 @@ impl Simulation {
         id: u64,
         rules: &RuleSet,
         registry: Option<&OverlayTypeRegistry>,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) {
         let Some(location) = self.tunnel_location(id) else {
             return;
@@ -597,7 +597,6 @@ impl Simulation {
                 },
                 crate::sim::movement::infantry_entry::EntryQueryMode::CheckLocomotor,
                 rules,
-                registry,
             )
             .is_ok_and(|code| code != 0);
         let in_playfield = crate::sim::cell_rect::cell_is_in_playfield_leptons(
@@ -656,7 +655,7 @@ impl Simulation {
         id: u64,
         rules: &RuleSet,
         registry: Option<&OverlayTypeRegistry>,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) {
         let Some(location) = self.tunnel_location(id) else {
             return;
@@ -678,7 +677,7 @@ impl Simulation {
             return;
         }
         // 0x00729A3D..0x00729A8F.
-        let context = UninitContext::new(rules, registry).with_effects(effects);
+        let context = UninitContext::new(rules).with_effects(effects);
         self.reveal_uncached_object_sight(id, false, false, None, context);
         let frame = self.session.binary_frame();
         let frames = tunnel_movement::dig_out_frames(self.tunnel_rot(id, rules));

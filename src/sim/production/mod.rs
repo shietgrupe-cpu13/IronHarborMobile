@@ -31,14 +31,12 @@ mod wall_placement;
 // Re-export everything so external code can still use `production::X`.
 pub use self::factory::{
     CancelOutcome, Factory, FactoryHolder, FactoryRegistry, FactoryView, PRODUCTION_STEPS,
-    PendingObject, STEP_RATE_MAX, STEP_RATE_MIN, StepOutcome, TimeToBuildInputs,
+    PendingObject, ProductionState, STEP_RATE_MAX, STEP_RATE_MIN, StepOutcome, TimeToBuildInputs,
     category_for_object, time_to_build, type_base_build_time, type_build_time,
 };
 pub(crate) use self::factory_lifecycle::enqueue_selected;
-pub(crate) use self::factory_lifecycle::suspend_production;
-pub use self::factory_lifecycle::{
-    FactoryRestoreError, ready_building_entity_for_owner, validate_restored_factory_state,
-};
+pub(crate) use self::factory_lifecycle::{suspend_production, validate_restored_factory_state};
+pub use self::factory_lifecycle::{FactoryRestoreError, ready_building_entity_for_owner};
 pub use self::factory_lifecycle::{
     ProductionCancellation, cancel_production_for_owner, enqueue_by_type,
 };
@@ -59,7 +57,9 @@ pub use self::production_queue::{
     dispatch_production_changes_for_tests, publish_production_changes_for_tests,
 };
 pub(crate) use self::production_refinery::spawn_building_free_unit;
-pub use self::production_repair::{RepairControl, repair_step_cost, toggle_repair};
+pub use self::production_repair::{
+    RepairControl, repair_remaining, repair_step_cost, toggle_repair,
+};
 pub use self::production_repair::{buildings_wanting_repair, can_repair_building};
 pub(crate) use self::production_repair::{engineer_repair, update_repair_and_power};
 #[cfg(any(test, feature = "test-support"))]

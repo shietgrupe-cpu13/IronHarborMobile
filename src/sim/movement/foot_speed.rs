@@ -227,10 +227,9 @@ mod tests {
                 sim.advance_app_frame(
                     &commands,
                     &rules,
-                    None,
                     33,
                     crate::sim::world::TickLane::Ordinary,
-                    Default::default(),
+                    &mut Default::default(),
                 )
                 .unwrap();
                 let entity = sim.entities().get(actor).unwrap();

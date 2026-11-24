@@ -27,7 +27,7 @@ use crate::sim::trigger_runtime::TeamTagOrder;
 use crate::sim::world::FrameEffects;
 use crate::sim::world::Simulation;
 
-use super::{TeamRules, TeamScriptState, TeamTarget, script_action_at};
+use super::{TeamScriptState, TeamTarget, script_action_at};
 use crate::sim::intern::StringInterner;
 
 /// Script actions 53 and 54 relax the stray distance (`Rules+0x1720`
@@ -94,19 +94,23 @@ pub(super) fn center_sample(
 
 /// `Calc_Center`'s arithmetic (`0x006EB225..0x006EB31B`): the mean XY of
 /// the samples (wrapping sums, signed truncating division), and the one
-/// nearest `focus` by squared XY distance (`0x005F6500`, `native_coord::squared_xy_distance`; 0
-/// without a focus). A smaller distance, or any distance after a kept 0,
-/// replaces the one kept, so without a focus the last sample is closest.
-/// `None` without samples.
+/// nearest `focus` by squared XY distance (`0x005F6500`,
+/// `native_coord::squared_xy_distance_for_map`; 0 without a focus). A smaller
+/// distance, or any distance after a kept 0, replaces the one kept, so without
+/// a focus the last sample is closest. `None` without samples. One pass in
+/// member order, so the caller hands its member walk over as it goes. A
+/// VERA-only map compares the true 64-bit square instead of the wrapped
+/// native one.
 pub(super) fn center_of(
-    samples: &[CenterSample],
+    samples: impl IntoIterator<Item = CenterSample>,
     focus: Option<[i32; 2]>,
     ares: bool,
+    vera_only_map: bool,
 ) -> Option<([i32; 2], Option<u64>)> {
     let mut sum = [0i32; 2];
     let mut count = 0i32;
     let mut closest = None;
-    let mut closest_distance = 0i32;
+    let mut closest_distance = 0i64;
     for sample in samples {
         for _ in 0..if sample.doubled { 2 } else { 1 } {
             sum[0] = sum[0].wrapping_add(sample.xy[0]);
@@ -117,7 +121,12 @@ pub(super) fn center_of(
             continue;
         }
         let distance = focus.map_or(0, |focus| {
-            crate::util::native_coord::squared_xy_distance(sample.xy, focus, ares)
+            crate::util::native_coord::squared_xy_distance_for_map(
+                sample.xy,
+                focus,
+                ares,
+                vera_only_map,
+            )
         });
         if closest_distance == 0 || distance < closest_distance {
             closest_distance = distance;
@@ -155,12 +164,22 @@ impl Simulation {
         &mut self,
         rules: &RuleSet,
         registry: Option<&OverlayTypeRegistry>,
-        frame_effects: FrameEffects<'_>,
+        frame_effects: &mut FrameEffects<'_>,
     ) {
+        let unfilled_team_timeout = self
+            .session
+            .rule_policy()
+            .unfilled_team_timeout(rules.general.dissolve_unfilled_team_delay);
         let teams: Vec<u64> = self.team_script_vm.teams.keys().copied().collect();
         for team_id in teams {
             if self.team_script_vm.teams.contains_key(&team_id) {
-                self.team_ai(team_id, rules, registry, frame_effects);
+                self.team_ai(
+                    team_id,
+                    rules,
+                    registry,
+                    frame_effects,
+                    unfilled_team_timeout,
+                );
             }
         }
     }
@@ -171,7 +190,8 @@ impl Simulation {
         team_id: u64,
         rules: &RuleSet,
         registry: Option<&OverlayTypeRegistry>,
-        frame_effects: FrameEffects<'_>,
+        frame_effects: &mut FrameEffects<'_>,
+        unfilled_team_timeout: Option<i32>,
     ) {
         let current_frame = self.session.binary_frame() as i32;
         let Some(team) = self.team_script_vm.teams.get_mut(&team_id) else {
@@ -214,9 +234,9 @@ impl Simulation {
             team.advance_pending = true;
         }
         if team.reforming || team.formed || team.zone.is_none() || team.closest_member.is_none() {
-            self.team_calc_center(team_id, rules, registry);
+            self.team_calc_center(team_id, rules);
         }
-        self.team_recruit_short_entries(team_id, rules, registry, frame_effects);
+        self.team_recruit_short_entries(team_id, rules, frame_effects);
 
         let Some(team) = self.team_script_vm.teams.get(&team_id) else {
             return;
@@ -224,8 +244,7 @@ impl Simulation {
         // `0x006E929B..0x006E9339`: an empty team that has been full, or
         // that could not fill before `DissolveUnfilledTeamDelay=` in a
         // multiplayer game, is destroyed.
-        let team_rules = TeamRules::new(&rules.general, self.session.game_mode_nonzero());
-        if team.dissolves(&team_rules, current_frame) {
+        if team.dissolves(current_frame, unfilled_team_timeout) {
             // TeamClass::AI @0x006E9140, retail gamemd.exe:6E92D0..6E9320
             // raises23 while the empty Team still exists for HasOccurred23.
             if team.leaving_map {
@@ -250,7 +269,7 @@ impl Simulation {
             return;
         }
         if team.reforming || team.under_strength || warping {
-            let regrouped = self.team_regroup(team_id, rules, registry, frame_effects);
+            let regrouped = self.team_regroup(team_id, rules, frame_effects);
             if let Some(team) = self.team_script_vm.teams.get_mut(&team_id) {
                 team.reforming = !regrouped;
             }
@@ -266,8 +285,7 @@ impl Simulation {
         &mut self,
         team_id: u64,
         rules: &RuleSet,
-        registry: Option<&OverlayTypeRegistry>,
-        frame_effects: FrameEffects<'_>,
+        frame_effects: &mut FrameEffects<'_>,
     ) {
         let vm = &self.team_script_vm;
         let Some(team) = vm.teams.get(&team_id) else {
@@ -293,7 +311,7 @@ impl Simulation {
                 return;
             };
             if super::membership::entry_short(entry.count, team.slot_counts[slot]) {
-                self.team_recruit(team_id, slot, &mut walks, rules, registry, frame_effects);
+                self.team_recruit(team_id, slot, &mut walks, rules, frame_effects);
             }
             slot += 1;
         }
@@ -313,7 +331,7 @@ impl Simulation {
         team_id: u64,
         rules: &RuleSet,
         registry: Option<&OverlayTypeRegistry>,
-        frame_effects: FrameEffects<'_>,
+        frame_effects: &mut FrameEffects<'_>,
     ) -> bool {
         let vm = &mut self.team_script_vm;
         let Some(team) = vm.teams.get(&team_id) else {
@@ -379,12 +397,7 @@ impl Simulation {
     /// list order while there is none; a naval transport never counts; the
     /// head when none does) cannot enter it (`vt+0x1AC`), when the centre is
     /// that member. Without such members both are cleared.
-    pub(crate) fn team_calc_center(
-        &mut self,
-        team_id: u64,
-        rules: &RuleSet,
-        registry: Option<&OverlayTypeRegistry>,
-    ) {
+    pub(crate) fn team_calc_center(&mut self, team_id: u64, rules: &RuleSet) {
         let vm = &self.team_script_vm;
         let Some(team) = vm.teams.get(&team_id) else {
             return;
@@ -405,25 +418,26 @@ impl Simulation {
             .and_then(|id| vm.team_type_ini.get(&id))
             .is_some_and(|metadata| metadata.guard_slower);
         let focus = team.focus.map(|focus| self.team_target_xy(focus));
-        let samples: Vec<CenterSample> = team
-            .members
-            .iter()
-            .filter_map(|member| {
-                let entity = self.substrate.entities.get(member.id)?;
-                let naval_transport = self
-                    .object_type(entity.type_ref(), rules)
-                    .is_some_and(|object| object.passengers > 0 && object.naval);
-                center_sample(
-                    entity,
-                    member.initiated,
-                    guard_slower && self.guard_slower_weight(entity, rules),
-                    naval_transport,
-                    self.object_placement_scope_active(),
-                )
-            })
-            .collect();
+        let samples = team.members.iter().filter_map(|member| {
+            let entity = self.substrate.entities.get(member.id)?;
+            let naval_transport = self
+                .object_type(entity.type_ref(), rules)
+                .is_some_and(|object| object.passengers > 0 && object.naval);
+            center_sample(
+                entity,
+                member.initiated,
+                guard_slower && self.guard_slower_weight(entity, rules),
+                naval_transport,
+                self.object_placement_scope_active(),
+            )
+        });
         let head = team.members.first().map(|member| member.id);
-        let (zone, closest) = match center_of(&samples, focus, rules.ares()) {
+        let (zone, closest) = match center_of(
+            samples,
+            focus,
+            rules.ares(),
+            self.session.map_exceeds_original_size(),
+        ) {
             None => (None, None),
             Some((mean, closest)) => {
                 // CalcCenter6EB331 selects Map565730's Cell before CanEnter.
@@ -442,9 +456,7 @@ impl Simulation {
                 }
                 let closest = closest.or(head);
                 let zone = match closest {
-                    Some(member)
-                        if self.team_member_refuses_cell(member, cell, rules, registry) =>
-                    {
+                    Some(member) if self.team_member_refuses_cell(member, cell, rules) => {
                         TeamTarget::Object(member)
                     }
                     _ => cell,
@@ -478,13 +490,7 @@ impl Simulation {
     /// `vt+0x1AC Can_Enter_Cell(cell, -1, -1, NULL, 1)` is not "move ok"
     /// (non-zero) for `member`, by its class's own answer
     /// ([`Simulation::mover_can_enter`]). An answer VERA cannot read admits.
-    fn team_member_refuses_cell(
-        &self,
-        member: u64,
-        cell: TeamTarget,
-        rules: &RuleSet,
-        registry: Option<&OverlayTypeRegistry>,
-    ) -> bool {
+    fn team_member_refuses_cell(&self, member: u64, cell: TeamTarget, rules: &RuleSet) -> bool {
         let TeamTarget::Cell { x, y } = cell else {
             return false;
         };
@@ -494,7 +500,6 @@ impl Simulation {
             crate::sim::movement::infantry_entry::InfantryEntryArgs::REPAIR,
             crate::sim::movement::infantry_entry::EntryQueryMode::CheckLocomotor,
             rules,
-            registry,
         )
         .is_ok_and(|code| code != 0)
     }
@@ -510,16 +515,16 @@ impl Simulation {
         &mut self,
         team_id: u64,
         rules: &RuleSet,
-        registry: Option<&OverlayTypeRegistry>,
-        frame_effects: FrameEffects<'_>,
+        frame_effects: &mut FrameEffects<'_>,
     ) -> bool {
         use crate::sim::mission::MissionType;
-        let Some(team) = self.team_script_vm.teams.get(&team_id) else {
+        if !self.team_script_vm.teams.contains_key(&team_id) {
             return true;
-        };
-        let members = team.members.clone();
+        }
+        // The walk reads a copy: a member's join or move can change the list.
+        let members = self.team_script_vm.copy_members(team_id);
         let mut regrouped = true;
-        for member in members {
+        for &member in &members {
             let Some(zone) = self
                 .team_script_vm
                 .teams
@@ -528,17 +533,17 @@ impl Simulation {
             else {
                 break;
             };
-            let Some(entity) = self.substrate.entities.get(member.id) else {
+            let Some(entity) = self.substrate.entities.get(member) else {
                 continue;
             };
             if !entity.lifecycle.object_alive() {
                 continue;
             }
-            self.team_member_join_up(team_id, member.id, rules, registry, frame_effects);
-            let Some(entity) = self.substrate.entities.get(member.id) else {
+            self.team_member_join_up(team_id, member, rules, frame_effects);
+            let Some(entity) = self.substrate.entities.get(member) else {
                 continue;
             };
-            let initiated = self.team_member_initiated(team_id, member.id);
+            let initiated = self.team_member_initiated(team_id, member);
             if !member_is_live_joined(entity, initiated, self.object_placement_scope_active()) {
                 continue;
             }
@@ -550,18 +555,19 @@ impl Simulation {
                 if entity.navigation.nav_com().is_some() {
                     continue;
                 }
-                self.team_member_queue_mission(member.id, MissionType::Move, rules);
+                self.team_member_queue_mission(member, MissionType::Move, rules);
                 regrouped = false;
                 let cell = zone.and_then(|zone| self.team_target_cell_of_coord(zone));
-                self.team_member_set_destination(member.id, cell, rules, registry, frame_effects);
+                self.team_member_set_destination(member, cell, rules, frame_effects);
             } else {
                 if mission == Some(MissionType::AreaGuard) {
                     continue;
                 }
-                self.team_member_queue_mission(member.id, MissionType::Guard, rules);
-                self.team_member_set_destination(member.id, None, rules, registry, frame_effects);
+                self.team_member_queue_mission(member, MissionType::Guard, rules);
+                self.team_member_set_destination(member, None, rules, frame_effects);
             }
         }
+        self.team_script_vm.restore_member_ids(members);
         regrouped
     }
 
@@ -575,7 +581,7 @@ impl Simulation {
         team_id: u64,
         rules: &RuleSet,
         registry: Option<&OverlayTypeRegistry>,
-        frame_effects: FrameEffects<'_>,
+        frame_effects: &mut FrameEffects<'_>,
     ) {
         let Some(team) = self.team_script_vm.teams.get_mut(&team_id) else {
             return;
@@ -586,7 +592,7 @@ impl Simulation {
             team.zone = None;
             return;
         }
-        self.team_calc_center(team_id, rules, registry);
+        self.team_calc_center(team_id, rules);
         let Some(team) = self.team_script_vm.teams.get_mut(&team_id) else {
             return;
         };
@@ -656,8 +662,7 @@ impl Simulation {
                     continue;
                 };
                 let from = ((source.x / 256) as i16, (source.y / 256) as i16);
-                let Some((x, y)) =
-                    self.foot_nearby_location(leader, from, target, 2..4, rules, registry)
+                let Some((x, y)) = self.foot_nearby_location(leader, from, target, 2..4, rules)
                 else {
                     continue;
                 };
@@ -833,8 +838,7 @@ impl Simulation {
         team_id: u64,
         member: u64,
         rules: &RuleSet,
-        registry: Option<&OverlayTypeRegistry>,
-        frame_effects: FrameEffects<'_>,
+        frame_effects: &mut FrameEffects<'_>,
     ) -> bool {
         use crate::sim::mission::MissionType;
         let Some(entity) = self.substrate.entities.get(member) else {
@@ -858,7 +862,7 @@ impl Simulation {
         if entity.navigation.nav_com().is_none() {
             self.team_member_queue_mission(member, MissionType::Move, rules);
             self.team_member_clear_target(member, rules);
-            self.team_member_set_destination(member, zone, rules, registry, frame_effects);
+            self.team_member_set_destination(member, zone, rules, frame_effects);
         }
         true
     }
@@ -956,7 +960,7 @@ mod tests {
     /// mapped.
     #[test]
     fn an_aircraft_member_refuses_a_shrouded_centre() {
-        let (mut sim, rules, registry) = crate::sim::world::entry_test_fixture::fixture();
+        let (mut sim, rules, _registry) = crate::sim::world::entry_test_fixture::fixture();
         let hornet = sim
             .spawn_object("HORNET", "Americans", 17, 15, 0, &rules)
             .expect("aircraft");
@@ -964,15 +968,16 @@ mod tests {
             .entities
             .get_mut(hornet)
             .expect("aircraft")
+            .seldom
             .discovery
             .set_owned_by_current_house_for_test(true);
         sim.fog = crate::sim::vision::FogState::new(33, 33);
         let centre = TeamTarget::Cell { x: 12, y: 12 };
-        assert!(sim.team_member_refuses_cell(hornet, centre, &rules, Some(&registry)));
+        assert!(sim.team_member_refuses_cell(hornet, centre, &rules));
 
         let owner = sim.interner.intern("Americans");
         crate::sim::vision::reveal_radius(&mut sim.fog, owner, 12, 12, 2);
-        assert!(!sim.team_member_refuses_cell(hornet, centre, &rules, Some(&registry)));
+        assert!(!sim.team_member_refuses_cell(hornet, centre, &rules));
     }
 
     /// Ares TeamClass_AttackedBy_Retaliate (1003A180, hook 0x6EB432): with

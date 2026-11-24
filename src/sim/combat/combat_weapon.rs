@@ -339,12 +339,12 @@ pub(crate) fn controlled_transport_house(
     interner: &StringInterner,
     rider: &GameEntity,
 ) -> Option<InternedId> {
-    let transport = entities.get(rider.passenger_role.transporter()?)?;
+    let transport = entities.get(rider.passenger_role().transporter()?)?;
     let open_topped = interner
         .object_type(transport.type_ref(), rules)
         .is_some_and(|obj| obj.open_topped);
     open_topped
-        .then(|| transport.mind_control.controller())
+        .then(|| transport.seldom.mind_control.controller())
         .flatten()
         .and_then(|controller| entities.get(controller))
         .map(|controller| controller.owner())
@@ -496,8 +496,8 @@ pub fn is_armed(
 /// Aircraft auxiliary+18/41B7F0: the primary projectile selects the attack
 /// approach and release branches. All callers use the live weapon tier.
 pub(crate) fn aircraft_strafes(rules: &RuleSet, obj: &ObjectType, veterancy: u16) -> bool {
-    primary_for_tier(obj, veterancy)
-        .and_then(|name| rules.weapon(name))
+    weapon_for_index(obj, veterancy, 0)
+        .and_then(|record| record.weapon(rules))
         .and_then(|weapon| rules.weapon_projectile(weapon))
         .is_some_and(|projectile| projectile.rot <= 1 && !projectile.inviso)
 }
@@ -549,7 +549,7 @@ pub(crate) fn open_topped_cargo_range(
     let mut shortest = None;
     // Cargo owns the native head/+30 sequence. Neither limbo nor death
     // filters belong to this reader; boarded passengers are in limbo.
-    for &id in entity.passenger_role.cargo()?.passengers() {
+    for &id in entity.passenger_role().cargo()?.passengers() {
         let Some(passenger) = entities.get(id) else {
             break;
         };
@@ -714,8 +714,8 @@ pub(crate) fn primary_warhead_spares_medium_and_wood(
     obj: &ObjectType,
     veterancy: u16,
 ) -> bool {
-    let warhead = primary_for_tier(obj, veterancy)
-        .and_then(|id| rules.weapon(id))
+    let warhead = weapon_for_index(obj, veterancy, 0)
+        .and_then(|record| record.weapon(rules))
         .and_then(|weapon| rules.weapon_warhead(weapon));
     warhead.is_some_and(WarheadType::uses_medium_wood_target_mask)
 }
@@ -1066,7 +1066,7 @@ pub fn attacker_facts(entity: &GameEntity, obj: &ObjectType) -> AttackerFacts {
         veterancy: entity.veterancy.rank(),
         current_weapon_number: entity.current_weapon_number(),
         open_transport_weapon: open_transport_weapon(
-            entity.passenger_role.in_open_transport(),
+            entity.passenger_role().in_open_transport(),
             obj,
         ),
         gattling_stage: entity.gattling.stage(),
@@ -1307,12 +1307,14 @@ fn occupant_weapon_record(occupant: &ObjectType, veterancy: u16) -> Option<Weapo
 /// `BuildingClass::IsOccupied @ 0x00458DD0` (vt+0x400; every other class
 /// answers false through `0x0041BFB0`): a building whose type is
 /// `CanBeOccupied=` (`+0x157B`) and `CanOccupyFire=` (`+0x157C`), holding an
-/// occupant (vt+0x408, `+0x694`).
+/// occupant (vt+0x408, `+0x694`). Original RA2 has no `CanOccupyFire=`:
+/// in RA2 Mode `CanBeOccupied=` alone arms the garrison, with the gun on the
+/// building's own Primary/Secondary ([`ObjectType::occupants_fire`]).
 pub(crate) fn is_occupied(entity: &GameEntity, obj: &ObjectType) -> bool {
     entity.category() == EntityCategory::Structure
         && obj.can_be_occupied
-        && obj.can_occupy_fire
-        && entity.passenger_role.occupants().count() > 0
+        && obj.occupants_fire()
+        && entity.passenger_role().occupants().count() > 0
 }
 
 /// `BuildingClass @ 0x00458E00` (vt+0x404): half the shorter side of the
@@ -1327,6 +1329,17 @@ pub(crate) fn half_foundation(obj: &ObjectType) -> i32 {
 /// range with it shifted to leptons (`0x006F7288..0x006F729F`), and
 /// Greatest_Threat walks one ring beyond it (`0x006F9189..0x006F91A3`).
 pub(crate) fn occupied_reach_cells(obj: &ObjectType, rules: &RuleSet) -> i32 {
+    if rules.ra2() {
+        // Original RA2 has no [CombatDamage] OccupyWeaponRange override: the
+        // garrison gun keeps its own WeaponType Range (AlliedOccupyW /
+        // SovietOccupyW are Range=7). Use the building's Primary slot range in
+        // cells, matching the gun `get_weapon_record` resolves for index 0.
+        if let Some(id) = obj.weapon_at(0)
+            && let Some(weapon) = rules.weapon(id)
+        {
+            return weapon.range_leptons.wrapping_shr(8);
+        }
+    }
     half_foundation(obj).wrapping_add(rules.garrison_rules.occupy_weapon_range)
 }
 
@@ -1338,7 +1351,7 @@ pub(crate) fn firing_occupant_id(entity: &GameEntity, obj: &ObjectType) -> Optio
     if !is_occupied(entity, obj) {
         return None;
     }
-    let occupants = entity.passenger_role.occupants();
+    let occupants = entity.passenger_role().occupants();
     // Native452742 uses signed DWORD. Unsafe negative/stale slots are not
     // representable object references; do not narrow a valid index to u8.
     occupants
@@ -1397,6 +1410,15 @@ pub(crate) fn get_weapon_record<'r>(
         }
     }
     if let Some(id) = firing_occupant_id(entity, obj) {
+        if rules.ra2() {
+            // Original RA2 keeps the garrison gun on the building itself
+            // (e.g. [CARUS03] Primary=AlliedOccupyW, Secondary=SovietOccupyW).
+            // The occupant only supplies the trigger; its own weapon dict is
+            // not consulted. Resolve through the building's slot so the
+            // native Per Index selection and FLH stay intact.
+            return weapon_for_index(obj, entity.veterancy.rank(), index)
+                .or_else(|| weapon_for_index(obj, entity.veterancy.rank(), 0));
+        }
         let occupant = entities.get(id)?;
         let kind = interner.object_type_in_category(
             occupant.type_ref(),
@@ -1486,7 +1508,7 @@ mod tests {
         .unwrap();
         assert_eq!((selected.index, selected.weapon_id), (1, "SECOND"));
         assert_eq!(
-            world.power_down_building_upgrade(1, &rules),
+            world.power_down_building_upgrade(1, &rules, &mut Default::default()),
             world.interner.get("UP2")
         );
         let host = world.substrate.entities.get(1).unwrap();
@@ -1502,7 +1524,7 @@ mod tests {
             .is_none()
         );
         assert_eq!(
-            world.power_down_building_upgrade(1, &rules),
+            world.power_down_building_upgrade(1, &rules, &mut Default::default()),
             world.interner.get("UP1")
         );
         let host = world.substrate.entities.get(1).unwrap();
@@ -1543,7 +1565,9 @@ mod tests {
             5,
             EntityCategory::Structure,
         );
-        host.passenger_role.occupants_mut().add(2);
+        host.passenger_role_mut_for_test()
+            .occupants_mut()
+            .add_for_test(2);
         world.substrate.entities.insert(host);
         world
             .substrate
@@ -1660,7 +1684,10 @@ mod tests {
                 );
                 inside.veterancy.set_rank_for_test(veterancy);
                 entities.insert(inside);
-                building.passenger_role.occupants_mut().add(2);
+                building
+                    .passenger_role_mut_for_test()
+                    .occupants_mut()
+                    .add_for_test(2);
             }
             entities.insert(building);
             let interner = crate::sim::intern::test_interner();
@@ -2045,18 +2072,28 @@ mod tests {
             ));
         // The fixture entities' names were interned by `test_default`.
         sim.interner = crate::sim::intern::test_interner();
-        sim.substrate.entities.get_mut(1).unwrap().mind_control =
-            MindControlLink::controlled_by_for_test(3);
-        sim.substrate.entities.get_mut(2).unwrap().passenger_role =
-            PassengerRole::inside_for_test(1, false);
+        sim.substrate
+            .entities
+            .get_mut(1)
+            .unwrap()
+            .seldom
+            .mind_control = MindControlLink::controlled_by_for_test(3);
+        sim.substrate
+            .entities
+            .get_mut(2)
+            .unwrap()
+            .set_passenger_role_for_test(PassengerRole::inside_for_test(1, false));
         let rider = sim.substrate.entities.get(2).unwrap();
         assert_eq!(
             controlled_transport_house(&sim.substrate.entities, &rules, &sim.interner, rider),
             None,
             "a garrison occupant or cargo rider stores no Transporter"
         );
-        sim.substrate.entities.get_mut(2).unwrap().passenger_role =
-            PassengerRole::boarded_for_test(1, true);
+        sim.substrate
+            .entities
+            .get_mut(2)
+            .unwrap()
+            .set_passenger_role_for_test(PassengerRole::boarded_for_test(1, true));
         let expected = sim.substrate.entities.get(3).unwrap().owner();
         let rider = sim.substrate.entities.get(2).unwrap();
         assert_eq!(

@@ -23,8 +23,8 @@ The starting point, before phase 0; the phases below take each apart.
    `app/match_runtime/frame_effects.rs` `FrameClientBoundary`). These run in
    native order *inside* a tick, and they cannot become post-tick events:
    - `SoundBoundary` plays the reached sound prefix at once. Gattling Stop must
-     finish before Report's Main draw, and sound and simulation share the
-     process Main RNG.
+     finish before Report's Main draw, as in gamemd, where sound and
+     simulation share one Main RNG.
    - `OutcomeWaitBoundary` lets `HouseClass::Update` (`4F860F`/`4F8736`)
      wait for the EVA voice. The frame suspends until Vox is idle.
    - `LocalPlanningBoundary::leave_planning` returns a command into the
@@ -55,10 +55,11 @@ The starting point, before phase 0; the phases below take each apart.
   `PlanningInputState`, `SelectionState`, `ClientRadarEvents` and
   `ScenarioPauseClock`. A compile-time probe checked this when this plan was
   written; phase 1 should assert it where it moves them.
-- The process Main RNG (`sim/rng.rs` `MainRng`) is outside saves and the
-  state hash, and it is already `Arc<Mutex<_>>`. Draws from two threads stay
-  deterministic for gameplay. Only the order of presentation draws (voices,
-  laser jitter) can differ from a single-threaded run.
+- The process Main RNG is outside saves and the state hash. The app's cell
+  (`sim/rng.rs` `MainRng`) is `Arc<Mutex<_>>`, drawn on the main thread and
+  the audio output thread; the simulation owns its Main as a plain `SimRng`.
+  Only the order of presentation draws (voices, laser jitter) can differ
+  from a single-threaded run.
 - Commands are already scheduled by frame, so replays and lockstep do not
   depend on when the main thread submits them.
 
@@ -162,7 +163,8 @@ storage with the world the simulation thread ticks:
   every frame, so every test draw reads a lent tick's view.
 
 The app's Main RNG is its own cell from a scenario's install on
-(`Simulation::install_fresh_process_main`); the simulation draws its own.
+(`Simulation::install_fresh_process_main`); the simulation draws its own
+generator through `&mut`.
 Main is outside saves and the hash: only which random voice plays can
 differ from gamemd.
 
@@ -175,8 +177,12 @@ placement preview, which the passes beside the tick keep: all are one tick
 late at most. An atlas refresh asked beside a tick (a growth published
 then) waits for the tick's tail.
 
-Still shared, read-only: `SimResources` (the rules, the terrain template, the
-overlay registry), which nothing writes once a match is loaded.
+The live world, its presentation copy and the captured frame share
+`SimResources` while the match runs. It holds the rules and the terrain
+template. The rules own the overlay types used by simulation and drawing.
+After an offline Skirmish, the setup dialog writes the current countries
+into the retained world's rules. The host releases both presentation references
+before it returns that world for a write.
 
 What the snapshot costs the main thread:
 
@@ -185,7 +191,7 @@ What the snapshot costs the main thread:
   object reads: an action line only for a selected or psychically detected
   object, the airstrike tint only for a Structure, a Carryall's cargo only
   for an Aircraft, the mind-control count only for a capture manager.
-- A frame that is replaced is freed on the pool
+- A retired frame's object records and draw caches are freed on the pool
   (`sim::parallel::drop_on_pool`), as is the old world copy's unsynced part.
 - The world copy's syncs run on the pool beside the clone of its other parts
   and the local player's fog.
@@ -366,8 +372,8 @@ another thread, so two things differ:
   session never leaves it.
 
 Nothing the draw and a tick can both take waits on the main thread
-(`util::sync`). The Main RNG and the zone grid's precheck memo lock with
-`wasm_sync`'s mutex, which spins there. Once-cells both can reach (the
+(`util::sync`). The zone grid's precheck memo, and the app's Main RNG cell,
+lock with `wasm_sync`'s mutex, which spins there. Once-cells both can reach (the
 static tables, such as `adjust_for_z_standard`'s) never wait: two threads
 that fill one at once both compute it, and one value is kept. (`wasm_sync`'s own
 once-cell reads the standard library's private state and spins forever on
@@ -396,7 +402,7 @@ Done: drawing reads the presentation frame and the world copy only; the
 world the simulation thread ticks shares no storage with them (the read-only
 `SimResources` aside). Entities, the zone grid, fog planes and team script
 definitions are no longer copy-on-write. The app and the simulation draw
-separate Main RNG cells.
+separate Main RNG generators.
 
 Not done:
 

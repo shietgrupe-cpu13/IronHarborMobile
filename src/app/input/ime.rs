@@ -51,8 +51,7 @@ pub(crate) const COMPOSITION_RGB: [u8; 3] = [0x9F, 0x9F, 0x00];
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ImeTarget {
     InGameChat,
-    WolLogin,
-    WolLobbyChat,
+    WolLobbyEdit,
     SetupChat,
     LanLobbyChat,
     ChooseMapSearch,
@@ -78,6 +77,13 @@ impl ImeState {
     pub(crate) fn composition(&self, target: ImeTarget) -> Option<(&[u16], usize)> {
         (self.target == Some(target) && !self.composition.is_empty())
             .then_some((self.composition.as_slice(), self.cursor))
+    }
+
+    /// The open composition and its cursor, whichever edit owns it (the
+    /// focused edit of the screen that routed the input method).
+    pub(crate) fn open_composition(&self) -> Option<(&[u16], usize)> {
+        let target = self.target?;
+        self.composition(target)
     }
 
     /// While a composition is open, keys go to the input method (Windows
@@ -116,12 +122,8 @@ fn target(state: &AppState) -> Option<(ImeTarget, RectPx)> {
             crate::app::input::multiplayer_setup::ime_chat_rect(state),
         ),
         (
-            ImeTarget::WolLogin,
-            crate::app::shell_wol::ime_login_rect(state),
-        ),
-        (
-            ImeTarget::WolLobbyChat,
-            crate::app::shell_wol::lobby::ime_chat_rect(state),
+            ImeTarget::WolLobbyEdit,
+            crate::app::shell_wol::lobby::ime_edit_rect(state),
         ),
         (
             ImeTarget::ChooseMapSearch,
@@ -202,12 +204,11 @@ pub(crate) fn event(state: &mut AppState, event: Ime) {
 fn commit(state: &mut AppState, text: &str) {
     match target(state).map(|(target, _)| target) {
         Some(ImeTarget::InGameChat) => crate::app::input::chat::commit_text(state, text),
-        Some(ImeTarget::WolLogin) => crate::app::shell_wol::ime_login_text(state, text),
         Some(ImeTarget::LanLobbyChat) => crate::app::shell_lan::key_press(state, None, Some(text)),
         Some(ImeTarget::SetupChat) => {
             crate::app::input::multiplayer_setup::key_press(state, None, Some(text))
         }
-        Some(ImeTarget::WolLobbyChat) => {
+        Some(ImeTarget::WolLobbyEdit) => {
             crate::app::shell_wol::lobby::key_press(state, None, Some(text))
         }
         Some(ImeTarget::ChooseMapSearch) => {

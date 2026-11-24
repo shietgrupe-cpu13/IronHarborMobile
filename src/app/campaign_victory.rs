@@ -277,20 +277,6 @@ impl App {
                     .map(str::to_owned)
             }),
         );
-        if let (Some(config), Some(mission)) = (
-            state.platform.game_config.as_ref(),
-            sim.session().campaign_mission_counter(),
-        ) {
-            if let Err(error) = crate::app::campaign_progress::record_completed_mission(
-                &config.paths.user_data_root(),
-                config.ini.profile,
-                campaign.campaign().id(),
-                mission,
-                matches!(&branch, VictoryBranch::Credits),
-            ) {
-                log::warn!("Could not update launcher campaign progress: {error:#}");
-            }
-        }
         let then = match branch {
             VictoryBranch::Shell => VictoryEnd::Shell,
             VictoryBranch::Credits => VictoryEnd::Credits,
@@ -340,26 +326,25 @@ impl App {
                         None
                     }
                 };
-                match (scenario, sim.session().campaign_mission_counter()) {
-                    (Some(scenario), Some(counter)) => {
-                        let startup = Box::new(campaign.next_mission(
-                            scenario,
-                            counter + 1,
-                            state.persistence.options_profile.difficulty,
-                            sim.session().game_options().game_speed,
-                            sim.save_campaign_carry_over(),
-                            &mut crate::app::match_bootstrap::OrdinaryMatchSeedClock,
-                        ));
-                        if init_failed {
-                            VictoryEnd::MapSelectFailed(startup)
-                        } else {
-                            VictoryEnd::NextMission {
-                                startup,
-                                rearm_initial_save: !skip,
-                            }
-                        }
-                    }
-                    _ => VictoryEnd::Shell,
+                // A name that is no map name starts nothing, as a MapSelect fault.
+                let startup = match (scenario, sim.session().campaign_mission_counter()) {
+                    (Some(scenario), Some(counter)) => campaign.next_mission(
+                        scenario,
+                        counter + 1,
+                        state.persistence.options_profile.difficulty,
+                        sim.session().game_options().game_speed,
+                        sim.save_campaign_carry_over(),
+                        &mut crate::app::match_bootstrap::OrdinaryMatchSeedClock,
+                    ),
+                    _ => None,
+                };
+                match startup.map(Box::new) {
+                    Some(startup) if init_failed => VictoryEnd::MapSelectFailed(startup),
+                    Some(startup) => VictoryEnd::NextMission {
+                        startup,
+                        rearm_initial_save: !skip,
+                    },
+                    None => VictoryEnd::Shell,
                 }
             }
         };
@@ -396,27 +381,24 @@ impl App {
                 // ShellMessageBox5D3490 with MSG:UnableMapSelect/TXT_OK.
                 // Victory685A56 ignores its result and proceeds after any
                 // dismissal. Failed Init never reaches5AE126's ABCE08 write.
-                let labels =
-                    crate::ui::main_menu_dialogs::ShellMessageBoxLabels::map_select_failure(
-                        &|key, fallback| Self::csf_label(state, key, fallback),
-                    );
+                let shell_box =
+                    crate::ui::main_menu_dialogs::map_select_failure(&|key, fallback| {
+                        state.csf_label(key, fallback)
+                    });
                 Self::destroy_current_shell_dialog(state);
                 state.frontend.shell_route = crate::app::shell_route::ShellRoute::MainMenu;
                 Self::open_shell_message_box(
                     state,
-                    crate::app::frontend::state::ShellMessageBox {
-                        labels,
-                        purpose:
-                            crate::app::frontend::state::ShellMessageBoxPurpose::CampaignVictory(
-                                Box::new(CampaignVictory {
-                                    movies: VecDeque::new(),
-                                    then: VictoryEnd::NextMission {
-                                        startup,
-                                        rearm_initial_save: false,
-                                    },
-                                }),
-                            ),
-                    },
+                    shell_box,
+                    crate::app::frontend::state::ShellMessageBoxPurpose::CampaignVictory(Box::new(
+                        CampaignVictory {
+                            movies: VecDeque::new(),
+                            then: VictoryEnd::NextMission {
+                                startup,
+                                rearm_initial_save: false,
+                            },
+                        },
+                    )),
                 );
             }
             VictoryEnd::NextMission {
@@ -767,14 +749,16 @@ Scenario=ALL03umd.MAP
                             next.eq_ignore_ascii_case(&format!("{}.MAP", pair[1])),
                             "{current} -> {next}"
                         );
-                        startup = startup.next_mission(
-                            next,
-                            startup.mission_counter() + 1,
-                            1,
-                            3,
-                            crate::sim::campaign_carry_over::CampaignCarryOver::CLEARED,
-                            &mut clock,
-                        );
+                        startup = startup
+                            .next_mission(
+                                next,
+                                startup.mission_counter() + 1,
+                                1,
+                                3,
+                                crate::sim::campaign_carry_over::CampaignCarryOver::CLEARED,
+                                &mut clock,
+                            )
+                            .expect("a retail mission name");
                         let mut metadata =
                             crate::rules::campaign_loading::CampaignLoadingMetadata::default();
                         metadata.apply_ini(&mission.ini, startup.scenario());

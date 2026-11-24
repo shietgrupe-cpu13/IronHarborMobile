@@ -5,6 +5,7 @@ use crate::map::entities::EntityCategory;
 use crate::map::resolved_terrain::ResolvedTerrainGrid;
 use crate::rules::ini_parser::IniFile;
 use crate::rules::object_type::ObjectCategory;
+use crate::rules::rule_policy::RulePolicy;
 use crate::rules::team_ai_ini::TeamAiDefinitionSource;
 use crate::sim::entity_store::EntityStore;
 use crate::sim::game_entity::GameEntity;
@@ -13,6 +14,7 @@ use crate::sim::intern::{test_intern, test_interner};
 use crate::sim::pathfinding::PathGrid;
 use crate::sim::pathfinding::zone_map::ZoneGrid;
 use crate::sim::rng::SimRng;
+use crate::sim::scenario_session::ScenarioGameMode;
 use crate::sim::team_script_vm::{
     TeamMemberTypeIdentity, TeamScriptAction, TeamScriptDefinition, TeamScriptMember,
     TeamTaskForceDefinition, TeamTaskForceEntry, TeamTypeDefinition,
@@ -102,13 +104,73 @@ fn response_defender(id: u64, type_name: &str, x: u16) -> GameEntity {
 /// The victim building (1) calls for help against the attacker (2).
 fn respond(sim: &mut Simulation, rules: &RuleSet) {
     sim.interner = test_interner();
-    respond_to_base_attack(sim, rules, 1, 2, crate::sim::world::FrameEffects::default());
+    respond_to_base_attack(
+        sim,
+        rules,
+        1,
+        2,
+        &mut crate::sim::world::FrameEffects::default(),
+    );
+}
+
+#[test]
+fn armed_victim_can_skip_base_defense_without_writing_the_attacker_cooldown() {
+    let rules = RuleSet::from_ini(&IniFile::from_str(concat!(
+        "[General]\nBaseDefenseDelay=.25\n[AI]\nComputerBaseDefenseResponse=-1\n",
+        "[VehicleTypes]\n0=ATTACKER\n[ATTACKER]\nStrength=100\nThreatPosed=50\n",
+        "[BuildingTypes]\n0=VICTIM\n[VICTIM]\nStrength=100\nPrimary=GUN\n",
+        "[GUN]\nDamage=10\nRange=5\nWarhead=HE\n[HE]\n"
+    )))
+    .unwrap();
+    let campaign_calls_for_help =
+        RulePolicy::stock_campaign().with_uses_campaign_base_defense(false);
+    for (mode, policy, responds) in [
+        (
+            ScenarioGameMode::Campaign,
+            RulePolicy::stock_campaign(),
+            false,
+        ),
+        (
+            ScenarioGameMode::Skirmish,
+            RulePolicy::stock_multiplayer(),
+            true,
+        ),
+        (ScenarioGameMode::Campaign, campaign_calls_for_help, true),
+    ] {
+        let mut sim = response_world(41, (5, 0));
+        sim.session.install_admission(mode, None, policy);
+        let before = sim
+            .substrate
+            .entities
+            .get(2)
+            .unwrap()
+            .seldom
+            .base_defense_response
+            .cooldown();
+        respond(&mut sim, &rules);
+        let after = sim
+            .substrate
+            .entities
+            .get(2)
+            .unwrap()
+            .seldom
+            .base_defense_response
+            .cooldown();
+        assert_eq!(
+            after,
+            if responds {
+                CdTimer::started(41, 225)
+            } else {
+                before
+            },
+            "{mode:?}"
+        );
+    }
 }
 
 #[test]
 fn retail_player_control_on_a_building_hit_suppresses_only_campaign_ai_response() {
     use crate::sim::combat::{EntityDamageEvent, ReceiverCallFlags};
-    use crate::sim::scenario_session::ScenarioGameMode;
 
     let Some((_, assets)) = crate::rules::retail_ini_fixture::retail_assets() else {
         return;
@@ -167,7 +229,7 @@ fn retail_player_control_on_a_building_hit_suppresses_only_campaign_ai_response(
                     arg6: false,
                 },
             ),
-            FrameEffects::default(),
+            &mut FrameEffects::default(),
         );
         assert!(sim.substrate.entities.get(victim).unwrap().health.current() < health);
         let defender = sim.substrate.entities.get(defender).unwrap();
@@ -321,6 +383,7 @@ fn gsi_04_05_zero_budget_still_suspends_low_priority_teams_before_scan_exit() {
             .entities
             .get(2)
             .unwrap()
+            .seldom
             .base_defense_response
             .cooldown,
         CdTimer::from_raw(-1, 0)
@@ -380,7 +443,7 @@ fn gsi_04_05_positive_transaction_queues_in_order_and_arms_only_on_overshoot() {
     );
     let attacker = sim.substrate.entities.get(2).unwrap();
     assert_eq!(
-        attacker.base_defense_response.cooldown,
+        attacker.seldom.base_defense_response.cooldown,
         CdTimer::started(41, 225)
     );
 }
@@ -423,7 +486,12 @@ fn gsi_04_05_a_negative_budget_starts_the_cooldown_without_an_assignment() {
         let entities = &sim.substrate.entities;
         assert_eq!(entities.get(3).unwrap().archive_target(), None);
         assert_eq!(
-            entities.get(2).unwrap().base_defense_response.cooldown,
+            entities
+                .get(2)
+                .unwrap()
+                .seldom
+                .base_defense_response
+                .cooldown,
             expected_cooldown,
             "response {response}, defender ThreatPosed {defender_threat}"
         );
@@ -706,7 +774,7 @@ fn run_native_bridge_response_seams(victim_is_slave: bool) {
             .entities
             .insert(native::candidate(&row["victim"], 1, "VICTIM"));
         if victim_is_slave {
-            sim.substrate.entities.get_mut(1).unwrap().slave =
+            sim.substrate.entities.get_mut(1).unwrap().seldom.slave =
                 crate::sim::slave_manager::SlaveLink::for_test(Some(99), Vec::new());
         }
         sim.substrate
@@ -861,7 +929,7 @@ fn retail_bridge_base_response_runs_through_the_protected_damage_receiver() {
                     arg6: false,
                 },
             ),
-            crate::sim::world::FrameEffects::default(),
+            &mut crate::sim::world::FrameEffects::default(),
         );
         assert!(
             sim.substrate.entities.get(victim).unwrap().health.current() < health,

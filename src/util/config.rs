@@ -9,6 +9,17 @@
 //! ## Dependency rules
 //! - config.rs is part of util/ â€” no dependencies on game modules.
 
+// Outside data reaches this module: it refuses bad input, never panics.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable
+    )
+)]
+
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
@@ -88,28 +99,7 @@ impl PathsConfig {
     /// random-map dialog's files, so nothing is written into the retail
     /// installation (`map::source::keep_received_map`, `random_map_dir`).
     pub fn downloaded_maps_dir(&self) -> PathBuf {
-        self.user_data_root().join("Maps")
-    }
-
-    /// Shared folders beside Android's Config directory; desktop installs keep
-    /// the historical settings-root layout.
-    pub fn user_data_root(&self) -> PathBuf {
-        #[cfg(target_os = "android")]
-        if self
-            .settings_dir
-            .file_name()
-            .is_some_and(|name| name == "Config")
-        {
-            if let Some(parent) = self.settings_dir.parent() {
-                return parent.to_path_buf();
-            }
-        }
-        self.settings_dir.clone()
-    }
-
-    /// Shared Ares archive support belongs alongside managed mod folders.
-    pub fn ares_support_dir(&self) -> PathBuf {
-        self.user_data_root().join("Mods").join("AresSupport")
+        self.settings_dir.join("Maps")
     }
 
     /// VERA's folder of mods, one subfolder each (docs/modding.md).
@@ -124,7 +114,7 @@ impl PathsConfig {
         )) {
             return PathBuf::from(WEB_MODS_DIR);
         }
-        self.user_data_root().join("Mods")
+        self.settings_dir.join("Mods")
     }
 
     /// The mod folder's name this launch asks for; `None` is the original game.
@@ -135,10 +125,15 @@ impl PathsConfig {
     /// VERA's own pictures of maps for the setup screens' previews, by each
     /// map's SHA-256 (`app::map_picture`).
     pub fn map_pictures_dir(&self) -> PathBuf {
-        #[cfg(target_os = "android")]
-        return self.user_data_root().join("Maps").join(".previews");
-        #[cfg(not(target_os = "android"))]
         self.settings_dir.join("MapPreviews")
+    }
+
+    /// VERA's folder of player-supplied background music. Files here are
+    /// auto-indexed for in-match theme playback when `musics/music.ini`
+    /// enables it (`audio::custom_music`). Kept beside VERA.INI, never in the
+    /// retail installation, like [`Self::downloaded_maps_dir`].
+    pub fn musics_dir(&self) -> PathBuf {
+        self.settings_dir.join("musics")
     }
 
     fn separate_settings_from_assets(&mut self) -> Result<()> {
@@ -169,8 +164,8 @@ pub fn default_settings_dir() -> Result<PathBuf> {
 pub fn default_settings_dir() -> Result<PathBuf> {
     // Android has neither HOME nor a writable working directory at start-up;
     // the cdylib hands its `internal_data_path` over before anything reads a
-    // setting, and that folder is also where config.toml, VERA.INI, saves and
-    // logs live once app_bundle has entered it.
+    // setting. The launcher may point it at Documents/RA2Harbor, while the
+    // config itself remains in that root's Config subfolder.
     crate::util::platform_dir::get()
         .map(Path::to_path_buf)
         .context("no Android data directory: android_main must call entry::adopt_android_data_dir")
@@ -221,16 +216,11 @@ fn resolved_directory(path: &Path) -> PathBuf {
     }
 }
 
-/// Camera controls may range only within the engine's established zoom scale.
-pub const CAMERA_ZOOM_SUPPORTED_MIN: f32 = 0.25;
-pub const CAMERA_ZOOM_SUPPORTED_MAX: f32 = 4.0;
-
 /// Graphics settings.
 ///
 /// Every field has a sensible default so `[graphics]` can be omitted entirely.
-/// Whole-frame zoom and the original 4:3 shape are player choices on the
-/// Options page, saved in VERA.INI, not here. Tactical camera zoom limits are
-/// presentation bounds stored here. So is VSync
+/// Full screen, zoom and the original 4:3 shape are player choices on the
+/// Options page, saved in VERA.INI, not here. So is VSync
 /// (`[VERA] VSync=`), so an old config's `vsync` line is ignored.
 #[derive(Debug)]
 pub struct GraphicsConfig {
@@ -242,25 +232,27 @@ pub struct GraphicsConfig {
     /// VERA presentation option: show terrain through translucent fog while
     /// concealing unseen enemy objects. Off by default for the retail look.
     pub translucent_fog: bool,
-    /// Presentation-only tactical camera bounds, persisted in config.toml.
+    /// VERA presentation option: draw buildings on terrain level 15 and up at
+    /// their tile row (`locomotor_visual::building_terrain_correction`). Off
+    /// by default: the original game draws them 1-2 px lower.
+    pub high_terrain_building_lift: bool,
+    /// Presentation-only tactical camera zoom bounds. They never affect the
+    /// deterministic simulation state or synchronized commands.
     pub camera_zoom_min: f32,
     pub camera_zoom_max: f32,
-    /// Percentage of the physical surface used for the world-only render target.
-    /// Screen-space UI continues to use the full surface resolution.
-    pub render_scale_percent: u8,
-    /// Local presentation cap; zero leaves the renderer's existing pacing in place.
-    pub fps_limit: u16,
 }
+
+pub const CAMERA_ZOOM_SUPPORTED_MIN: f32 = 0.25;
+pub const CAMERA_ZOOM_SUPPORTED_MAX: f32 = 4.0;
 
 impl Default for GraphicsConfig {
     fn default() -> Self {
         Self {
             extra_animations: true,
             translucent_fog: false,
+            high_terrain_building_lift: false,
             camera_zoom_min: 0.75,
             camera_zoom_max: 2.0,
-            render_scale_percent: 100,
-            fps_limit: 0,
         }
     }
 }
@@ -298,6 +290,12 @@ pub const fn default_input_delay_ticks() -> u32 {
 }
 
 impl GameConfig {
+    /// Parse a launcher-managed config beside its destination path.
+    pub fn parse_text_at(contents: &str, path: &Path) -> Result<Self> {
+        let mut config = Self::parse_from(contents, path)?;
+        config.apply_ra2_launch();
+        Ok(config)
+    }
     #[cfg(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown"))]
     pub fn load() -> Result<Self> {
         let path = Path::new("/config.toml");
@@ -359,46 +357,62 @@ impl GameConfig {
 
     /// [`GameConfig::load`] for a process with this working directory and executable.
     pub fn load_from(working_dir: &Path, executable: &Path) -> Result<Self> {
-        for path in config_candidates(working_dir, executable)? {
-            match crate::util::file_system::read(&path) {
-                Ok(bytes) => {
-                    let contents = String::from_utf8(bytes)
-                        .map_err(|error| {
-                            anyhow::anyhow!(
-                                "the file is not UTF-8 text (invalid byte at offset {}); \
-                                 save it as UTF-8",
-                                error.utf8_error().valid_up_to()
-                            )
-                        })
-                        .context(ConfigFileError::read(&path))?;
-                    return Self::parse_from(&contents, &path);
+        let mut config = 'load: {
+            for path in config_candidates(working_dir, executable)? {
+                match crate::util::file_system::read(&path) {
+                    Ok(bytes) => {
+                        let contents = String::from_utf8(bytes)
+                            .map_err(|error| {
+                                anyhow::anyhow!(
+                                    "the file is not UTF-8 text (invalid byte at offset {}); \
+                                     save it as UTF-8",
+                                    error.utf8_error().valid_up_to()
+                                )
+                            })
+                            .context(ConfigFileError::read(&path))?;
+                        break 'load Self::parse_from(&contents, &path)?;
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(err) => return Err(err).context(ConfigFileError::read(&path)),
                 }
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-                Err(err) => return Err(err).context(ConfigFileError::read(&path)),
             }
+            let root = retail_asset_root_from_executable(executable)?;
+            log::info!(
+                "No {}; using retail executable directory: {}",
+                CONFIG_FILE_NAME,
+                root.display()
+            );
+            Self::from_retail_asset_root(root)?
+        };
+        config.apply_ra2_launch();
+        Ok(config)
+    }
+
+    /// VERA: RA2 mode for this launch, once VERA.INI has been read: the
+    /// `-ra2` switch already recorded, or the player's saved Options choice
+    /// (`[VERA] RA2Mode=`, `saved_choice`). Either turns it on for the whole
+    /// process (`util::ra2_launch`) and selects its INI roots.
+    pub fn use_ra2_mode(&mut self, saved_choice: bool) {
+        if saved_choice {
+            crate::util::ra2_launch::set(true);
         }
-        let root = retail_asset_root_from_executable(executable)?;
-        log::info!(
-            "No {}; using retail executable directory: {}",
-            CONFIG_FILE_NAME,
-            root.display()
-        );
-        Self::from_retail_asset_root(root)
+        self.apply_ra2_launch();
+    }
+
+    /// RA2 mode replaces the whole `[ini]` policy with the fixed non-md roots.
+    /// It wins over anything in config.toml so a single switch is sufficient.
+    fn apply_ra2_launch(&mut self) {
+        if crate::util::ra2_launch::enabled() {
+            log::info!("-ra2 launch: selecting original RA2 non-md INI roots");
+            self.ini = crate::util::ini_roots::IniRootConfig {
+                profile: crate::util::ini_roots::IniProfile::Ra2,
+                ..Default::default()
+            };
+        }
     }
 
     fn parse_from(contents: &str, path: &Path) -> Result<Self> {
-        Self::parse_text_at(contents, path)
-    }
-
-    /// Parse a config string with the same relative-path and settings-root
-    /// semantics as a file at `path`. Android's launcher uses this to validate
-    /// a proposed config before atomically publishing it.
-    pub fn parse_text_at(contents: &str, path: &Path) -> Result<Self> {
-        let mut config = Self::parse_with_default_settings_dir(
-            contents,
-            Some(path.parent().unwrap_or_else(|| Path::new(".")).to_owned()),
-        )
-        .context(ConfigFileError {
+        let mut config = Self::parse(contents).context(ConfigFileError {
             path: path.to_owned(),
             parse: true,
         })?;
@@ -416,6 +430,13 @@ impl GameConfig {
                 *path = directory.join(&*path);
             }
         }
+        #[cfg(target_os = "android")]
+        {
+            let android_data_dir = crate::util::platform_dir::get()
+                .map(Path::to_path_buf)
+                .or_else(|| android_data_root_from_config_path(path));
+            normalize_android_settings_dir(&mut config, android_data_dir.as_deref());
+        }
         config.paths.separate_settings_from_assets()?;
 
         log::info!("Loaded config from {}", path.display());
@@ -429,19 +450,6 @@ impl GameConfig {
     /// whole numbers. Other keys and sections are skipped without reading their
     /// values, so old configs with retired keys (`vsync`, `sim_tick_hz`) load.
     fn parse(contents: &str) -> Result<Self> {
-        Self::parse_with_default_settings_dir(contents, None)
-    }
-
-    /// Validate serialized config without consulting platform paths or reading
-    /// user files. Used by the Android launcher before publishing a selection.
-    pub fn validate_config_text(contents: &str) -> Result<()> {
-        Self::parse_with_default_settings_dir(contents, Some(PathBuf::new())).map(|_| ())
-    }
-
-    fn parse_with_default_settings_dir(
-        contents: &str,
-        fallback_settings_dir: Option<PathBuf>,
-    ) -> Result<Self> {
         let mut ra2_dir = None;
         let mut settings_dir = None;
         let mut mod_name = None;
@@ -486,28 +494,15 @@ impl GameConfig {
                 ("graphics", "translucent_fog") => {
                     parse_bool(value).map(|on| graphics.translucent_fog = on)
                 }
+                ("graphics", "high_terrain_building_lift") => {
+                    parse_bool(value).map(|on| graphics.high_terrain_building_lift = on)
+                }
                 ("graphics", "camera_zoom_min") => {
                     parse_f32(value).map(|zoom| graphics.camera_zoom_min = zoom)
                 }
                 ("graphics", "camera_zoom_max") => {
                     parse_f32(value).map(|zoom| graphics.camera_zoom_max = zoom)
                 }
-                ("graphics", "render_scale_percent") => parse_u32(value).and_then(|percent| {
-                    ensure!(
-                        (50..=100).contains(&percent) && percent % 5 == 0,
-                        "render_scale_percent must be 50..=100 in 5% steps"
-                    );
-                    graphics.render_scale_percent = percent as u8;
-                    Ok(())
-                }),
-                ("graphics", "fps_limit") => parse_u32(value).and_then(|fps| {
-                    ensure!(
-                        [0, 30, 60, 120].contains(&fps),
-                        "fps_limit must be 0 (engine default), 30, 60, or 120"
-                    );
-                    graphics.fps_limit = fps as u16;
-                    Ok(())
-                }),
                 ("gameplay", "input_delay_ticks") => {
                     parse_u32(value).map(|ticks| gameplay.input_delay_ticks = ticks)
                 }
@@ -540,6 +535,7 @@ impl GameConfig {
             read.with_context(|| format!("line {line_number}: [{section}] {key}"))?;
         }
         let ra2_dir = ra2_dir.context("missing `ra2_dir` in [paths]")?;
+        ini.validate().map_err(anyhow::Error::msg)?;
         ensure!(
             graphics.camera_zoom_min.is_finite()
                 && graphics.camera_zoom_max.is_finite()
@@ -548,30 +544,14 @@ impl GameConfig {
                 && (CAMERA_ZOOM_SUPPORTED_MIN..=CAMERA_ZOOM_SUPPORTED_MAX)
                     .contains(&graphics.camera_zoom_max)
                 && graphics.camera_zoom_min <= graphics.camera_zoom_max,
-            "[graphics] camera zoom limits must be finite, within 0.25..=4.0, and minimum must not exceed maximum"
+            "camera zoom limits must be finite, within 0.25..=4.0, and minimum must not exceed maximum"
         );
-        ensure!(
-            (50..=100).contains(&graphics.render_scale_percent)
-                && graphics.render_scale_percent % 5 == 0,
-            "[graphics] render_scale_percent must be 50..=100 in 5% steps"
-        );
-        ensure!(
-            [0, 30, 60, 120].contains(&u32::from(graphics.fps_limit)),
-            "[graphics] fps_limit must be 0 (engine default), 30, 60, or 120"
-        );
-        ini.validate().map_err(anyhow::Error::msg)?;
         Ok(Self {
             ini,
             paths: PathsConfig {
                 legacy_settings_dir: settings_dir.clone().unwrap_or_else(|| ra2_dir.clone()),
                 ra2_dir,
-                settings_dir: match settings_dir {
-                    Some(directory) => directory,
-                    None => match fallback_settings_dir {
-                        Some(directory) => directory,
-                        None => default_settings_dir()?,
-                    },
-                },
+                settings_dir: settings_dir.map_or_else(default_settings_dir, Ok)?,
                 mod_name,
             },
             graphics,
@@ -603,17 +583,61 @@ impl GameConfig {
 /// (`# key = …`), else the line goes under the first `[paths]` header, or into
 /// a new `[paths]` section at the end. Every other line is kept.
 pub fn set_paths_key(contents: &str, key: &str, value: &str) -> String {
-    set_config_string_key(contents, "paths", key, value)
+    let contents = contents.strip_prefix('\u{feff}').unwrap_or(contents);
+    let newline = if contents.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let assigns = |line: &str| {
+        line.split_once('=')
+            .is_some_and(|(name, _)| name.trim() == key)
+    };
+    let mut lines: Vec<String> = contents.lines().map(str::to_owned).collect();
+    let (mut header, mut assigned, mut example) = (None, None, None);
+    let mut section = "";
+    for (index, line) in lines.iter().enumerate() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            section = section_name(line).unwrap_or_default();
+            if section == "paths" && header.is_none() {
+                header = Some(index);
+            }
+            continue;
+        }
+        if section != "paths" {
+            continue;
+        }
+        match line.strip_prefix('#') {
+            Some(comment) if example.is_none() && assigns(comment) => example = Some(index),
+            Some(_) => {}
+            None if assigns(line) => assigned = Some(index),
+            None => {}
+        }
+    }
+    let assignment = format!("{key} = {}", basic_string(value));
+    match (assigned.or(example), header) {
+        (Some(index), _) => lines[index] = assignment,
+        (None, Some(index)) => lines.insert(index + 1, assignment),
+        (None, None) => {
+            if lines.last().is_some_and(|line| !line.trim().is_empty()) {
+                lines.push(String::new());
+            }
+            lines.push("[paths]".to_owned());
+            lines.push(assignment);
+        }
+    }
+    let mut text = lines.join(newline);
+    text.push_str(newline);
+    text
 }
 
-/// Set the engine's persisted tactical camera bounds without dropping other settings.
+/// Persist user-selected camera limits through the engine's config parser.
 pub fn set_camera_zoom_limits(contents: &str, minimum: f32, maximum: f32) -> Result<String> {
     ensure!(
-        minimum.is_finite() && maximum.is_finite(),
-        "camera zoom limits must be finite"
-    );
-    ensure!(
-        (CAMERA_ZOOM_SUPPORTED_MIN..=CAMERA_ZOOM_SUPPORTED_MAX).contains(&minimum)
+        minimum.is_finite()
+            && maximum.is_finite()
+            && (CAMERA_ZOOM_SUPPORTED_MIN..=CAMERA_ZOOM_SUPPORTED_MAX).contains(&minimum)
             && (CAMERA_ZOOM_SUPPORTED_MIN..=CAMERA_ZOOM_SUPPORTED_MAX).contains(&maximum)
             && minimum <= maximum,
         "camera zoom limits must be within 0.25..=4.0 and minimum must not exceed maximum"
@@ -632,74 +656,6 @@ pub fn set_camera_zoom_limits(contents: &str, minimum: f32, maximum: f32) -> Res
     ))
 }
 
-/// Set the world render scale and local presentation FPS limit.
-pub fn set_render_options(contents: &str, percent: u8, fps_limit: u16) -> Result<String> {
-    ensure!(
-        (50..=100).contains(&percent) && percent % 5 == 0,
-        "render scale must be 50..=100 in 5% steps"
-    );
-    ensure!(
-        [0, 30, 60, 120].contains(&fps_limit),
-        "FPS limit must be engine default, 30, 60, or 120"
-    );
-    let contents = set_config_value_key(
-        contents,
-        "graphics",
-        "render_scale_percent",
-        &percent.to_string(),
-    );
-    Ok(set_config_value_key(
-        &contents,
-        "graphics",
-        "fps_limit",
-        &fps_limit.to_string(),
-    ))
-}
-
-/// Read launcher render options without requiring an installation path.
-pub fn render_options_from_text(contents: &str) -> Result<(u8, u16)> {
-    let mut percent = 100_u32;
-    let mut fps_limit = 0_u32;
-    let mut section = "";
-    for (index, raw) in contents
-        .strip_prefix('\u{feff}')
-        .unwrap_or(contents)
-        .lines()
-        .enumerate()
-    {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        if line.starts_with('[') {
-            section = section_name(line)
-                .with_context(|| format!("line {}: invalid section", index + 1))?;
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        if section == "graphics" {
-            match key.trim() {
-                "render_scale_percent" => percent = parse_u32(value.trim())?,
-                "fps_limit" => fps_limit = parse_u32(value.trim())?,
-                _ => {}
-            }
-        }
-    }
-    ensure!(
-        (50..=100).contains(&percent) && percent % 5 == 0,
-        "render scale must be 50..=100 in 5% steps"
-    );
-    ensure!(
-        [0, 30, 60, 120].contains(&fps_limit),
-        "FPS limit must be engine default, 30, 60, or 120"
-    );
-    Ok((percent as u8, fps_limit as u16))
-}
-
-/// Read the launcher-owned camera range without requiring a game folder to be
-/// configured yet. Missing values use the same defaults as `GraphicsConfig`.
 pub fn camera_zoom_limits_from_text(contents: &str) -> Result<(f32, f32)> {
     let mut minimum = GraphicsConfig::default().camera_zoom_min;
     let mut maximum = GraphicsConfig::default().camera_zoom_max;
@@ -736,58 +692,92 @@ pub fn camera_zoom_limits_from_text(contents: &str) -> Result<(f32, f32)> {
             && (CAMERA_ZOOM_SUPPORTED_MIN..=CAMERA_ZOOM_SUPPORTED_MAX).contains(&minimum)
             && (CAMERA_ZOOM_SUPPORTED_MIN..=CAMERA_ZOOM_SUPPORTED_MAX).contains(&maximum)
             && minimum <= maximum,
-        "camera zoom limits must be finite, within 0.25..=4.0, and minimum must not exceed maximum"
+        "camera zoom limits must be within 0.25..=4.0 and minimum must not exceed maximum"
     );
     Ok((minimum, maximum))
 }
-/// Set the INI root profile without discarding any existing custom roots or
-/// unrelated configuration. The engine reads this on its next initialization.
+
+/// Store Android launcher's experimental render scale and frame cap choices.
+/// These values are persisted for UI continuity; the Android engine does not
+/// currently apply render scaling or a custom frame cap at runtime.
+pub fn set_render_options(contents: &str, percent: u8, fps_limit: u16) -> Result<String> {
+    ensure!(
+        (50..=100).contains(&percent) && percent % 5 == 0,
+        "render scale must be 50..=100 in 5% steps"
+    );
+    ensure!(
+        [0, 30, 60, 120].contains(&fps_limit),
+        "FPS limit must be default, 30, 60, or 120"
+    );
+    let contents = set_config_value_key(
+        contents,
+        "graphics",
+        "render_scale_percent",
+        &percent.to_string(),
+    );
+    Ok(set_config_value_key(
+        &contents,
+        "graphics",
+        "fps_limit",
+        &fps_limit.to_string(),
+    ))
+}
+
+pub fn render_options_from_text(contents: &str) -> Result<(u8, u16)> {
+    let mut percent = 100_u32;
+    let mut fps_limit = 0_u32;
+    let mut section = "";
+    for (index, raw) in contents
+        .strip_prefix('\u{feff}')
+        .unwrap_or(contents)
+        .lines()
+        .enumerate()
+    {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with('[') {
+            section = section_name(line)
+                .with_context(|| format!("line {}: invalid section", index + 1))?;
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if section == "graphics" {
+            let parsed = bare_value(value.trim())
+                .parse::<u32>()
+                .with_context(|| format!("line {}: invalid graphics value", index + 1))?;
+            match key.trim() {
+                "render_scale_percent" => percent = parsed,
+                "fps_limit" => fps_limit = parsed,
+                _ => {}
+            }
+        }
+    }
+    ensure!(
+        (50..=100).contains(&percent) && percent % 5 == 0,
+        "render scale must be 50..=100 in 5% steps"
+    );
+    ensure!(
+        [0, 30, 60, 120].contains(&fps_limit),
+        "FPS limit must be default, 30, 60, or 120"
+    );
+    Ok((percent as u8, fps_limit as u16))
+}
+
 pub fn set_ini_profile(contents: &str, profile: crate::util::ini_roots::IniProfile) -> String {
     let name = match profile {
         crate::util::ini_roots::IniProfile::Yr => "yr",
         crate::util::ini_roots::IniProfile::Ra2 => "ra2",
-        crate::util::ini_roots::IniProfile::Mo => "mo",
         crate::util::ini_roots::IniProfile::Auto => "auto",
+        crate::util::ini_roots::IniProfile::Mo => "mo",
         crate::util::ini_roots::IniProfile::Custom => "custom",
     };
-    let contents = set_config_string_key(contents, "ini", "profile", name);
-    if profile == crate::util::ini_roots::IniProfile::Custom {
-        return contents;
-    }
-    // Preset profiles cannot be combined with custom root names. Keep those
-    // values as comments so selecting a preset is reversible and explicit.
-    let mut section = "";
-    contents
-        .lines()
-        .map(|line| {
-            let trimmed = line.trim();
-            if trimmed.starts_with('[') {
-                section = section_name(trimmed).unwrap_or_default();
-                return line.to_owned();
-            }
-            if section == "ini"
-                && !trimmed.starts_with('#')
-                && trimmed
-                    .split_once('=')
-                    .is_some_and(|(key, _)| matches!(key.trim(), "rules" | "art" | "ai"))
-            {
-                format!("# {}", trimmed)
-            } else {
-                line.to_owned()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(if contents.contains("\r\n") {
-            "\r\n"
-        } else {
-            "\n"
-        })
-        + if contents.ends_with('\n') { "\n" } else { "" }
+    set_config_string_key(contents, "ini", "profile", name)
 }
 
-/// Persist a complete resolved INI root set without discarding other config
-/// sections. Used by the Android launcher so its preflight and engine startup
-/// consume the same names produced by a mod's `[Files]` manifest.
 pub fn set_ini_root_config(
     contents: &str,
     roots: &crate::util::ini_roots::IniRootConfig,
@@ -814,34 +804,26 @@ pub fn set_ini_root_config(
     contents
 }
 
-/// Set one string in a config section while keeping the other lines intact.
-fn set_config_string_key(contents: &str, target_section: &str, key: &str, value: &str) -> String {
-    set_config_value_key(contents, target_section, key, &basic_string(value))
+fn set_config_string_key(contents: &str, section: &str, key: &str, value: &str) -> String {
+    set_config_value_key(contents, section, key, &basic_string(value))
 }
 
-fn set_config_value_key(
-    contents: &str,
-    target_section: &str,
-    key: &str,
-    serialized_value: &str,
-) -> String {
+fn set_config_value_key(contents: &str, target_section: &str, key: &str, value: &str) -> String {
     let contents = contents.strip_prefix('\u{feff}').unwrap_or(contents);
     let newline = if contents.contains("\r\n") {
         "\r\n"
     } else {
         "\n"
     };
-    let assigns = |line: &str| {
-        line.split_once('=')
-            .is_some_and(|(name, _)| name.trim() == key)
-    };
     let mut lines: Vec<String> = contents.lines().map(str::to_owned).collect();
-    let (mut header, mut assigned, mut example) = (None, None, None);
     let mut section = "";
+    let mut header = None;
+    let mut assigned = None;
+    let mut example = None;
     for (index, line) in lines.iter().enumerate() {
-        let line = line.trim();
-        if line.starts_with('[') {
-            section = section_name(line).unwrap_or_default();
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            section = section_name(trimmed).unwrap_or_default();
             if section == target_section && header.is_none() {
                 header = Some(index);
             }
@@ -850,28 +832,52 @@ fn set_config_value_key(
         if section != target_section {
             continue;
         }
-        match line.strip_prefix('#') {
-            Some(comment) if example.is_none() && assigns(comment) => example = Some(index),
-            Some(_) => {}
-            None if assigns(line) => assigned = Some(index),
-            None => {}
-        }
-    }
-    let assignment = format!("{key} = {serialized_value}");
-    match (assigned.or(example), header) {
-        (Some(index), _) => lines[index] = assignment,
-        (None, Some(index)) => lines.insert(index + 1, assignment),
-        (None, None) => {
-            if lines.last().is_some_and(|line| !line.trim().is_empty()) {
-                lines.push(String::new());
+        let candidate = trimmed.strip_prefix('#').map(str::trim).unwrap_or(trimmed);
+        if candidate
+            .split_once('=')
+            .is_some_and(|(name, _)| name.trim() == key)
+        {
+            if trimmed.starts_with('#') {
+                example.get_or_insert(index);
+            } else {
+                assigned = Some(index);
             }
-            lines.push(format!("[{target_section}]"));
-            lines.push(assignment);
         }
     }
-    let mut text = lines.join(newline);
-    text.push_str(newline);
-    text
+    let replacement = format!("{key} = {value}");
+    if let Some(index) = assigned.or(example) {
+        lines[index] = replacement;
+    } else if let Some(index) = header {
+        let insert_at = lines[index + 1..]
+            .iter()
+            .position(|line| line.trim().starts_with('['))
+            .map_or(lines.len(), |offset| index + 1 + offset);
+        lines.insert(insert_at, replacement);
+    } else {
+        if !lines.is_empty() && !lines.last().is_some_and(String::is_empty) {
+            lines.push(String::new());
+        }
+        lines.push(format!("[{target_section}]"));
+        lines.push(replacement);
+    }
+    lines.join(newline)
+        + if contents.ends_with('\n') {
+            newline
+        } else {
+            ""
+        }
+}
+
+fn parse_f32(value: &str) -> Result<f32> {
+    let number = bare_value(value);
+    let parsed: f32 = number
+        .parse()
+        .with_context(|| format!("expected a floating-point number, found `{number}`"))?;
+    ensure!(
+        parsed.is_finite(),
+        "expected a finite floating-point number"
+    );
+    Ok(parsed)
 }
 
 /// The name in a `[section]` header line, or None when it is unterminated.
@@ -961,17 +967,6 @@ fn parse_u32(value: &str) -> Result<u32> {
         )
     })
 }
-fn parse_f32(value: &str) -> Result<f32> {
-    let number = bare_value(value);
-    let parsed: f32 = number
-        .parse()
-        .with_context(|| format!("expected a floating-point number, found `{number}`"))?;
-    ensure!(
-        parsed.is_finite(),
-        "expected a finite floating-point number"
-    );
-    Ok(parsed)
-}
 
 /// An unquoted value: everything before a `#` comment.
 fn bare_value(value: &str) -> &str {
@@ -1013,19 +1008,55 @@ impl std::fmt::Display for ConfigFileError {
 }
 
 /// Where [`GameConfig::load_from`] looks for config.toml, in order: the
-/// working directory, then beside the executable.
-fn config_candidates(working_dir: &Path, executable: &Path) -> Result<[PathBuf; 2]> {
-    let root = retail_asset_root_from_executable(executable)?;
+/// working directory, the Android user-data `Config` folder, then beside the
+/// executable.
+fn config_candidates(working_dir: &Path, executable: &Path) -> Result<Vec<PathBuf>> {
     #[cfg(target_os = "android")]
-    return Ok([
-        working_dir.join("Config").join(CONFIG_FILE_NAME),
-        root.join("Config").join(CONFIG_FILE_NAME),
-    ]);
+    let android_data_dir = crate::util::platform_dir::get();
     #[cfg(not(target_os = "android"))]
-    Ok([
-        working_dir.join(CONFIG_FILE_NAME),
-        root.join(CONFIG_FILE_NAME),
-    ])
+    let android_data_dir = None;
+
+    config_candidates_with_android_data_dir(working_dir, executable, android_data_dir)
+}
+
+fn config_candidates_with_android_data_dir(
+    working_dir: &Path,
+    executable: &Path,
+    android_data_dir: Option<&Path>,
+) -> Result<Vec<PathBuf>> {
+    let executable_dir = retail_asset_root_from_executable(executable)?;
+    let mut candidates = vec![working_dir.join(CONFIG_FILE_NAME)];
+    if let Some(data_dir) = android_data_dir {
+        let android_config = data_dir.join("Config").join(CONFIG_FILE_NAME);
+        if !candidates.contains(&android_config) {
+            candidates.push(android_config);
+        }
+    }
+    let executable_config = executable_dir.join(CONFIG_FILE_NAME);
+    if !candidates.contains(&executable_config) {
+        candidates.push(executable_config);
+    }
+    Ok(candidates)
+}
+
+#[cfg(any(target_os = "android", test))]
+fn normalize_android_settings_dir(config: &mut GameConfig, android_data_dir: Option<&Path>) {
+    let Some(data_dir) = android_data_dir else {
+        return;
+    };
+    let config_dir = data_dir.join("Config");
+    if config.paths.settings_dir == config_dir {
+        config.paths.settings_dir = data_dir.to_path_buf();
+    }
+}
+
+#[cfg(target_os = "android")]
+fn android_data_root_from_config_path(config_path: &Path) -> Option<PathBuf> {
+    let config_dir = config_path.parent()?;
+    config_dir
+        .file_name()?
+        .eq_ignore_ascii_case("Config")
+        .then(|| config_dir.parent().map(Path::to_path_buf))?
 }
 
 /// Return the directory that retail `WinMain` makes its file-search root.
@@ -1045,6 +1076,26 @@ fn retail_asset_root_from_executable(executable: &Path) -> Result<PathBuf> {
 #[cfg(all(test, tests_util))]
 mod tests {
     use super::*;
+    use crate::util::ini_roots::IniProfile;
+
+    #[test]
+    fn camera_zoom_settings_round_trip_and_reject_invalid_bounds() {
+        let original = "[paths]\nra2_dir='retail'\n[graphics]\nextra_animations=false\n";
+        let updated = set_camera_zoom_limits(original, 0.5, 2.5).unwrap();
+        assert!(updated.contains("extra_animations=false"));
+        assert_eq!(camera_zoom_limits_from_text(&updated).unwrap(), (0.5, 2.5));
+        let parsed = GameConfig::parse(&updated).unwrap();
+        assert_eq!(parsed.graphics.camera_zoom_min, 0.5);
+        assert_eq!(parsed.graphics.camera_zoom_max, 2.5);
+        assert!(set_camera_zoom_limits(original, 2.1, 2.0).is_err());
+        assert!(set_camera_zoom_limits(original, f32::NAN, 2.0).is_err());
+        assert!(
+            GameConfig::parse(
+                "[paths]\nra2_dir='retail'\n[graphics]\ncamera_zoom_min=2.1\ncamera_zoom_max=2.0\n"
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn ini_roots_config_defaults_and_profiles_are_explicit() {
@@ -1053,20 +1104,10 @@ mod tests {
             GameConfig::parse(base).unwrap().ini.profile,
             crate::util::ini_roots::IniProfile::Yr
         );
-        assert_eq!(
-            GameConfig::parse(&format!("{base}[ini]\nprofile='ra2'\n"))
-                .unwrap()
-                .ini
-                .profile,
-            crate::util::ini_roots::IniProfile::Ra2
-        );
-        for (name, expected) in [
-            ("mo", crate::util::ini_roots::IniProfile::Mo),
-            ("auto", crate::util::ini_roots::IniProfile::Auto),
-        ] {
-            let config = GameConfig::parse(&format!("{base}[ini]\nprofile='{name}'\n")).unwrap();
-            assert_eq!(config.ini.profile, expected);
-        }
+        let auto = GameConfig::parse(&format!("{base}[ini]\nprofile='auto'\n")).unwrap();
+        assert_eq!(auto.ini.profile, crate::util::ini_roots::IniProfile::Auto);
+        let legacy_mo = GameConfig::parse(&format!("{base}[ini]\nprofile='mo'\n")).unwrap();
+        assert_eq!(legacy_mo.ini.profile, IniProfile::Mo);
         let custom = GameConfig::parse(&format!(
             "{base}[ini]\nprofile='custom'\nrules='r.ini'\nart='a.ini'\nai='i.ini'\n"
         ))
@@ -1076,12 +1117,6 @@ mod tests {
         assert_eq!(
             (custom_roots.sound(), custom_roots.eva()),
             ("soundmd.ini", "evamd.ini")
-        );
-        let mo = GameConfig::parse(&format!("{base}[ini]\nprofile='mo'\n")).unwrap();
-        let mo_roots = mo.ini.resolve(|_| true).unwrap();
-        assert_eq!(
-            (mo_roots.sound(), mo_roots.eva()),
-            ("soundmo.ini", "evamo.ini")
         );
         // Optional presentation roots for any profile; they keep the shared
         // names when omitted.
@@ -1094,24 +1129,64 @@ mod tests {
             (audio_roots.sound(), audio_roots.eva()),
             ("my-sound.ini", "my-eva.ini")
         );
-        let theater = GameConfig::parse(&format!("{base}[ini]\ntheater_suffix='mo'\n")).unwrap();
+        let theater = GameConfig::parse(&format!("{base}[ini]\ntheater_suffix='x2'\n")).unwrap();
         let theater_roots = theater.ini.resolve(|_| true).unwrap();
-        assert_eq!(theater_roots.theater_ini("snow"), "snowmo.ini");
+        assert_eq!(theater_roots.theater_ini("snow"), "snowx2.ini");
         for bad in [
             "profile='other'",
             "profile='custom'\nrules='r.ini'",
-            "profile='mo'\nai='aimd.ini'",
-            "profile=mo",
+            "profile='yr'\nai='aimd.ini'",
+            "profile=yr",
             "profile='custom'\nrules='../r.ini'\nart='a.ini'\nai='i.ini'",
             "sound='../my-sound.ini'",
             "eva='a.map'",
-            "theater_suffix='../mo'",
+            "theater_suffix='../custom'",
         ] {
             assert!(
                 GameConfig::parse(&format!("{base}[ini]\n{bad}\n")).is_err(),
                 "{bad}"
             );
         }
+    }
+
+    #[test]
+    fn ra2_launch_flag_overrides_ini_policy() {
+        // A config that explicitly selects custom YR-ish roots; RA2 mode must
+        // win wholesale.
+        let mut config = GameConfig::parse(
+            "[paths]\nra2_dir='retail'\n[ini]\n\
+             profile='custom'\nrules='r.ini'\nart='a.ini'\nai='i.ini'\n",
+        )
+        .unwrap();
+        crate::util::ra2_launch::set(true);
+        config.apply_ra2_launch();
+        assert_eq!(config.ini.profile, IniProfile::Ra2);
+        let roots = config.ini.resolve(|_| true).unwrap();
+        assert_eq!(roots.names(), ["rules.ini", "art.ini", "ai.ini"]);
+        assert_eq!(roots.theater_ini("snow"), "snow.ini");
+        crate::util::ra2_launch::set(false);
+    }
+
+    #[test]
+    fn ini_roots_config_passes_generic_catalogs_to_the_root_owner() {
+        let config = GameConfig::parse(
+            "[paths]\nra2_dir='retail'\n[ini]\n\
+             theme='music.ini'\nbattle='campaigns.ini'\nmission='missions.ini'\n\
+             mapsel='stages.ini'\nmodes='modes.ini'\nmap_catalog='maps.pkt'\n",
+        )
+        .unwrap();
+        let roots = config.ini.resolve(|_| panic!("YR must not probe")).unwrap();
+        assert_eq!(
+            [
+                roots.theme(),
+                roots.battle(),
+                roots.mission(),
+                roots.mapsel()
+            ],
+            ["music.ini", "campaigns.ini", "missions.ini", "stages.ini"]
+        );
+        assert_eq!(roots.modes(), "modes.ini");
+        assert_eq!(roots.map_catalog(), "maps.pkt");
     }
 
     struct ConfigFixture(PathBuf);
@@ -1154,6 +1229,42 @@ mod tests {
     }
 
     #[test]
+    fn android_documents_config_precedes_executable_fallback() {
+        let fixture = ConfigFixture::new();
+        let documents_root = fixture.0.join("Documents/RA2Harbor");
+        std::fs::create_dir_all(documents_root.join("Config")).unwrap();
+        let config_path = documents_root.join("Config/config.toml");
+        std::fs::write(
+            &config_path,
+            "[paths]\nra2_dir = 'game'\nsettings_dir = '.'\n",
+        )
+        .unwrap();
+        std::fs::write(fixture.0.join("app/config.toml"), "invalid fallback").unwrap();
+
+        let candidates = config_candidates_with_android_data_dir(
+            &fixture.0.join("launch"),
+            &fixture.0.join("app/vera20k"),
+            Some(&documents_root),
+        )
+        .unwrap();
+
+        assert_eq!(candidates[0], fixture.0.join("launch/config.toml"));
+        assert_eq!(candidates[1], config_path);
+        assert_eq!(candidates[2], fixture.0.join("app/config.toml"));
+        let chosen = candidates.iter().find(|path| path.is_file()).unwrap();
+        assert_eq!(chosen, &config_path);
+        let mut config =
+            GameConfig::parse_from(&std::fs::read_to_string(chosen).unwrap(), chosen).unwrap();
+        normalize_android_settings_dir(&mut config, Some(&documents_root));
+        assert_eq!(config.paths.settings_dir(), documents_root);
+        assert_eq!(
+            config.paths.downloaded_maps_dir(),
+            documents_root.join("Maps")
+        );
+        assert_eq!(config.paths.mods_dir(), documents_root.join("Mods"));
+    }
+
+    #[test]
     fn relative_settings_root_is_resolved_beside_config_independently_of_assets() {
         let fixture = ConfigFixture::new();
         std::fs::write(
@@ -1162,22 +1273,6 @@ mod tests {
         )
         .unwrap();
         let config = fixture.load().unwrap();
-        assert_eq!(config.paths.ra2_dir, fixture.0.join("app/retail files"));
-        assert_eq!(
-            config.paths.settings_dir(),
-            fixture.0.join("app/client profile")
-        );
-    }
-
-    #[test]
-    fn launcher_candidate_text_uses_config_directory_for_relative_paths() {
-        let fixture = ConfigFixture::new();
-        let path = fixture.0.join("app/config.toml");
-        let config = GameConfig::parse_text_at(
-            "[paths]\nra2_dir = 'retail files'\nsettings_dir = 'client profile'\n",
-            &path,
-        )
-        .unwrap();
         assert_eq!(config.paths.ra2_dir, fixture.0.join("app/retail files"));
         assert_eq!(
             config.paths.settings_dir(),
@@ -1323,82 +1418,6 @@ mod tests {
     }
 
     #[test]
-    fn camera_zoom_limits_default_parse_and_preserve_other_config() {
-        assert_eq!(camera_zoom_limits_from_text("").unwrap(), (0.75, 2.0));
-        let original = "[paths]\nra2_dir = \"/game\"\n[graphics]\nextra_animations = false\n";
-        let updated = set_camera_zoom_limits(original, 0.5, 2.5).unwrap();
-        assert!(updated.contains("extra_animations = false"));
-        assert_eq!(camera_zoom_limits_from_text(&updated).unwrap(), (0.5, 2.5));
-        GameConfig::validate_config_text(&updated).unwrap();
-    }
-
-    #[test]
-    fn camera_zoom_limits_reject_invalid_ranges_and_values() {
-        for (minimum, maximum) in [(0.2, 2.0), (0.75, 4.1), (2.1, 2.0), (f32::NAN, 2.0)] {
-            assert!(set_camera_zoom_limits("", minimum, maximum).is_err());
-        }
-        for text in [
-            "[graphics]\ncamera_zoom_min = 2.1\ncamera_zoom_max = 2.0\n",
-            "[graphics]\ncamera_zoom_min = nan\n",
-            "[graphics]\ncamera_zoom_max = 4.1\n",
-        ] {
-            assert!(camera_zoom_limits_from_text(text).is_err());
-        }
-    }
-
-    #[test]
-    fn render_options_default_round_trip_and_validation() {
-        assert_eq!(render_options_from_text("").unwrap(), (100, 0));
-        let source = "[paths]\nra2_dir = '/game'\n[graphics]\ncamera_zoom_min = 0.5\n";
-        let updated = set_render_options(source, 75, 60).unwrap();
-        assert!(updated.contains("camera_zoom_min = 0.5"));
-        assert_eq!(render_options_from_text(&updated).unwrap(), (75, 60));
-        let parsed = GameConfig::parse(&format!("{updated}\n")).unwrap();
-        assert_eq!(parsed.graphics.render_scale_percent, 75);
-        assert_eq!(parsed.graphics.fps_limit, 60);
-        for (percent, fps) in [(49, 60), (52, 60), (100, 45), (75, 31)] {
-            assert!(set_render_options("", percent, fps).is_err());
-        }
-    }
-
-    #[test]
-    fn launcher_mod_and_ini_profile_edits_are_read_by_the_engine_config() {
-        let contents = set_ini_profile(
-            &set_paths_key("[paths]\nra2_dir = \"/game\"\n", "mod", "Mental Omega"),
-            crate::util::ini_roots::IniProfile::Mo,
-        );
-        let config = GameConfig::parse(&contents).expect("launcher output is valid engine config");
-        assert_eq!(config.paths.mod_name(), Some("Mental Omega"));
-        assert_eq!(config.ini.profile, crate::util::ini_roots::IniProfile::Mo);
-        assert!(contents.contains("[ini]\nprofile = \"mo\""));
-    }
-
-    #[test]
-    fn launcher_can_clear_mod_and_select_vanilla_roots() {
-        let contents = set_ini_profile(
-            &set_paths_key(
-                "[paths]\nra2_dir = \"/game\"\nmod = \"Old Mod\"\n[ini]\nprofile = \"mo\"\n",
-                "mod",
-                "",
-            ),
-            crate::util::ini_roots::IniProfile::Yr,
-        );
-        let config = GameConfig::parse(&contents).expect("vanilla selection remains valid");
-        assert_eq!(config.paths.mod_name(), None);
-        assert_eq!(config.ini.profile, crate::util::ini_roots::IniProfile::Yr);
-    }
-
-    #[test]
-    fn selecting_mo_from_custom_keeps_old_roots_inert_and_valid() {
-        let contents = set_ini_profile(
-            "[paths]\nra2_dir = \"/game\"\n[ini]\nprofile = \"custom\"\nrules = \"rulesx.ini\"\nart = \"artx.ini\"\nai = \"aix.ini\"\n",
-            crate::util::ini_roots::IniProfile::Mo,
-        );
-        GameConfig::validate_config_text(&contents).expect("preset removes active custom roots");
-        assert!(contents.contains(r#"# rules = "rulesx.ini""#));
-    }
-
-    #[test]
     fn an_old_vsync_line_still_loads() {
         let toml_str = r#"
 [paths]
@@ -1411,6 +1430,7 @@ extra_animations = false
         let config = GameConfig::parse(toml_str).expect("old configs keep loading");
         assert!(!config.graphics.extra_animations);
         assert!(!config.graphics.translucent_fog);
+        assert!(!config.graphics.high_terrain_building_lift);
     }
 
     #[test]
@@ -1419,6 +1439,15 @@ extra_animations = false
             GameConfig::parse("[paths]\nra2_dir = 'retail'\n[graphics]\ntranslucent_fog = true\n")
                 .unwrap();
         assert!(config.graphics.translucent_fog);
+    }
+
+    #[test]
+    fn high_terrain_building_lift_is_an_explicit_graphics_option() {
+        let config = GameConfig::parse(
+            "[paths]\nra2_dir = 'retail'\n[graphics]\nhigh_terrain_building_lift = true\n",
+        )
+        .unwrap();
+        assert!(config.graphics.high_terrain_building_lift);
     }
 
     #[test]

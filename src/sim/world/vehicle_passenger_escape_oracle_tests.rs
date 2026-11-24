@@ -132,8 +132,8 @@ fn state(sim: &Simulation, id: u64) -> Value {
         "position": [position.x, position.y, position.z],
         "mission": entity.mission.current().raw(),
         "queued": entity.mission.queued().raw(),
-        "mega_mission": if entity.mega_mission.is_attack_move() { 29 } else { -1 },
-        "transporter": entity.passenger_role.transporter().is_some(),
+        "mega_mission": if entity.seldom.mega_mission.is_attack_move() { 29 } else { -1 },
+        "transporter": entity.passenger_role().transporter().is_some(),
         "nav_cell": nav,
         "drive_destination": destination,
     })
@@ -182,7 +182,7 @@ fn vehicle_passenger_escape_matches_native_caller_scatter() {
                 0,
                 128,
                 &rules,
-                FrameEffects::default(),
+                &mut FrameEffects::default(),
             )
             .unwrap();
         sim.substrate
@@ -206,12 +206,12 @@ fn vehicle_passenger_escape_matches_native_caller_scatter() {
                     0,
                     0,
                     &rules,
-                    FrameEffects::default(),
+                    &mut FrameEffects::default(),
                 )
                 .unwrap();
             let entity = sim.substrate.entities.get_mut(id).unwrap();
             assert_eq!(
-                entity.mega_mission,
+                entity.seldom.mega_mission,
                 crate::sim::mission::mega_mission::MegaMission::default(),
                 "{name}: Rust Foot constructor has no saved mission or payload"
             );
@@ -220,7 +220,7 @@ fn vehicle_passenger_escape_matches_native_caller_scatter() {
                 MissionId::from_raw(spec["mission"].as_i64().unwrap() as i32),
                 0,
             );
-            entity.passenger_role = PassengerRole::boarded_for_test(transport, false);
+            entity.set_passenger_role_for_test(PassengerRole::boarded_for_test(transport, false));
             if !spec["nav_cell"].is_null() {
                 let (nx, ny) = cell(&spec["nav_cell"]);
                 // Explicit retained raw NavCom input; no destination setter
@@ -236,7 +236,7 @@ fn vehicle_passenger_escape_matches_native_caller_scatter() {
                 .entities
                 .get_mut(transport)
                 .unwrap()
-                .passenger_role
+                .passenger_role_mut_for_test()
                 .cargo_mut()
                 .unwrap()
                 .board_forced_chain(&[(id, 1.0)]);
@@ -271,14 +271,14 @@ fn vehicle_passenger_escape_matches_native_caller_scatter() {
                 ignore_defenses: false,
                 selected_by_player: false,
             },
-            FrameEffects::default(),
+            &mut FrameEffects::default(),
         );
         assert!(
             sim.substrate
                 .entities
                 .get(transport)
                 .unwrap()
-                .passenger_role
+                .passenger_role()
                 .cargo()
                 .unwrap()
                 .is_empty(),

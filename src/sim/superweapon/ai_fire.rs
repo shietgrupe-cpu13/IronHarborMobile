@@ -166,7 +166,7 @@ pub(crate) fn try_fire(
     rules: &RuleSet,
     owner: InternedId,
     registry: Option<&OverlayTypeRegistry>,
-    frame_effects: FrameEffects<'_>,
+    frame_effects: &mut FrameEffects<'_>,
 ) {
     #[cfg(any(test, feature = "test-support"))]
     observe(AiFireEvent::TryFire);
@@ -174,7 +174,7 @@ pub(crate) fn try_fire(
     let Some(house) = sim.houses.get(&owner) else {
         return;
     };
-    let human = house.is_controlled_by_human(sim.session.game_mode_nonzero());
+    let human = house.is_controlled_by_human(sim.session.rule_policy());
     if !ares && human {
         return;
     }
@@ -337,7 +337,7 @@ pub(super) fn fire_extension_automatic(
     owner: InternedId,
     sw_id: InternedId,
     registry: Option<&OverlayTypeRegistry>,
-    effects: FrameEffects<'_>,
+    effects: &mut FrameEffects<'_>,
     manual: bool,
 ) -> bool {
     let Some(sw) = rules.super_weapon(sim.interner.resolve(sw_id)) else {
@@ -451,14 +451,36 @@ fn extension_target(
                 .is_ok()
                 .then_some(cell)
         }
+        // PickTarget10038640's case 10 (100389C9..10038AEC): the first of
+        // the House's buildings (+0x6C, in order) that has the type
+        // (HasSuperWeapon 10011E60, upgrades too) and is operational
+        // (vt+0x350, Building4555D0) whose own cell CanFireAt (vt+4, not
+        // manual) admits; the cell of its GetCoords.
+        M::SelfTarget => sim
+            .houses
+            .get(&owner)?
+            .base_projection()
+            .buildings()
+            .iter()
+            .find_map(|&id| {
+                let building = sim.substrate.entities.get(id)?;
+                if !super::building_has_super_weapon(sim, rules, building, &sw.id)
+                    || sim.building_operational_state(id, rules) != Some(true)
+                {
+                    return None;
+                }
+                let coord = crate::sim::movement::ground_pose::object_get_coords(
+                    building,
+                    sim.resolved_terrain.as_ref(),
+                );
+                let cell = ((coord.x / 256) as u16, (coord.y / 256) as u16);
+                super::targeting::check_with_data(sim, rules, owner, sw, cell, true, &data)
+                    .is_ok()
+                    .then_some(cell)
+            }),
         // These distinct3.0 selectors are still pending native ports. Do not
         // silently replace a parsed mode with Offensive or another behavior.
-        M::Stealth
-        | M::SelfTarget
-        | M::Base
-        | M::MultiMissile
-        | M::EnemyBase
-        | M::LightningRandom => None,
+        M::Stealth | M::Base | M::MultiMissile | M::EnemyBase | M::LightningRandom => None,
     }
 }
 
@@ -815,7 +837,7 @@ fn rally_value(
                 .deploys_into
                 .as_deref()
                 .and_then(|name| rules.object(name))
-                .is_some_and(|building| building.build_const_eligible) =>
+                .is_some_and(|building| building.build_const_eligible()) =>
         {
             value(&values.mcv)
         }

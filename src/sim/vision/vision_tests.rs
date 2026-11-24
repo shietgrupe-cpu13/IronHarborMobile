@@ -76,16 +76,24 @@ fn fixture_frame_with_sight(
     world.resolved_terrain = terrain.cloned();
     world.path_grid = path_grid.cloned().map(std::sync::Arc::new);
     seat_fixture_clients(world, alliances, &[]);
-    let context = crate::sim::world::UninitContext::new(
+    let mut context = crate::sim::world::UninitContext::new(
         rules.unwrap_or(crate::rules::ruleset::RuleSet::empty_for_test()),
-        None,
     );
     for &event in sight {
         match event {
-            FixtureSight::Limbo(id) => world.release_object_sight_with_context(id, context),
+            FixtureSight::Limbo(id) => {
+                world.release_object_sight_with_context(id, context.reborrow())
+            }
             FixtureSight::Unlimbo(id) => {
                 let heights = world.sight_height_grid(config);
-                world.update_object_sight_in_view(id, 0, None, config, Some(&heights), context);
+                world.update_object_sight_in_view(
+                    id,
+                    0,
+                    None,
+                    config,
+                    Some(&heights),
+                    context.reborrow(),
+                );
             }
         }
     }
@@ -166,9 +174,9 @@ fn fixture_source_event(
     world.substrate.entities = entities.clone();
     world.interner = interner.clone();
     seat_fixture_clients(world, &HouseAllianceMap::new(), &[]);
-    let context = crate::sim::world::UninitContext::default();
+    let mut context = crate::sim::world::UninitContext::default();
     if refresh {
-        world.release_object_sight_with_context(1, context);
+        world.release_object_sight_with_context(1, context.reborrow());
     }
     world.update_object_sight_in_view(1, 0, None, config, None, context);
     *fog = std::mem::take(&mut world.fog);
@@ -381,22 +389,6 @@ fn test_sight_capped_at_max_range() {
     assert!(fog.is_cell_visible(intern::test_intern("Americans"), 30, 20));
     // Cell at distance 11 should NOT be visible (capped).
     assert!(!fog.is_cell_visible(intern::test_intern("Americans"), 31, 20));
-}
-
-#[test]
-fn ares_sight_uses_extended_spread_while_vanilla_stays_at_ten() {
-    let vanilla = collect_reveal_cells(30, 30, 15, false, 0, false, None, (60, 60), None);
-    let ares = collect_reveal_cells(30, 30, 15, true, 0, false, None, (60, 60), None);
-
-    assert!(
-        !vanilla.contains(&(45, 30)),
-        "vanilla keeps the radius-10 cap"
-    );
-    assert!(
-        ares.contains(&(45, 30)),
-        "Ares admits the radius-15 axis cell"
-    );
-    assert!(ares.contains(&(40, 40)), "Ares uses its octagonal spread");
 }
 
 /// `TechnoClass::UpdateReveal @ 0x0070AF50`: a `SIGHT`-ability veteran sees
@@ -786,7 +778,7 @@ fn a_tracked_pass_after_a_sweep_marks_the_swept_cells_a_footprint_covers() {
         owner: intern::test_intern("Soviet"),
         origin: (18, 18, 0),
         radius: 1,
-        cells: collect_reveal_cells(18, 18, 1, false, 0, false, None, (24, 24), None),
+        cells: collect_reveal_cells(18, 18, 1, 0, false, None, (24, 24), None),
     };
     sight_world
         .fog
@@ -1283,7 +1275,7 @@ fn sight_zero_reveals_nothing() {
 fn an_airborne_viewer_reveals_under_its_sprite() {
     let (w, h) = (64u16, 64u16);
     let mut vis = OwnerVisibility::new(w, h);
-    for (x, y) in super::collect_reveal_cells(30, 30, 1, false, 1500, false, None, (w, h), None) {
+    for (x, y) in super::collect_reveal_cells(30, 30, 1, 1500, false, None, (w, h), None) {
         vis.mark_visible(x, y);
     }
     assert!(
@@ -1310,7 +1302,6 @@ fn an_airborne_viewer_sees_past_a_cliff() {
         30,
         30,
         5,
-        false,
         0,
         true,
         Some(CellLevels::Plane(&heights)),
@@ -1324,7 +1315,6 @@ fn an_airborne_viewer_sees_past_a_cliff() {
         30,
         30,
         5,
-        false,
         1500,
         true,
         Some(CellLevels::Plane(&heights)),
@@ -1379,7 +1369,7 @@ fn a_jumpjet_below_its_floor_sees_from_its_location_z() {
     let mut store = EntityStore::new();
     let mut entity = GameEntity::test_default(1, "JUMPJET", "Americans", 30, 30);
     entity.lifecycle.set_in_limbo_for_test(false);
-    entity.sight.set_vision_range_for_test(1);
+    entity.seldom.sight.set_vision_range_for_test(1);
     entity.position.set_z_for_test(4);
     entity.position.set_exact_z_leptons_for_test(Some(208));
     let mut loco = LocomotorState::for_test_kind(LocomotorKind::Jumpjet);
@@ -1401,7 +1391,7 @@ fn a_jumpjet_below_its_floor_sees_from_its_location_z() {
         None,
     );
     let owner = intern::test_intern("Americans");
-    let expected = super::collect_reveal_cells(30, 30, 1, false, 208, false, None, (w, h), None);
+    let expected = super::collect_reveal_cells(30, 30, 1, 208, false, None, (w, h), None);
     assert!(!expected.is_empty());
     for ry in 0..h {
         for rx in 0..w {
@@ -1435,11 +1425,10 @@ fn a_ground_viewer_sees_from_its_location_z() {
         &ti(),
     );
     let owner = intern::test_intern("Americans");
-    let expected =
-        super::collect_reveal_cells(30, 30, 1, false, 4 * 104, false, None, (w, h), None);
+    let expected = super::collect_reveal_cells(30, 30, 1, 4 * 104, false, None, (w, h), None);
     assert_ne!(
         expected,
-        super::collect_reveal_cells(30, 30, 1, false, 0, false, None, (w, h), None),
+        super::collect_reveal_cells(30, 30, 1, 0, false, None, (w, h), None),
         "precondition: the lift moves the disc"
     );
     for ry in 0..h {
@@ -2062,12 +2051,12 @@ fn source_release_and_zero_sight_gate_preserve_original_cached_metadata() {
     );
     entity.lifecycle.set_in_limbo_for_test(false);
     entity.position.put_location(coord);
-    entity.sight.stamp_type_sight(amcv.sight);
+    entity.seldom.sight.stamp_type_sight(amcv.sight);
     world.substrate.entities.insert(entity);
     seat_fixture_clients(&mut world, &HouseAllianceMap::new(), &[]);
     let config = default_config();
-    let context = crate::sim::world::UninitContext::default();
-    world.update_object_sight_in_view(1, 0, None, &config, None, context);
+    let mut context = crate::sim::world::UninitContext::default();
+    world.update_object_sight_in_view(1, 0, None, &config, None, context.reborrow());
     let assert_cache = |world: &crate::sim::world::Simulation, expected: &serde_json::Value| {
         let source = world
             .fog
@@ -2118,7 +2107,7 @@ fn source_release_and_zero_sight_gate_preserve_original_cached_metadata() {
         cache_hash(&cleared_client),
         "the client native latch participates in the deterministic fog hash"
     );
-    world.release_object_sight_with_context(1, context);
+    world.release_object_sight_with_context(1, context.reborrow());
     assert_cache(&world, &native["nested"][0]["after"]);
     assert!(
         world
@@ -2128,12 +2117,16 @@ fn source_release_and_zero_sight_gate_preserve_original_cached_metadata() {
             .cells
             .is_empty()
     );
-    assert_eq!(world.fog.source_sight_viewers(1), vec![owner]);
+    assert_eq!(
+        world.fog.source_sight_viewers(1).collect::<Vec<_>>(),
+        vec![owner]
+    );
     world
         .substrate
         .entities
         .get_mut(1)
         .unwrap()
+        .seldom
         .sight
         .stamp_type_sight(0);
     world.update_object_sight_in_view(1, 0, None, &config, None, context);
@@ -2186,9 +2179,9 @@ fn a_release_clears_a_retained_map_that_is_no_client() {
     seat_fixture_clients(&mut world, &HouseAllianceMap::new(), &[soviet]);
     assert_eq!(*world.fog_viewers(), [americans]);
     let config = default_config();
-    let context = crate::sim::world::UninitContext::default();
-    world.update_object_sight_in_view(1, 0, None, &config, None, context);
-    world.update_object_sight_in_view(1, 0, Some(soviet), &config, None, context);
+    let mut context = crate::sim::world::UninitContext::default();
+    world.update_object_sight_in_view(1, 0, None, &config, None, context.reborrow());
+    world.update_object_sight_in_view(1, 0, Some(soviet), &config, None, context.reborrow());
     assert!(world.fog.source_sight_is_latched(1, soviet));
     world.release_object_sight_with_context(1, context);
     for viewer in [americans, soviet] {
@@ -2212,9 +2205,9 @@ fn a_computer_houses_sight_opens_no_map_of_its_own() {
     world.interner = ti();
     seat_fixture_clients(&mut world, &HouseAllianceMap::new(), &[soviet]);
     let config = default_config();
-    let context = crate::sim::world::UninitContext::default();
+    let mut context = crate::sim::world::UninitContext::default();
     for id in [1, 2] {
-        world.update_object_sight_in_view(id, 0, None, &config, None, context);
+        world.update_object_sight_in_view(id, 0, None, &config, None, context.reborrow());
     }
     assert!(world.fog.is_cell_revealed(americans, 10, 10));
     assert!(!world.fog.is_cell_revealed(americans, 20, 20));

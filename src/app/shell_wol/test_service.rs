@@ -1,8 +1,7 @@
-//! VERA's offline WOL test service: a developer stand-in behind the same
-//! request/event boundary a real service will use, chosen by
-//! `[VERA] WolTestService=`. It is not gamemd behavior: it lets
-//! the Internet screens (login `0x10F`, lobby `0x113`, setup C2/C9) be
-//! opened and clicked without a server.
+//! VERA's offline WOL test service: a stand-in behind the live service's
+//! request/event boundary, which only shell captures select. It is not
+//! gamemd behavior: it lets the Internet screens (login `0x10F`, lobby
+//! `0x113`, setup C2/C9) be opened and clicked without a server.
 //!
 //! It answers the visit's and the WOL setup's requests once no shell
 //! transition runs: like a real service, a reply arrives after the page that
@@ -27,20 +26,20 @@
 
 use super::lobby::WolJoined;
 use super::service::{WolHighScoreRecord, WolLadderRecord};
-use super::{WolApiStatus, WolLoginAccepted, WolServer, WolServerList, WolServiceEvent};
+use super::{
+    SERVER_STATUS_READY, WolApiStatus, WolLoginAccepted, WolServer, WolServerList, WolServiceEvent,
+};
 use super::{WolProvider, WolServiceRequest, service_event};
 use crate::app::AppState;
 use crate::app::match_runtime::session::SessionMode;
 use crate::app::shell_network_setup::{NetworkSetupEvent, NetworkSetupRequest};
+use crate::app::shell_route::ShellRoute;
 use crate::ui::wol_chat::WolChatLine;
 use crate::ui::wol_lobby::{
     EX_INFO_VERSION, GAME_CHANNEL, MEMBER_OPERATOR, MEMBER_VOICE, WolChannel, WolMember,
 };
 use crate::ui::wol_login::WolCredential;
 use crate::util::time::Instant;
-
-/// Event 9's status that completes the server-list wait.
-const SERVER_STATUS_READY: u32 = 0x0004_012F;
 
 /// Replies per poll; each may queue further requests (a list reply asks to
 /// join, a join asks for both lists).
@@ -96,7 +95,7 @@ fn pending(state: &AppState) -> bool {
 /// guest's leave and, as the joined game's host, the guest's choices.
 fn setup_requests(state: &mut AppState) -> Vec<NetworkSetupRequest> {
     if state.match_state.session_mode() != SessionMode::Wol
-        || !(state.frontend.shell_route.network_setup()
+        || !(state.frontend.shell_route == ShellRoute::NetworkSetup
             || super::lobby::visiting(state)
             || crate::app::shell_network_setup::quick_match(state))
     {
@@ -341,7 +340,6 @@ fn host_options(
         }
     }
     launch.selected_map_file = Some(file.clone());
-    launch.rebuild_house_roster();
     let map_metadata = crate::app::shell_network_setup::local_map_metadata(state, &file)?;
     crate::app::shell_network_setup::service_event(
         state,
@@ -384,6 +382,7 @@ fn answer(state: &mut AppState, request: WolServiceRequest) {
         WolServiceRequest::Connect { .. } => WolServiceEvent::Login(Ok(WolLoginAccepted {
             motd: crate::i18n::tr(MOTD),
             lobby_visits: true,
+            campaign_rooms: false,
         })),
         WolServiceRequest::ListChannels { kind, .. } => WolServiceEvent::Channels {
             kind,
@@ -550,8 +549,18 @@ fn answer(state: &mut AppState, request: WolServiceRequest) {
         WolServiceRequest::LocaleCount => {
             WolServiceEvent::LocaleCount(crate::ui::wol_persona::LOCALE_COUNT)
         }
-        // VERA online's account requests: the stand-in lobby accepts each.
-        WolServiceRequest::Account(_) => WolServiceEvent::Account(Ok(())),
+        // This stand-in has no registered email index.
+        WolServiceRequest::Account { request, .. } => {
+            use crate::ui::wol_account::{AccountRequest, AccountSuccess, valid_name};
+            let answer = match request {
+                AccountRequest::Delete { identifier, .. } if valid_name(&identifier) => {
+                    Ok(AccountSuccess::Deleted(identifier))
+                }
+                AccountRequest::Delete { .. } => Err(crate::i18n::tr("VERA:DeleteUseUsername")),
+                _ => Ok(AccountSuccess::Accepted),
+            };
+            WolServiceEvent::Account(answer)
+        }
         // Nobody plays, so no match can be watched.
         WolServiceRequest::ListMatches => WolServiceEvent::Matches(Vec::new()),
         WolServiceRequest::Watch { .. } => {
@@ -583,6 +592,8 @@ fn lobby_greeting(state: &mut AppState) {
     let line = |from, text: &str| WolServiceEvent::Message {
         from,
         text: text.encode_utf16().collect(),
+        localized: false,
+        warning: false,
         private: false,
         action: false,
         ansi: false,
@@ -793,6 +804,8 @@ fn match_requested(state: &mut AppState) {
     let line = |text: String, private: bool, options| WolServiceEvent::Message {
         from: member(MATCHBOT, MEMBER_OPERATOR),
         text: text.encode_utf16().collect(),
+        localized: false,
+        warning: false,
         private,
         action: false,
         ansi: true,

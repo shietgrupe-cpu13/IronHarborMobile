@@ -137,17 +137,23 @@ impl FrameStep {
     }
 }
 
-/// What one frame visit reads, fixed for the whole visit and for a resume of
-/// its tail.
-#[derive(Clone, Copy)]
+/// The rules, time and effects bound for one frame visit, and the temporary
+/// tube-turn set passed from the object updates to the wake phase.
 pub(super) struct FrameInputs<'a> {
     rules: &'a RuleSet,
     overlay_registry: Option<&'a OverlayTypeRegistry>,
     tick_ms: u32,
     effects: FrameEffects<'a>,
+    /// Wake producers skipped by this visit's Logic pass. Consumed before
+    /// any tail suspension; a resumed tail never repeats the wake pass.
+    tube_turns: std::collections::BTreeSet<u64>,
 }
 
 impl<'a> FrameInputs<'a> {
+    fn bound(rules: &'a RuleSet, tick_ms: u32, effects: FrameEffects<'a>) -> Self {
+        Self::new(rules, Some(rules.overlay_registry()), tick_ms, effects)
+    }
+
     pub(super) fn new(
         rules: &'a RuleSet,
         overlay_registry: Option<&'a OverlayTypeRegistry>,
@@ -158,7 +164,8 @@ impl<'a> FrameInputs<'a> {
             rules,
             overlay_registry,
             tick_ms,
-            effects: effects.with_overlay_registry(overlay_registry),
+            effects,
+            tube_turns: Default::default(),
         }
     }
 }
@@ -172,6 +179,10 @@ struct LogicRequest<'a> {
 }
 
 impl Simulation {
+    pub(crate) fn has_suspended_frame(&self) -> bool {
+        self.frame_continuation.is_some()
+    }
+
     /// Mark the step the frame enters: it advances the world's revision, and
     /// tests observe the step itself.
     #[inline]
@@ -206,7 +217,7 @@ impl Simulation {
         tick_ms: u32,
         lane: TickLane,
         poll_triggers: bool,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) -> Result<MasterFrameOutput, FrameAdvanceError> {
         if self.frame_continuation.is_some() {
             return Err(FrameAdvanceError::new(
@@ -222,7 +233,7 @@ impl Simulation {
             .then(crate::sim::frame_profile::FrameClock::start);
         #[cfg(feature = "debug-tools")]
         self.apply_debug_tools(rules);
-        let inputs = FrameInputs::new(rules, overlay_registry, tick_ms, effects);
+        let mut inputs = FrameInputs::new(rules, overlay_registry, tick_ms, effects.reborrow());
         // A failed earlier frame never reached collection; drop its value.
         self.frame_sync_checksum = None;
         self.combat_light_requests.discard();
@@ -258,15 +269,16 @@ impl Simulation {
         for step in LOGIC_STEPS {
             self.enter_frame_step(step);
             match frame_clock.as_mut() {
-                Some(clock) if step == FrameStep::LogicVector => clock
-                    .split_object_pass(|| self.run_logic_step(step, inputs, request, &mut frame))?,
-                _ => self.run_logic_step(step, inputs, request, &mut frame)?,
+                Some(clock) if step == FrameStep::LogicVector => clock.split_object_pass(|| {
+                    self.run_logic_step(step, &mut inputs, request, &mut frame)
+                })?,
+                _ => self.run_logic_step(step, &mut inputs, request, &mut frame)?,
             }
             if let (Some(clock), Some(slot)) = (frame_clock.as_mut(), step.profile_slot()) {
                 clock.stamp(slot);
             }
         }
-        let tail_result = self.run_late_region(inputs, &mut frame, None)?;
+        let tail_result = self.run_late_region(&mut inputs, &mut frame, None)?;
         if let Some(clock) = frame_clock.as_mut() {
             clock.stamp(crate::sim::frame_profile::phase::LATE_AI);
         }
@@ -274,23 +286,23 @@ impl Simulation {
             .trigger_effects
             .iter()
             .any(|effect| matches!(effect, TriggerEffect::BridgeStateChanged));
-        Ok(self.complete_or_suspend_frame(frame, tail_result, inputs, frame_clock))
+        Ok(self.complete_or_suspend_frame(frame, tail_result, &mut inputs, frame_clock))
     }
 
     /// Run one step before the tail. Each arm calls the step's owner.
     fn run_logic_step(
         &mut self,
         step: FrameStep,
-        inputs: FrameInputs<'_>,
+        inputs: &mut FrameInputs<'_>,
         request: LogicRequest<'_>,
         frame: &mut FrameCompletion,
     ) -> Result<(), FrameAdvanceError> {
         let FrameInputs {
             rules,
             overlay_registry,
-            effects,
+            ref mut effects,
             ..
-        } = inputs;
+        } = *inputs;
         match step {
             FrameStep::SessionCommands => {
                 if request.lane == TickLane::Ordinary {
@@ -324,17 +336,11 @@ impl Simulation {
                 }
             }
             FrameStep::Shroud => {
-                self.tick_shroud_growth(
-                    UninitContext::new(rules, overlay_registry).with_effects(effects),
-                );
+                self.tick_shroud_growth(UninitContext::new(rules).with_effects(effects));
                 // Logic55B29A/55B2AD: consume prior pending conceal at the signed
                 // pre-increment native frame boundary, before ore, Teams and live objects.
-                self.tick_pending_shroud_conceal(
-                    UninitContext::new(rules, overlay_registry).with_effects(effects),
-                );
-                self.tick_fog_regrowth(
-                    UninitContext::new(rules, overlay_registry).with_effects(effects),
-                );
+                self.tick_pending_shroud_conceal(UninitContext::new(rules).with_effects(effects));
+                self.tick_fog_regrowth(UninitContext::new(rules).with_effects(effects));
             }
             FrameStep::Lighting => self.tick_scenario_lighting_transition(rules),
             FrameStep::OreGrowth => self.tick_ore_growth_rungs(rules, overlay_registry, effects)?,
@@ -404,6 +410,7 @@ impl Simulation {
                 let object_pass =
                     self.advance_live_object_pass(rules, overlay_registry, effects)?;
                 frame.ownership_changed |= object_pass.ownership_changed();
+                inputs.tube_turns = object_pass.tube_turns;
                 frame.spawned_entities |= std::mem::take(&mut self.mission_spawned_entities);
                 frame.destroyed_structure |= object_pass.destroyed_structure;
                 frame.bridge_state_changed |= object_pass.bridge_state_changed;
@@ -412,7 +419,7 @@ impl Simulation {
                 // Ready/Commence.
             }
             // Native gate and cadence in `spawn_wakes_for_frame`.
-            FrameStep::Wakes => self.spawn_wakes_for_frame(rules),
+            FrameStep::Wakes => self.spawn_wakes_for_frame(rules, &inputs.tube_turns),
             FrameStep::Vision => {
                 // Sources open, move and close their sight at their own events
                 // (Unlimbo, arrival, Limbo), so an object spawned after this
@@ -452,7 +459,13 @@ impl Simulation {
                 // and passengers board in their class PerCellProcess.
             }
             FrameStep::LocalAnims => {
-                for id in self.substrate.anims.local_ids() {
+                // A visit can make and end local anims. The walk visits those
+                // that stood when it began, as a copy of the list would; an
+                // ended one's visit did nothing.
+                let end = self.substrate.anims.local_id_end();
+                let mut cursor = None;
+                while let Some(id) = self.substrate.anims.next_local_id(cursor, end) {
+                    cursor = Some(id);
                     // No expiry reaches a presentation anim, which nothing
                     // lists: it ends with its owner's UnInit instead
                     // (`AnimConstructorInput::Presentation`).
@@ -477,12 +490,6 @@ impl Simulation {
                 frame.bridge_state_changed |=
                     self.update_ion_blasts(rules, overlay_registry, effects);
                 self.alpha_shapes.purge_disabled();
-                // Ares' `ObjectClass_Update_AlphaLight` (`0x005F3E70`) places
-                // each surviving glow from its object's live GetCoords ahead
-                // of the Tactical's draw.
-                if rules.ares() {
-                    self.update_alpha_shape_screens(rules);
-                }
             }
             FrameStep::CrateRegen => {
                 // Called between `AlphaShapeClass::PurgeDisabled` and the
@@ -563,16 +570,16 @@ impl Simulation {
     /// wait resumes here with its saved `cursor`.
     fn run_late_region(
         &mut self,
-        inputs: FrameInputs<'_>,
+        inputs: &mut FrameInputs<'_>,
         frame: &mut FrameCompletion,
         cursor: Option<house_defeat::HouseOutcomeCursor>,
     ) -> Result<FrameTailResult, FrameAdvanceError> {
         let FrameInputs {
             rules,
             overlay_registry,
-            effects,
+            ref mut effects,
             ..
-        } = inputs;
+        } = *inputs;
         if cursor.is_none() {
             self.enter_frame_step(FrameStep::Houses);
         }
@@ -609,7 +616,8 @@ impl Simulation {
         // (`0x00647684`, history `0x00B04474[Frame & 0xFF]`) before any
         // command transfer or dispatch; the single-player body never does.
         // VERA appends money, health and trigger terms to the native fold.
-        if self.session.game_mode().command_queue_route() == CommandQueueRoute::Multiplayer {
+        if self.session.execution_topology().command_queue_route() == CommandQueueRoute::Multiplayer
+        {
             self.frame_sync_checksum = Some(FrameSyncChecksum {
                 frame: self.session.binary_frame(),
                 checksum: self.compute_multiplayer_frame_checksum(),
@@ -641,16 +649,15 @@ impl Simulation {
     /// a first visit and a network wait re-enter this one command/tail owner.
     fn run_network_command_tail(
         &mut self,
-        inputs: FrameInputs<'_>,
+        inputs: &mut FrameInputs<'_>,
         frame: &mut FrameCompletion,
         context: Option<NetworkQueueContext>,
     ) -> Result<FrameTailResult, FrameAdvanceError> {
         let FrameInputs {
             rules,
-            overlay_registry,
-            effects,
+            ref mut effects,
             ..
-        } = inputs;
+        } = *inputs;
         let pass = if let Some(context) = context {
             match effects.exchange_commands(context, &mut self.network_command_queues()) {
                 Ok(pass) => pass,
@@ -695,7 +702,7 @@ impl Simulation {
             // All input is already admitted before Logic or by the network
             // queue view. `frame.commands` now carries only the replay journal,
             // including earlier wait polls; never admit that journal twice.
-            self.dispatch_owned_commands(&[], rules, frame.execute_tick, overlay_registry, effects)
+            self.dispatch_owned_commands(&[], rules, frame.execute_tick, effects)
         };
         let failure = match result {
             Ok((executed, spawned)) => {
@@ -738,13 +745,18 @@ impl Simulation {
 
     /// MainTick55DE7E..55DEA4 is also reached after a CRC modal returns.
     /// Independent victory/defeat/restart/EXIT flags still skip this tail.
-    pub(super) fn commit_frame_tail(&mut self, inputs: FrameInputs<'_>, execute_tick: u64) -> bool {
+    pub(super) fn commit_frame_tail(
+        &mut self,
+        inputs: &mut FrameInputs<'_>,
+        execute_tick: u64,
+    ) -> bool {
         let FrameInputs {
             rules,
-            overlay_registry,
+            overlay_registry: _,
             tick_ms,
-            effects,
-        } = inputs;
+            ref mut effects,
+            ..
+        } = *inputs;
         // MainTick55DE45 -> PlanMgr637550 publishes command-generated plans
         // after Queue_AI, using any TIMING change it just applied. Native
         // publishes before checking the terminal flags55DE4F..55DE71 too.
@@ -769,13 +781,7 @@ impl Simulation {
         // commit. Alive queue entries keep their position; ready duplicate IDs
         // collapse and physically finalize exactly once.
         self.enter_frame_step(FrameStep::PendingDelete);
-        self.process_pending_delete_with(
-            rules,
-            overlay_registry,
-            effects,
-            1,
-            self.session.started(),
-        );
+        self.process_pending_delete_with(rules, effects, 1, self.session.started());
 
         // MainTick55DEA4 follows Frame++ and ProcessPendingDelete725C70.
         // Network waits and terminal transitions never enter this tail.
@@ -823,7 +829,7 @@ impl Simulation {
             tick_ms,
             TickLane::Ordinary,
             false,
-            FrameEffects::default(),
+            &mut FrameEffects::default(),
         )
         .expect("fixture frame must complete")
         .into_tick()
@@ -840,10 +846,41 @@ impl Simulation {
         &mut self,
         commands: &[CommandEnvelope],
         rules: &RuleSet,
+        tick_ms: u32,
+        lane: TickLane,
+        effects: &mut FrameEffects<'_>,
+    ) -> Result<SimFrameOutput, FrameAdvanceError> {
+        self.advance_and_collect_frame(
+            commands,
+            rules,
+            Some(rules.overlay_registry()),
+            tick_ms,
+            lane,
+            effects,
+        )
+    }
+
+    /// Exercise a frame whose fixture deliberately withholds overlay types.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn advance_app_frame_without_overlay_types_for_test(
+        &mut self,
+        commands: &[CommandEnvelope],
+        rules: &RuleSet,
+        tick_ms: u32,
+        lane: TickLane,
+        effects: &mut FrameEffects<'_>,
+    ) -> Result<SimFrameOutput, FrameAdvanceError> {
+        self.advance_and_collect_frame(commands, rules, None, tick_ms, lane, effects)
+    }
+
+    fn advance_and_collect_frame(
+        &mut self,
+        commands: &[CommandEnvelope],
+        rules: &RuleSet,
         overlay_registry: Option<&OverlayTypeRegistry>,
         tick_ms: u32,
         lane: TickLane,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) -> Result<SimFrameOutput, FrameAdvanceError> {
         let frame = self.advance_master_frame(
             commands,
@@ -878,7 +915,7 @@ impl Simulation {
             let kind = self.houses.get(owner).and_then(|house| {
                 house.pending_outcome(
                     self.session.binary_frame() as i32,
-                    self.session.game_mode_nonzero(),
+                    self.session.rule_policy(),
                 )
             });
             if kind != Some(pending.cursor.kind) {
@@ -896,8 +933,7 @@ impl Simulation {
     pub fn resume_outcome_wait(
         &mut self,
         rules: &RuleSet,
-        overlay_registry: Option<&OverlayTypeRegistry>,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) -> Result<SimFrameOutput, FrameAdvanceError> {
         if self.pending_outcome_wait().is_none() {
             return Err(FrameAdvanceError::new(
@@ -910,11 +946,11 @@ impl Simulation {
         let Some(FrameContinuation::Outcome(mut pending)) = self.frame_continuation.take() else {
             unreachable!("checked House outcome continuation")
         };
-        let inputs = FrameInputs::new(rules, overlay_registry, pending.tick_ms, effects);
-        let result = self.run_late_region(inputs, &mut pending.frame, Some(pending.cursor))?;
-        let output = self.complete_or_suspend_frame(pending.frame, result, inputs, None);
+        let mut inputs = FrameInputs::bound(rules, pending.tick_ms, effects.reborrow());
+        let result = self.run_late_region(&mut inputs, &mut pending.frame, Some(pending.cursor))?;
+        let output = self.complete_or_suspend_frame(pending.frame, result, &mut inputs, None);
         self.unit_voice_visit_interest.clear();
-        Ok(self.collect_frame_output(output, inputs.effects))
+        Ok(self.collect_frame_output(output, &mut inputs.effects))
     }
 
     /// The modal is client-owned; this world-owned continuation identifies
@@ -962,8 +998,27 @@ impl Simulation {
     pub fn resume_after_network_failure(
         &mut self,
         rules: &RuleSet,
+        effects: &mut FrameEffects<'_>,
+    ) -> Result<SimFrameOutput, FrameAdvanceError> {
+        self.resume_failed_network_frame(rules, Some(rules.overlay_registry()), effects)
+    }
+
+    /// Resume a diagnostic replay with the same optional table its frame started with.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn resume_after_network_failure_for_test(
+        &mut self,
+        rules: &RuleSet,
         overlay_registry: Option<&OverlayTypeRegistry>,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
+    ) -> Result<SimFrameOutput, FrameAdvanceError> {
+        self.resume_failed_network_frame(rules, overlay_registry, effects)
+    }
+
+    fn resume_failed_network_frame(
+        &mut self,
+        rules: &RuleSet,
+        overlay_registry: Option<&OverlayTypeRegistry>,
+        effects: &mut FrameEffects<'_>,
     ) -> Result<SimFrameOutput, FrameAdvanceError> {
         if !matches!(
             self.frame_continuation,
@@ -983,7 +1038,7 @@ impl Simulation {
         };
         Ok(self.finish_aborted_network_frame(
             frame,
-            FrameInputs::new(rules, overlay_registry, tick_ms, effects),
+            &mut FrameInputs::new(rules, overlay_registry, tick_ms, effects.reborrow()),
         ))
     }
 
@@ -992,8 +1047,7 @@ impl Simulation {
     pub fn leave_network_wait(
         &mut self,
         rules: &RuleSet,
-        overlay_registry: Option<&OverlayTypeRegistry>,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) -> Result<SimFrameOutput, FrameAdvanceError> {
         if !self.pending_network_wait() {
             return Err(FrameAdvanceError::new(
@@ -1008,21 +1062,21 @@ impl Simulation {
         };
         Ok(self.finish_aborted_network_frame(
             pending.frame,
-            FrameInputs::new(rules, overlay_registry, pending.tick_ms, effects),
+            &mut FrameInputs::bound(rules, pending.tick_ms, effects.reborrow()),
         ))
     }
 
     fn finish_aborted_network_frame(
         &mut self,
         frame: FrameCompletion,
-        inputs: FrameInputs<'_>,
+        inputs: &mut FrameInputs<'_>,
     ) -> SimFrameOutput {
         let committed = self.commit_frame_tail(inputs, frame.execute_tick);
         let mut frame = self.finish_master_frame(frame, committed, inputs, None);
         // This is the terminal match frame even when its native commit ran.
         frame.tick.state_hash = Some(self.state_hash());
         self.unit_voice_visit_interest.clear();
-        self.collect_frame_output(frame, inputs.effects)
+        self.collect_frame_output(frame, &mut inputs.effects)
     }
 
     /// Poll the saved post-Logic Queue_AI visit without re-running House,
@@ -1031,8 +1085,7 @@ impl Simulation {
     pub fn resume_network_wait(
         &mut self,
         rules: &RuleSet,
-        overlay_registry: Option<&OverlayTypeRegistry>,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) -> Result<SimFrameOutput, FrameAdvanceError> {
         if !self.pending_network_wait() {
             return Err(FrameAdvanceError::new(
@@ -1045,9 +1098,9 @@ impl Simulation {
         let Some(FrameContinuation::Waiting(mut pending)) = self.frame_continuation.take() else {
             unreachable!("checked wait continuation")
         };
-        let inputs = FrameInputs::new(rules, overlay_registry, pending.tick_ms, effects);
+        let mut inputs = FrameInputs::bound(rules, pending.tick_ms, effects.reborrow());
         let result =
-            self.run_network_command_tail(inputs, &mut pending.frame, Some(pending.context));
+            self.run_network_command_tail(&mut inputs, &mut pending.frame, Some(pending.context));
         let result = match result {
             Ok(result) => result,
             Err(error) => {
@@ -1055,14 +1108,14 @@ impl Simulation {
                 return Err(error);
             }
         };
-        let output = self.complete_or_suspend_frame(pending.frame, result, inputs, None);
-        Ok(self.collect_frame_output(output, inputs.effects))
+        let output = self.complete_or_suspend_frame(pending.frame, result, &mut inputs, None);
+        Ok(self.collect_frame_output(output, &mut inputs.effects))
     }
 
     fn collect_frame_output(
         &mut self,
         frame: MasterFrameOutput,
-        effects: FrameEffects<'_>,
+        effects: &mut FrameEffects<'_>,
     ) -> SimFrameOutput {
         let MasterFrameOutput {
             tick,
@@ -1145,7 +1198,7 @@ impl Simulation {
         &mut self,
         mut frame: FrameCompletion,
         result: FrameTailResult,
-        inputs: FrameInputs<'_>,
+        inputs: &mut FrameInputs<'_>,
         frame_clock: Option<crate::sim::frame_profile::FrameClock>,
     ) -> MasterFrameOutput {
         let tick_ms = inputs.tick_ms;
@@ -1222,14 +1275,14 @@ impl Simulation {
         &mut self,
         frame: FrameCompletion,
         frame_committed: bool,
-        inputs: FrameInputs<'_>,
+        inputs: &mut FrameInputs<'_>,
         mut frame_clock: Option<crate::sim::frame_profile::FrameClock>,
     ) -> MasterFrameOutput {
         let FrameInputs {
             rules,
             overlay_registry,
             ..
-        } = inputs;
+        } = *inputs;
         let FrameCompletion {
             commands,
             execute_tick: _,
@@ -1272,7 +1325,7 @@ impl Simulation {
         // animation advancement remains in the live-object scheduler, which
         // owns the single pending-delete drain above.
         if frame_committed {
-            let game_options = self.session.game_options().clone();
+            let game_options = *self.session.game_options();
             let binary_frame = self.session.binary_frame();
             let (entities, interner) = self.entities_mut_and_interner();
             animation::tick_non_dying_animations(
@@ -1296,7 +1349,7 @@ impl Simulation {
         // ScoreDialog__FillEntries `0x5C9700` and `ScoreDialog__Run `0x5C9720`.
         // Keep their survivor bonus and Scenario RNG draws out of campaigns;
         // Campaign's standalone result dialog reads its own House statistics.
-        let terminal_score_finalized = self.session.game_mode_nonzero()
+        let terminal_score_finalized = !self.session.uses_campaign_world()
             && self.natural_outcome_exit_ready()
             && Self::finalize_terminal_score_snapshot(
                 &self.session,

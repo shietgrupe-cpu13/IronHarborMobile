@@ -153,10 +153,9 @@ fn brute_smash_emits_debris(elite: bool, expected: SmashDebrisExpectation) {
             .advance_app_frame(
                 &commands,
                 &rules,
-                None,
                 33,
                 TickLane::Ordinary,
-                FrameEffects::default(),
+                &mut FrameEffects::default(),
             )
             .expect("ordinary Brute combat frame");
         assert!(output.tick.frame_committed);
@@ -300,9 +299,9 @@ fn brute_smash_emits_debris(elite: bool, expected: SmashDebrisExpectation) {
                     crate::sim::rng::SimRng::new(0).logical_state()
                 );
                 loaded.scenario_rng = sim.scenario_rng.clone();
-                let main = sim.main_rng.snapshot_for_test();
-                loaded.main_rng = main.clone().into();
-                sim.main_rng = main.into();
+                let main = sim.main_rng.clone();
+                loaded.main_rng = main.clone();
+                sim.main_rng = main;
                 loaded.mapgen_rng = sim.mapgen_rng.clone();
                 loaded.restore_after_snapshot_load().unwrap();
                 loaded.rebuild_caches_after_load(
@@ -328,10 +327,9 @@ fn brute_smash_emits_debris(elite: bool, expected: SmashDebrisExpectation) {
                 sim.advance_app_frame(
                     &commands,
                     &rules,
-                    None,
                     33,
                     TickLane::Ordinary,
-                    FrameEffects::default(),
+                    &mut FrameEffects::default(),
                 )
                 .expect("live debris continuation frame");
                 if let Some(loaded) = &mut restored {
@@ -340,10 +338,9 @@ fn brute_smash_emits_debris(elite: bool, expected: SmashDebrisExpectation) {
                         .advance_app_frame(
                             &commands,
                             &rules,
-                            None,
                             33,
                             TickLane::Ordinary,
-                            FrameEffects::default(),
+                            &mut FrameEffects::default(),
                         )
                         .expect("restored live debris continuation frame");
                     assert_eq!(
@@ -627,8 +624,7 @@ fn compare_native_smashing_tail(retired: bool, typed: bool) {
         world.scenario_rng =
             SimRng::from_native_state_hex_for_test(row["rng_before"]["scenario"].as_str().unwrap());
         world.main_rng =
-            SimRng::from_native_state_hex_for_test(row["rng_before"]["main"].as_str().unwrap())
-                .into();
+            SimRng::from_native_state_hex_for_test(row["rng_before"]["main"].as_str().unwrap());
         world.mapgen_rng =
             SimRng::from_native_state_hex_for_test(row["rng_before"]["mapgen"].as_str().unwrap());
         let payload = ProjectilePayload::new(
@@ -676,7 +672,7 @@ fn compare_native_smashing_tail(retired: bool, typed: bool) {
         if retired {
             // Production retirement clears live membership and queues late
             // deletion; retained store presence must not resurrect the tail.
-            assert!(world.retire_non_entity_object(id, super::UninitContext::with_rules(&rules)));
+            assert!(world.retire_non_entity_object(id, super::UninitContext::new(&rules)));
             assert!(world.projectiles.get(id).is_some());
             assert!(world.substrate.pending_delete.contains_object(&id));
         }
@@ -1060,7 +1056,7 @@ fn original_fatal_mtnk_tires_precede_the_concrete_death_anim_identity() {
             json!(prior["marked"] == 1)
         );
         assert_eq!(
-            json!(entity.in_logic_vector.is_member()),
+            json!(entity.seldom.in_logic_vector.is_member()),
             prior["logic_registered"]
         );
         assert!(world.voxel_anims().iter().next().is_none() && world.anims().next().is_none());
@@ -1082,8 +1078,7 @@ fn original_fatal_mtnk_tires_precede_the_concrete_death_anim_identity() {
         world.scenario_rng =
             SimRng::from_native_state_hex_for_test(row["rng_before"]["scenario"].as_str().unwrap());
         world.main_rng =
-            SimRng::from_native_state_hex_for_test(row["rng_before"]["main"].as_str().unwrap())
-                .into();
+            SimRng::from_native_state_hex_for_test(row["rng_before"]["main"].as_str().unwrap());
         world.mapgen_rng =
             SimRng::from_native_state_hex_for_test(row["rng_before"]["mapgen"].as_str().unwrap());
         assert_eq!(input["attacker_is_null"], true);
@@ -1105,7 +1100,7 @@ fn original_fatal_mtnk_tires_precede_the_concrete_death_anim_identity() {
                         arg6: input["prevent_passenger_escape"].as_bool().unwrap(),
                     },
                 ),
-                FrameEffects::default(),
+                &mut FrameEffects::default(),
             )
         });
         let native_words: Vec<_> = row["rng_requests"]

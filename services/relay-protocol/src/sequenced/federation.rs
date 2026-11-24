@@ -25,21 +25,33 @@ const ROSTER_WRAP: usize = 80;
 const WRAP_DOMAIN: &[u8] = b"VERA20k relay federation wrap v1\0";
 const ADJUDICATED_DOMAIN: &[u8] = b"VERA20k relay adjudicated federation roster v1\0";
 const ROSTER_DOMAIN: &[u8] = b"VERA20k relay federation roster v1\0";
-// The link version is the magic's digit, `VF<version>L`. Bump it whenever the
-// layout or meaning of an existing link kind changes: the FRAME header and its
-// entries, a coordinator control batch, DATA, PACE, CHECKSUM or SILENCE. A
-// relay refuses a packet it cannot read: one refused FRAME stalls the merged
-// stream, and refused reports leave desyncs and slow players unnoticed. Only a
-// new kind whose loss changes no result needs no bump; SILENCE_KIND was one,
-// as an older relay only leaves that silence untold. The 32-byte link header
-// and LINK_DOMAIN stay the same in every version, so a relay authenticates
-// another version's packet and refuses the startup.
+// The magic's digit, `VF<digit>L`, carries the link version and the marking
+// together: this version is VF1L unmarked and VF2L marked. Bump the version
+// whenever the layout or meaning of an existing link kind changes: the FRAME
+// header and its entries, a coordinator control batch, DATA, PACE, CHECKSUM or
+// SILENCE. A bump moves both magics to digits no build has used (VF3L and VF4L
+// next; docs/lobby-protocol.md names the marked one), so no two versions share
+// a digit. A relay refuses a packet it cannot read: one refused FRAME stalls
+// the merged stream, and refused reports leave desyncs and slow players
+// unnoticed. Only a new kind whose loss changes no result needs no bump;
+// SILENCE_KIND was one, as an older relay only leaves that silence untold. The
+// 32-byte link header and LINK_DOMAIN stay the same in every version, so a
+// relay authenticates another version's packet and refuses the startup.
 const LINK_DOMAIN: &[u8] = b"VERA20k relay federation link v1\0";
 const LINK_MAGIC: &[u8; 4] = b"VF1L";
+const MARKED_LINK_MAGIC: &[u8; 4] = b"VF2L";
+// They differ only in the digit: is_link_packet knows both by the rest.
+const _: () = assert!(
+    LINK_MAGIC[0] == MARKED_LINK_MAGIC[0]
+        && LINK_MAGIC[1] == MARKED_LINK_MAGIC[1]
+        && LINK_MAGIC[2] != MARKED_LINK_MAGIC[2]
+        && LINK_MAGIC[3] == MARKED_LINK_MAGIC[3]
+);
 const LINK_HEADER: usize = 32;
 const FRAME_KIND: u8 = 0;
 const CANCEL_START: u8 = 1;
-// VF2L FRAME flags. A pre-start or roomless link cannot renew a running match.
+// Marked-link FRAME flags. A pre-start or roomless link cannot renew a running
+// match.
 const MATCH_FAILED: u8 = 2;
 const MATCH_STARTED: u8 = 4;
 // Link packets go out at least every 50 ms; a coordinator this quiet is gone.
@@ -114,7 +126,7 @@ pub(crate) fn roster_table(
             Ipv4Addr::new(entry[0], entry[1], entry[2], entry[3]),
             u16::from_le_bytes([entry[4], entry[5]]),
         );
-        let sources = read_u32(entry, 6);
+        let sources = read_u32(entry, 6)?;
         if sources == 0
             || sources >> MAX_PEERS != 0
             || union & sources != 0
@@ -126,7 +138,7 @@ pub(crate) fn roster_table(
         union |= sources;
         relays.push((endpoint, sources));
     }
-    Ok((bytes[4..20].try_into().unwrap(), relays))
+    Ok((field(bytes, 4)?, relays))
 }
 
 fn wrap_stream(key: &SecretKey, room: &[u8; 16], nonce: &[u8]) -> [u8; 32] {
@@ -150,9 +162,10 @@ fn wrap_tag(
     mac
 }
 
-/// The lobby's signer, for tools and tests. Relay keys never reach clients;
-/// the coordinator is the first relay.
-pub fn sign_federation_roster(
+/// The lobby's roster signing, for this crate's tests. Relay keys never
+/// reach clients; the coordinator is the first relay.
+#[cfg(test)]
+fn sign_federation_roster(
     room: [u8; 16],
     relays: &[(SocketAddrV4, u32, &SecretKey)],
     link: &SecretKey,
@@ -222,7 +235,8 @@ struct Link {
     agreement: [u8; 32],
     cancelled: bool,
     start_at: u64,
-    // Local receipt time of VF2L proof the sender still has this started match.
+    // Local receipt time of marked-link proof the sender still has this started
+    // match.
     heard_started: Option<u64>,
     // Their latest send time and when it arrived, echoed for clock samples.
     echo: Option<(u64, u64)>,
@@ -243,7 +257,8 @@ pub(crate) struct Federation {
     room: [u8; 16],
     own: u8,
     local: u32,
-    // VF2L is selected by the authenticated wrap tag, opaque to released games.
+    // The marked link is selected by the authenticated wrap tag, opaque to
+    // released games.
     adjudicated: bool,
     peer_failed: bool,
     link: SecretKey,
@@ -350,7 +365,7 @@ impl Federation {
 
     fn link_magic(&self) -> &'static [u8; 4] {
         if self.adjudicated {
-            b"VF2L"
+            MARKED_LINK_MAGIC
         } else {
             LINK_MAGIC
         }
@@ -500,7 +515,7 @@ impl Federation {
             .mac(LINK_DOMAIN, &bytes[..bytes.len() - MAC_LEN])
             .verify_slice(&bytes[bytes.len() - MAC_LEN..])
             .map_err(|_| RelayError::Authentication)?;
-        self.links[position].received.accept(read_u64(bytes, 21))?;
+        self.links[position].received.accept(read_u64(bytes, 21)?)?;
         Ok((
             position,
             bytes[29],
@@ -825,7 +840,7 @@ impl Federation {
         }
         for entry in payload[1..].chunks_exact(SILENCE_ENTRY) {
             let source = &mut ordering.sources[usize::from(entry[0])];
-            let heard = now_ms.saturating_sub(u64::from(read_u32(entry, 1)));
+            let heard = now_ms.saturating_sub(u64::from(read_u32(entry, 1)?));
             source.heard_ms = source.heard_ms.max(heard);
         }
         link.reports_silence = true;
@@ -852,7 +867,7 @@ impl Federation {
             return Err(RelayError::Malformed);
         }
         for entry in payload[1..].chunks_exact(CHECKSUM_FORWARD_ENTRY) {
-            ordering.record_checksum(entry[0], read_u32(entry, 1), read_u32(entry, 5), true);
+            ordering.record_checksum(entry[0], read_u32(entry, 1)?, read_u32(entry, 5)?, true);
         }
         Ok(())
     }
@@ -861,6 +876,7 @@ impl Federation {
     fn receive_paces(
         &self,
         position: usize,
+        sequence: u64,
         payload: &[u8],
         ordering: &mut OrderingRoom,
         now_ms: u64,
@@ -872,22 +888,34 @@ impl Federation {
         let sources = self.links[position].sources;
         for entry in payload[1..].chunks_exact(PACE_FORWARD_ENTRY) {
             let source = entry[0];
-            let pace = match entry[1] {
-                0 => OrderPace::KeepingUp,
-                1 => OrderPace::Behind,
-                2 => OrderPace::CatchingUp,
-                _ => return Err(RelayError::Malformed),
-            };
+            let pace = OrderPace::parse(entry[1])?;
             if source >= MAX_PEERS || sources & (1 << source) == 0 {
                 return Err(RelayError::Malformed);
             }
-            let tick = read_u32(entry, 4);
-            ordering.sources[usize::from(source)].pace = Some(PaceReport {
+            let sample = crate::link::PaceSegment {
                 pace,
                 frames_per_second: u16::from_le_bytes([entry[2], entry[3]]),
-                tick_micros: (tick != 0).then_some(tick),
-                at_ms: now_ms.saturating_sub(u64::from(read_u32(entry, 8))),
-            });
+                tick_micros: read_u32(entry, 4)?,
+            };
+            let age = read_u32(entry, 8)?;
+            let state = &mut ordering.sources[usize::from(source)];
+            let (last_packet, last_age) = state.forwarded_pace;
+            if sequence <= last_packet {
+                continue;
+            }
+            state.forwarded_pace = (sequence, age);
+            // Copies age by at least one forwarding interval at the sender.
+            // Arrival jitter must not turn them into fresh Behind samples.
+            if u64::from(age.saturating_sub(last_age)) >= PACE_FORWARD_MS
+                && state.pace.is_some_and(|p| {
+                    p.pace == sample.pace
+                        && p.frames_per_second == sample.frames_per_second
+                        && p.tick_micros.unwrap_or(0) == sample.tick_micros
+                })
+            {
+                continue;
+            }
+            ordering.report_pace(source, sample, now_ms.saturating_sub(u64::from(age)));
         }
         Ok(())
     }
@@ -911,9 +939,9 @@ impl Federation {
         {
             return Err(RelayError::Malformed);
         }
-        let ack = read_u64(payload, 33);
-        let first = read_u64(payload, 41);
-        let sealed = read_u32(payload, 49);
+        let ack = read_u64(payload, 33)?;
+        let first = read_u64(payload, 41)?;
+        let sealed = read_u32(payload, 49)?;
         let sources = self.links[position].sources;
         let from_coordinator = self.links[position].index == 0;
         let mut entries = Vec::with_capacity(usize::from(payload[85]));
@@ -922,9 +950,9 @@ impl Federation {
             if payload.len() < offset + ENTRY_HEADER {
                 return Err(RelayError::Malformed);
             }
-            let frame = read_u32(payload, offset);
+            let frame = read_u32(payload, offset)?;
             let source = payload[offset + 4];
-            let batch_id = read_u64(payload, offset + 5);
+            let batch_id = read_u64(payload, offset + 5)?;
             let length = usize::from(u16::from_le_bytes([
                 payload[offset + 13],
                 payload[offset + 14],
@@ -937,9 +965,10 @@ impl Federation {
                 || frame == 0
                 || if control {
                     match batch_id {
-                        RATE_BATCH => length != 3,
+                        RATE_BATCH => length != RATE_TAIL,
                         DESYNC_BATCH => length != DESYNC_TAIL,
-                        // A new control batch bumps the link version (LINK_MAGIC).
+                        // A new control batch bumps the link version
+                        // (LINK_MAGIC and MARKED_LINK_MAGIC).
                         _ => true,
                     }
                 } else if source >= MAX_PEERS || sources & (1 << source) == 0 {
@@ -960,21 +989,21 @@ impl Federation {
             return Err(RelayError::Malformed);
         }
         let link = &mut self.links[position];
-        link.ready = read_u32(payload, 0) & sources;
+        link.ready = read_u32(payload, 0)? & sources;
         let flags = payload[4];
         link.cancelled |= flags & CANCEL_START != 0;
         if flags & MATCH_STARTED != 0 {
             link.heard_started = Some(now_ms);
             self.peer_failed |= flags & MATCH_FAILED != 0;
         }
-        link.agreement = payload[53..85].try_into().unwrap();
+        link.agreement = field(payload, 53)?;
         if link.index == 0 {
-            link.start_at = read_u64(payload, 5);
+            link.start_at = read_u64(payload, 5)?;
         }
-        let sent_ms = read_u64(payload, 13);
-        let echo_ms = read_u64(payload, 21);
+        let sent_ms = read_u64(payload, 13)?;
+        let echo_ms = read_u64(payload, 21)?;
         if echo_ms != 0 && echo_ms <= now_ms {
-            let hold = u64::from(read_u32(payload, 29));
+            let hold = u64::from(read_u32(payload, 29)?);
             let rtt = (now_ms - echo_ms).saturating_sub(hold);
             // Their clock minus ours, from the midpoints of both legs.
             let offset = (2 * i128::from(sent_ms)
@@ -1034,7 +1063,7 @@ impl RelayServer {
         if bytes.len() < LINK_HEADER + MAC_LEN {
             return Err(RelayError::Malformed);
         }
-        let id: [u8; 16] = bytes[4..20].try_into().unwrap();
+        let id: [u8; 16] = field(bytes, 4)?;
         let room = self.rooms.get_mut(&id).ok_or(RelayError::Unregistered)?;
         let federation = room.federation.as_mut().ok_or(RelayError::Unregistered)?;
         let (position, kind, payload) = federation.open(bytes)?;
@@ -1055,7 +1084,7 @@ impl RelayServer {
                         ordering.cancel(now_ms);
                     }
                 }
-                None => room.ordering_cancelled = true,
+                None => self.closed_startups.close(id, now),
             }
             return Err(RelayError::Malformed);
         }
@@ -1067,30 +1096,24 @@ impl RelayServer {
                     && room.ordering.is_none()
                     && (federation.own == 0 || federation.links[position].index == 0)
                 {
-                    room.ordering_cancelled = true;
+                    self.closed_startups.close(id, now);
                 }
                 self.advance_ordering_room(id, now_ms);
                 Ok(Vec::new())
             }
             DATA_KIND => {
-                if payload.len() < 3 {
-                    return Err(RelayError::Malformed);
-                }
                 // `[source][target][data]`.
-                let (source, target, data) = (payload[0], payload[1], &payload[2..]);
+                let &[source, target, ref data @ ..] = payload else {
+                    return Err(RelayError::Malformed);
+                };
                 if source >= MAX_PEERS
                     || federation.links[position].sources & (1 << source) == 0
-                    || (target >= MAX_PEERS && target != BROADCAST)
-                    // Plaintext DATA (compaction spec §3.2).
-                    || data.len() > MAX_PAYLOAD
+                    || !data_fits(target, data)
                 {
                     return Err(RelayError::Malformed);
                 }
-                let recipients = |peer: &Peer| {
-                    now.saturating_sub(peer.last_seen) <= 30
-                        && (target == BROADCAST || target == peer.ticket.source)
-                };
-                let cost = (room.peers.iter().filter(|peer| recipients(peer)).count()
+                let receives = |peer: &Peer| data_recipient(peer, source, target, now_ms);
+                let cost = (room.peers.iter().filter(|peer| receives(peer)).count()
                     * (envelope::OVERHEAD + 1 + data.len())) as u64;
                 if !room.outgoing.permits(now, cost, ROOM_BYTES_PER_SECOND)
                     || !self.outgoing.admit_part(
@@ -1105,7 +1128,7 @@ impl RelayServer {
                 self.outgoing.charge_part(&mut room.outgoing, cost);
                 room.peers
                     .iter_mut()
-                    .filter(|peer| recipients(peer))
+                    .filter(|peer| receives(peer))
                     .map(|peer| {
                         server_packet(peer, DATA, source, data, now_ms, crate::link::SEND_OTHER)
                     })
@@ -1113,7 +1136,13 @@ impl RelayServer {
             }
             PACE_KIND => {
                 if let Some(ordering) = room.ordering.as_mut() {
-                    federation.receive_paces(position, payload, ordering, now_ms)?;
+                    federation.receive_paces(
+                        position,
+                        read_u64(bytes, 21)?,
+                        payload,
+                        ordering,
+                        now_ms,
+                    )?;
                 }
                 Ok(Vec::new())
             }
@@ -1135,9 +1164,9 @@ impl RelayServer {
 
     /// Start agreement and contribution exchange for every federated room.
     pub fn drain_federation(&mut self, now_ms: u64, now: u64) -> Vec<ForwardDatagram> {
-        self.prune(now);
+        self.prune(now, now_ms);
         let mut output = Vec::new();
-        for room in self.rooms.values_mut() {
+        for (id, room) in &mut self.rooms {
             let Some(federation) = room.federation.as_mut() else {
                 continue;
             };
@@ -1170,7 +1199,7 @@ impl RelayServer {
                     adjudicated_flags: 0,
                     ready: 0,
                     agreement: [0; 32],
-                    cancelled: room.ordering_cancelled,
+                    cancelled: self.closed_startups.contains(id),
                     starts_at: None,
                     sealed: 0,
                     paces: Vec::new(),
@@ -1216,6 +1245,7 @@ mod tests {
         clients: [ClientSession; 2],
         addresses: [SocketAddrV4; 2],
         links: Vec<(u64, usize, Vec<u8>)>,
+        link_delay_ms: [u64; 2],
         delivered: Vec<ForwardDatagram>,
         drop_first_copies: bool,
         // When each relay sent a link datagram carrying entries, and how
@@ -1264,6 +1294,7 @@ mod tests {
                 clients: [client(&keys[0], 0), client(&keys[1], 1)],
                 addresses,
                 links: Vec::new(),
+                link_delay_ms: [LINK_MS; 2],
                 delivered: Vec::new(),
                 drop_first_copies,
                 carried: [Vec::new(), Vec::new()],
@@ -1324,8 +1355,11 @@ mod tests {
                     self.lose -= usize::from(lost);
                     let untold = from == 1 && self.untold && datagram.bytes[29] == SILENCE_KIND;
                     if !(self.drop_first_copies && copied || lost || untold) {
-                        self.links
-                            .push((self.now + LINK_MS, 1 - from, datagram.bytes));
+                        self.links.push((
+                            self.now + self.link_delay_ms[from],
+                            1 - from,
+                            datagram.bytes,
+                        ));
                     }
                 } else {
                     self.delivered.push(datagram);
@@ -1575,7 +1609,7 @@ mod tests {
             // Both relays seal whole turns from the same anchor.
             for relay in 0..2 {
                 let ordering = game.ordering(relay);
-                let (anchor, _) = ordering.pace.federated_anchor.unwrap_or((0, 0));
+                let (anchor, _) = ordering.pace.anchor.unwrap_or((0, 0));
                 assert_eq!(
                     (ordering.sealed - anchor) % turn_frames(ordering.pace.rate),
                     0,
@@ -1584,10 +1618,7 @@ mod tests {
                 );
             }
         }
-        assert_eq!(
-            game.ordering(0).pace.federated_anchor,
-            game.ordering(1).pace.federated_anchor
-        );
+        assert_eq!(game.ordering(0).pace.anchor, game.ordering(1).pace.anchor);
         assert_eq!(
             [game.ordering(0).pace.rate, game.ordering(1).pace.rate],
             [30, 30]
@@ -1608,6 +1639,25 @@ mod tests {
             .map(|(_, _, entry)| entry.unwrap().1)
             .collect();
         assert_eq!(markers, [30 << 8 | 1], "slowed to 30 for source 1");
+
+        // A shorter return path improves the follower's clock sample. The
+        // history eviction clock must move with its sealing clock.
+        let follower = game.ordering(1);
+        let frame = follower.head;
+        let start = follower.starts_at.unwrap();
+        let due = follower.frame_due_ms(frame);
+        game.link_delay_ms[0] = LINK_MS / 2;
+        for _ in 0..1000 {
+            game.step();
+        }
+        let follower = game.ordering(1);
+        let new_start = follower.starts_at.unwrap();
+        assert_ne!(start, new_start, "the improved sample slewed the clock");
+        assert_eq!(
+            due - start,
+            follower.frame_due_ms(frame) - new_start,
+            "same frame, before and after a clock correction"
+        );
     }
 
     /// Only the coordinator compares checksums: a follower forwards its
@@ -1803,7 +1853,7 @@ mod tests {
             departures.extend(
                 page.into_iter()
                     .filter(|entry| entry[0] == DEPARTURE_EVENT)
-                    .map(|entry| (read_u32(&entry, 9), entry[13..].to_vec())),
+                    .map(|entry| (read_u32(&entry, 9).unwrap(), entry[13..].to_vec())),
             );
         }
         assert_eq!(
@@ -1864,10 +1914,10 @@ mod tests {
                 }]
             ));
             let mut bytes = Vec::new();
-            let current = game.clients[relay].ordering.as_ref().unwrap();
-            let (certificate, agreement) = (current.certificate.clone(), current.agreement);
+            let cert = certificate(&game.relays[relay].key, 3, 2000);
+            let agreement = game.clients[relay].ordering.as_ref().unwrap().agreement;
             game.clients[relay]
-                .configure_ordering(&certificate, agreement, &mut bytes)
+                .configure_ordering(&cert, agreement, &mut bytes)
                 .unwrap();
             assert!(matches!(
                 events(
@@ -1937,16 +1987,22 @@ mod tests {
 
     #[test]
     fn a_follower_hearing_another_link_version_cancels_the_startup() {
-        // The follower's player has sent Ready, or not yet.
-        for ready in [[true; 2], [true, false]] {
+        // The follower's player has sent Ready, or not yet. The coordinator's
+        // first packet comes as a marked relay of this version, or as a relay
+        // of another link version.
+        for (ready, digit) in [
+            ([true; 2], MARKED_LINK_MAGIC[2]),
+            ([true, false], MARKED_LINK_MAGIC[2]),
+            ([true; 2], b'9'),
+            ([true, false], b'9'),
+        ] {
             let mut game = Match::build(false, ready);
-            // The coordinator's first packet, as a relay one link version on.
             let clock = game.clock(0);
             let mut bytes = game.relays[0]
                 .drain_federation(clock, unix(clock))
                 .remove(0)
                 .bytes;
-            bytes[2] += 1;
+            bytes[2] = digit;
             let signed = bytes.len() - MAC_LEN;
             let federation = game.relays[0].rooms[&[5; 16]].federation.as_ref().unwrap();
             let tag = federation
@@ -1961,7 +2017,7 @@ mod tests {
                     .map(|_| ()),
                 Err(RelayError::Malformed)
             );
-            assert!(ready[1] || game.relays[1].rooms[&[5; 16]].ordering_cancelled);
+            assert!(ready[1] || game.relays[1].closed_startups.contains(&[5; 16]));
             for _ in 0..400 {
                 game.step();
             }
@@ -1969,9 +2025,67 @@ mod tests {
                 let ordering = game.ordering(relay);
                 assert!(
                     ordering.starts_at.is_none() && ordering.finished_at.is_some(),
-                    "relay {relay}, ready {ready:?}"
+                    "relay {relay}, ready {ready:?}, digit {digit}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn pace_history_forwarded_copies_do_not_extend_or_rewind_a_sample() {
+        let mut game = Match::new(false);
+        let mut send = |pace: OrderPace, at: u64, age: u32| {
+            let mut entry = vec![1, 1, pace as u8];
+            entry.extend_from_slice(&35u16.to_le_bytes());
+            entry.extend_from_slice(&8_000u32.to_le_bytes());
+            entry.extend_from_slice(&age.to_le_bytes());
+            let sender = game.relays[1].rooms.get_mut(&[5; 16]).unwrap();
+            let packet = sender
+                .federation
+                .as_mut()
+                .unwrap()
+                .packet(0, PACE_KIND, &entry)
+                .unwrap();
+            game.relays[0]
+                .process_at(game.addresses[1], &packet.bytes, unix(at), at)
+                .unwrap();
+            game.ordering(0).sources[1].pace.unwrap()
+        };
+        send(OrderPace::Behind, 1000, 0);
+        // A delayed second forwarding of the same sample is not new evidence.
+        let repeated = send(OrderPace::Behind, 3600, 500);
+        assert!(repeated.measured_rate(45).is_none());
+        send(OrderPace::KeepingUp, 4000, 0);
+        let older = send(OrderPace::Behind, 4100, 900);
+        assert_eq!(older.pace, OrderPace::KeepingUp);
+        send(OrderPace::Behind, 5000, 0);
+        send(OrderPace::Behind, 6000, 0);
+        assert_eq!(send(OrderPace::Behind, 7000, 0).measured_rate(45), Some(31));
+    }
+
+    #[test]
+    fn the_coordinator_refuses_a_forwarded_pace_it_cannot_name() {
+        let mut game = Match::new(false);
+        let federation = game.relays[1]
+            .rooms
+            .get_mut(&[5; 16])
+            .unwrap()
+            .federation
+            .as_mut()
+            .unwrap();
+        // `[count][source][pace][frames_per_second u16][tick_micros u32][age_ms u32]`.
+        let mut payload = [1, 1, 2, 45, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let named = federation.packet(0, PACE_KIND, &payload).unwrap();
+        payload[2] = 3;
+        let unnamed = federation.packet(0, PACE_KIND, &payload).unwrap();
+        let clock = game.clock(0);
+        for (datagram, result) in [(named, Ok(())), (unnamed, Err(RelayError::Malformed))] {
+            assert_eq!(
+                game.relays[0]
+                    .process_at(game.addresses[1], &datagram.bytes, unix(clock), clock)
+                    .map(|_| ()),
+                result
+            );
         }
     }
 
@@ -2016,6 +2130,37 @@ mod tests {
         }
         let ordering = game.ordering(1);
         assert!(ordering.starts_at.is_none() && ordering.finished_at == Some(limit));
+    }
+
+    #[test]
+    fn a_coordinator_that_retired_its_startup_cancels_a_follower_ready_later() {
+        // Only the coordinator's player is ready, under a certificate that
+        // expires unstarted at 100 s. Its ticket keeps the hop room.
+        let mut game = Match::build(false, [false; 2]);
+        let mut bytes = Vec::new();
+        let cert = certificate(&game.relays[0].key, 3, unix(100_000));
+        game.clients[0]
+            .configure_ordering(&cert, [7; 32], &mut bytes)
+            .unwrap();
+        let clock = game.clock(0);
+        events(&mut game.relays[0], &mut game.clients[0], &bytes, clock);
+        game.now = 100_000 - 1;
+        game.step();
+        assert!(game.relays[0].rooms[&[5; 16]].ordering.is_none());
+        // The follower's player is first ready after that, under a renewed
+        // certificate.
+        let cert = certificate(&game.relays[1].key, 3, 2000);
+        game.clients[1]
+            .configure_ordering(&cert, [7; 32], &mut bytes)
+            .unwrap();
+        let clock = game.clock(1);
+        events(&mut game.relays[1], &mut game.clients[1], &bytes, clock);
+        assert!(game.ordering(1).finished_at.is_none());
+        for _ in 0..400 {
+            game.step();
+        }
+        let ordering = game.ordering(1);
+        assert!(ordering.starts_at.is_none() && ordering.finished_at.is_some());
     }
 
     #[test]

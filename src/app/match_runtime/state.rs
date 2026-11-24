@@ -27,7 +27,8 @@ pub(crate) struct MatchState {
     /// a body that calls it an error rather than a desync.
     pub(crate) frame_stopped: bool,
     /// Physical byte transport and packet progress for an installed match.
-    /// Session owns the accepted participant roster and checksum history.
+    /// Session owns the accepted participant roster; `sim_runtime` (`SimHost`)
+    /// owns the checksum history.
     pub(crate) live_network: Option<crate::net::live_commands::LiveCommandSession>,
     /// LAN visit transport before the match, then discovery metadata while the
     /// same sockets are owned by live_network. Session owns admitted endpoints.
@@ -93,9 +94,6 @@ pub(crate) struct MatchState {
     /// The debug pause (`J` hotkey): the simulation is frozen
     /// without an in-scenario modal. Every modal transition ends it.
     pub(crate) debug_pause: bool,
-    /// Effective simulation ticks per second — controls game speed.
-    /// Default follows retail/YR skirmish stored game speed 1.
-    pub(crate) sim_speed_tps: u32,
 }
 
 impl MatchState {
@@ -112,19 +110,20 @@ impl MatchState {
     /// menus: those menus never stop the score clock. Audio still combines
     /// every physical pause through presentation_paused.
     pub(crate) fn elapsed_clock_paused(&self, screen: &crate::ui::game_screen::GameScreen) -> bool {
-        elapsed_clock_pause_for_screen(
-            screen,
-            self.session_mode(),
-            self.match_presentation.in_game_menu.is_open(),
-            self.match_presentation
-                .radar_anim
-                .as_ref()
-                .is_some_and(|radar| radar.movie_pause()),
-            self.sim_runtime
-                .runtime()
-                .is_some_and(|runtime| runtime.simulation.session().scenario_paused()),
-            self.match_presentation.commander_feedback.result_waits(),
-        )
+        self.match_presentation.narrative_sync.pending()
+            || elapsed_clock_pause_for_screen(
+                screen,
+                self.session_mode(),
+                self.match_presentation.in_game_menu.is_open(),
+                self.match_presentation
+                    .radar_anim
+                    .as_ref()
+                    .is_some_and(|radar| radar.movie_pause()),
+                self.sim_runtime
+                    .runtime()
+                    .is_some_and(|runtime| runtime.simulation.session().scenario_paused()),
+                self.match_presentation.commander_feedback.result_waits(),
+            )
     }
 
     pub(crate) fn paused(&self) -> bool {
@@ -133,6 +132,7 @@ impl MatchState {
 
     pub(crate) fn local_paused(&self) -> bool {
         self.match_presentation.in_game_menu.is_open()
+            || self.match_presentation.narrative_sync.pending()
             || self.debug_pause
             || self
                 .match_presentation
@@ -175,6 +175,7 @@ impl MatchState {
             .is_some_and(|rt| rt.simulation.pending_network_failure().is_some())
             || self.debug_pause
             || self.multiplayer_paused()
+            || self.match_presentation.narrative_sync.pending()
             || super::scenario_pause::blocks_main_tick(
                 self.session_mode(),
                 self.sim_runtime
@@ -405,7 +406,6 @@ mod tests {
 /// Native current House A83D4C is saved67F802, loaded67F9F3 and swizzled67FA0E.
 /// Do not retain a separate app owner across Simulation replacement or infer it
 /// from selection/human flags. Save validation owns reference validity.
-/// Evidence: docs/research/PHASE3_CURRENT_HOUSE_IDENTITY_GHIDRA_REPORT.md.
 pub(crate) fn scenario_local_owner(simulation: &crate::sim::world::Simulation) -> Option<&str> {
     simulation
         .session()

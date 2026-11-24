@@ -3,34 +3,6 @@
 use super::*;
 use crate::util::save_codec;
 
-/// Mental Omega provides custom `[ArmorTypes]` entries which must exist before
-/// cold-start TechnoType bodies bind `Armor=`. This path skips Process's normal
-/// type-data hook, so the root catalog has to be read explicitly.
-#[test]
-fn cold_start_binds_custom_ares_armor_types_before_techno_bodies() {
-    let _ares = crate::rules::ares_switch::read_ares_way(true);
-    let root = IniFile::from_str(
-        "[ArmorTypes]\nfact=wood\nsuper2=concrete_b\ntarget=0%\n\
-         [BuildingTypes]\n0=GAWEAP\n[GAWEAP]\nStrength=1000\nArmor=fact\n",
-    );
-    let trace = process_native_rules_cold_start(
-        NativeRulesRegistryState::new(true),
-        &root,
-        &IniFile::empty(),
-        None,
-        &EvaRegistry::default(),
-        &crate::rules::sound_ini::SoundRegistry::default(),
-    )
-    .unwrap();
-    let state = trace.registry_state();
-    let catalog = state.ares_armors.as_ref().expect("Ares armor catalog");
-    let fact = catalog.find("fact").expect("custom armor is allocated");
-    assert!(catalog.find("super2").is_some());
-    assert!(catalog.find("target").is_some());
-    assert!(fact.index() >= crate::rules::armor::RETAIL_ARMOR_NAMES.len());
-    assert_eq!(state.families[&RulesTypeFamily::Building][0].armor_id, fact);
-}
-
 #[test]
 fn weapon_types_register_before_animation_reads_each_rules_layer() {
     let _ares = crate::rules::ares_switch::read_ares_way(true);
@@ -66,42 +38,6 @@ fn weapon_types_register_before_animation_reads_each_rules_layer() {
             .unwrap()
             .ares_weapon
             .is_none()
-    );
-}
-
-#[test]
-fn ares_weapon_anim_list_allocates_unregistered_animation_references() {
-    use crate::rules::ruleset::RuleSet;
-    let _ares = crate::rules::ares_switch::read_ares_way(true);
-    let processed = RulesLayerStack::new(IniFile::from_str(
-        "[Animations]\n0=REGISTERED\n[WeaponTypes]\n0=MODWEAPON\n\
-         [MODWEAPON]\nDamage=1\nAnim=MODMUZZLE\n",
-    ))
-    .process_with_fixed_art(&IniFile::empty())
-    .unwrap();
-    let rules = RuleSet::from_processed_rules(&processed).unwrap();
-    assert_eq!(
-        rules.weapon("MODWEAPON").unwrap().anim,
-        ["MODMUZZLE"],
-        "Ares must preserve the retail Find-or-Allocate list read"
-    );
-}
-
-#[test]
-fn ares_warhead_anim_list_allocates_unregistered_animation_references() {
-    use crate::rules::ruleset::RuleSet;
-    let _ares = crate::rules::ares_switch::read_ares_way(true);
-    let processed = RulesLayerStack::new(IniFile::from_str(
-        "[Warheads]\n0=MODWARHEAD\n[Animations]\n0=REGISTERED\n\
-         [MODWARHEAD]\nAnimList=MODIMPACT\n",
-    ))
-    .process_with_fixed_art(&IniFile::empty())
-    .unwrap();
-    let rules = RuleSet::from_processed_rules(&processed).unwrap();
-    assert_eq!(
-        rules.warhead("MODWARHEAD").unwrap().anim_list,
-        ["MODIMPACT"],
-        "Ares must preserve the retail Find-or-Allocate list read"
     );
 }
 
@@ -351,13 +287,16 @@ fn powerup_globals_preserve_raw_indices_through_save_and_type_reset() {
 }
 
 #[test]
-fn player_at_supports_thirty_slots_without_constructing_countries() {
+fn player_at_supports_one_hundred_twenty_slots_without_constructing_countries() {
     let root = IniFile::from_str("[Countries]\n0=Americans\n");
     for (token, selector) in [
         ("<Player @ I>", 0x1183),
         ("<Player @ Z>", 0x1194),
         ("<Player @ AA>", 0x1195),
         ("<Player @ AD>", 0x1198),
+        ("<Player @ AZ>", 0x11AE),
+        ("<Player @ BA>", 0x11AF),
+        ("<Player @ DP>", 0x11F2),
     ] {
         let settings = IniFile::from_str(&format!("[MultiPlayer]\nSide={token}\n"));
         let (index, trace) = read_native_multiplayer_country(
@@ -375,9 +314,35 @@ fn player_at_supports_thirty_slots_without_constructing_countries() {
             1
         );
     }
-    assert_eq!(house_type_player_at("<Player @ AE>"), None);
+    assert_eq!(house_type_player_at("<Player @ DQ>"), None);
     assert_eq!(house_type_player_at("<Player @ [>"), None);
     assert_eq!(house_type_player_at("<player @ a>"), None);
+    assert_eq!(
+        house_type_player_at_text(0x117B + 119).as_deref(),
+        Some("<Player @ DP>")
+    );
+}
+
+#[test]
+fn multiplayer_side_constructs_no_country_past_vera_bound() {
+    let mut full = NativeRulesRegistryState::default();
+    full.families.insert(
+        RulesTypeFamily::Country,
+        (0..1usize << u16::BITS)
+            .map(|index| ProcessedType::new(format!("C{index}")))
+            .collect(),
+    );
+    let settings = IniFile::from_str("[MultiPlayer]\nSide=Newcomer\n");
+    let (index, trace) = read_native_multiplayer_country(full, &IniFile::empty(), &settings, 3);
+    assert_eq!(index, 3, "the current index stays");
+    assert_eq!(
+        trace
+            .into_registry_state_discarding_events()
+            .country_projection()
+            .count(),
+        1 << u16::BITS,
+        "no Country past CountryIdx"
+    );
 }
 
 #[test]
@@ -4530,4 +4495,37 @@ fn ares_country_reads_start_in_multiplayer_with_const() {
     };
     assert!(with_const("PARENT"));
     assert!(!with_const("CHILD") && !with_const("PLAIN"));
+}
+
+/// Original RA2 stores the 36 moved type references (incl. Parachute) under
+/// [AudioVisual]; YR moved them to [General]. The RA2 launch profile must read
+/// them from AudioVisual, while the YR profile ignores an AudioVisual-only key.
+#[test]
+fn ra2_reads_moved_general_references_from_audiovisual() {
+
+    let build = |section: &str| {
+        let layers = RulesLayerStack::new(IniFile::from_str(&format!(
+            "[Animations]\n0=PARACH\n[General]\n\n[{section}]\nParachute=PARACH\nDropZoneAnim=PARACH\n"
+        )));
+        let processed = layers.process().unwrap();
+        RuleSet::from_processed_rules(&processed).unwrap()
+    };
+
+    crate::util::ra2_launch::set_override(true);
+    let ra2 = build("AudioVisual");
+    assert_eq!(ra2.general.parachute_shp.as_deref(), Some("PARACH"));
+
+    crate::util::ra2_launch::set_override(false);
+    let yr = build("AudioVisual");
+    assert_eq!(
+        yr.general.parachute_shp, None,
+        "YR ignores an AudioVisual-only Parachute"
+    );
+    let yr_general = build("General");
+    assert_eq!(
+        yr_general.general.parachute_shp.as_deref(),
+        Some("PARACH")
+    );
+
+    crate::util::ra2_launch::clear_override();
 }

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::app::match_runtime::session::{NetworkMapMetadata, NetworkVacancy};
 use crate::app::shell_network_setup::{HostOptions, NetworkSetupEvent};
 use crate::app::shell_wol::{WolHighScoreRecord, WolLadderRecord};
-use crate::ui::wol_lobby::{WolChannel, WolMember};
+use crate::ui::wol_lobby::{WolChannel, WolMember, WolRoomSummary};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct Channel {
@@ -24,6 +24,42 @@ pub(super) struct Channel {
     pub name: String,
     #[serde(default)]
     pub ex_info: String,
+    #[serde(
+        default,
+        rename = "room_summary",
+        deserialize_with = "room_summary",
+        skip_serializing
+    )]
+    pub summary: Option<WolRoomSummary>,
+}
+
+// Optional display data must never prevent listing or joining a room with an
+// older or newer lobby. The host's create/advertise requests never send it.
+fn room_summary<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<WolRoomSummary>, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let Ok(mut summary) = serde_json::from_value::<WolRoomSummary>(value) else {
+        return Ok(None);
+    };
+    let max = crate::skirmish_launch::NETWORK_PLAYER_SLOT_COUNT;
+    if summary.teams.as_ref().is_some_and(|teams| {
+        teams.len() > usize::from(*crate::skirmish_launch::ROOM_TEAMS.end())
+            || teams.iter().map(|&count| usize::from(count)).sum::<usize>() > max
+            || (!teams.is_empty() && teams.iter().filter(|&&count| count > 0).count() < 2)
+    }) || [summary.observers, summary.computers]
+        .into_iter()
+        .flatten()
+        .any(|n| usize::from(n) > max)
+    {
+        return Ok(None);
+    }
+    summary.map = summary.map.filter(|name| {
+        !name.trim().is_empty()
+            && name.chars().count() <= 128
+            && !name.chars().any(char::is_control)
+    });
+    Ok(Some(summary))
 }
 
 fn unknown_ping() -> i32 {
@@ -42,6 +78,7 @@ impl From<WolChannel> for Channel {
             ping: channel.ping,
             name: channel.name,
             ex_info: channel.ex_info,
+            summary: None,
         }
     }
 }
@@ -58,6 +95,7 @@ impl From<Channel> for WolChannel {
             ping: channel.ping,
             name: channel.name,
             ex_info: channel.ex_info,
+            summary: channel.summary,
         }
     }
 }
@@ -95,82 +133,17 @@ impl Member {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub(super) struct MapMetadata {
-    pub display_name: String,
-    pub player_capacity: i32,
-    pub official: bool,
-    pub byte_length: i32,
-    pub digest: String,
-    pub source_sha256: String,
-    pub effective_digest: String,
-}
-
-impl From<MapMetadata> for NetworkMapMetadata {
-    fn from(value: MapMetadata) -> Self {
-        Self {
-            display_name: value.display_name,
-            player_capacity: value.player_capacity,
-            official: value.official,
-            byte_length: value.byte_length,
-            digest: value.digest,
-            source_sha256: value.source_sha256,
-            effective_digest: value.effective_digest,
-        }
-    }
-}
-
-impl From<NetworkMapMetadata> for MapMetadata {
-    fn from(value: NetworkMapMetadata) -> Self {
-        Self {
-            display_name: value.display_name,
-            player_capacity: value.player_capacity,
-            official: value.official,
-            byte_length: value.byte_length,
-            digest: value.digest,
-            source_sha256: value.source_sha256,
-            effective_digest: value.effective_digest,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum Vacancy {
-    Open,
-    Closed,
-    Observer,
-    Waiting,
-}
-
-impl From<NetworkVacancy> for Vacancy {
-    fn from(value: NetworkVacancy) -> Self {
-        match value {
-            NetworkVacancy::Open => Self::Open,
-            NetworkVacancy::Closed => Self::Closed,
-            NetworkVacancy::OpenObserver => Self::Observer,
-            NetworkVacancy::Waiting => Self::Waiting,
-        }
-    }
-}
-
-impl From<Vacancy> for NetworkVacancy {
-    fn from(value: Vacancy) -> Self {
-        match value {
-            Vacancy::Open => Self::Open,
-            Vacancy::Closed => Self::Closed,
-            Vacancy::Observer => Self::OpenObserver,
-            Vacancy::Waiting => Self::Waiting,
-        }
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize)]
 pub(super) struct Options {
+    /// Authored campaign room record, sent only to a lobby that offers
+    /// `campaign_rooms` (docs/lobby-protocol.md, HostOptions). The older
+    /// fields carry only the lobby's participant/control and map proofs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub campaign: Option<crate::app::shell_network_setup::campaign_room::CampaignRoom>,
     pub launch: crate::skirmish_launch::SkirmishLaunchSession,
-    pub map_metadata: MapMetadata,
+    pub map_metadata: NetworkMapMetadata,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub random_map: Option<crate::app::shell_network_setup::maps::GeneratedMapManifest>,
-    pub vacancies: [Vacancy; crate::skirmish_launch::NETWORK_PLAYER_SLOT_COUNT],
+    pub vacancies: [NetworkVacancy; crate::skirmish_launch::NETWORK_PLAYER_SLOT_COUNT],
     pub observer_row: Option<u8>,
     pub cooperative_difficulty: i32,
     /// Cooperative's campaign record, the `C0` text LAN sends as its own
@@ -195,11 +168,10 @@ impl Options {
             .iter()
             .position(|human| human.name.eq_ignore_ascii_case(local))
             .ok_or_else(|| anyhow::anyhow!("server roster omits the signed-in player"))?;
-        self.launch.rebuild_house_roster();
         Ok(HostOptions {
             launch: self.launch,
-            map_metadata: self.map_metadata.into(),
-            vacancies: self.vacancies.map(Into::into),
+            map_metadata: self.map_metadata,
+            vacancies: self.vacancies,
             observer_row: self.observer_row,
             cooperative_difficulty: self.cooperative_difficulty,
             seed: self.seed,
@@ -213,7 +185,18 @@ impl Options {
     /// host's rows; then the options themselves.
     pub fn into_setup_events(mut self, local: &str) -> anyhow::Result<Vec<NetworkSetupEvent>> {
         let campaign = self.cooperative_campaign.take();
+        let authored = self.campaign.take();
         let options = self.into_options(local)?;
+        if let Some(authored) = authored {
+            anyhow::ensure!(
+                campaign.is_none(),
+                "campaign room contains stock Co-op data"
+            );
+            return Ok(vec![NetworkSetupEvent::CampaignHostSetup {
+                options,
+                room: authored,
+            }]);
+        }
         Ok(campaign
             .map(NetworkSetupEvent::CooperativeCampaign)
             .into_iter()
@@ -240,7 +223,7 @@ pub(super) struct Session {
     pub player_id: String,
     pub nickname: String,
     pub token: String,
-    // The operator's welcome, when one is set; the game's own otherwise.
+    // The operator's welcome, when one is set; the game has none of its own.
     #[serde(default)]
     pub motd: Option<String>,
     /// An account's password sign-in with `remember`: this computer's
@@ -275,12 +258,34 @@ pub(super) struct Match {
     pub map: Option<String>,
     pub watchers: u32,
     pub max_watchers: u32,
+    #[serde(default, deserialize_with = "listed_count")]
+    pub observers: Option<u8>,
+    #[serde(default, deserialize_with = "listed_count")]
+    pub computers: Option<u8>,
     #[serde(default)]
     pub names: Vec<String>,
+    #[serde(default, rename = "room_summary", deserialize_with = "room_summary")]
+    pub summary: Option<WolRoomSummary>,
+}
+
+fn listed_count<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<u8>, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(value
+        .as_u64()
+        .and_then(|n| u8::try_from(n).ok())
+        .filter(|&n| usize::from(n) <= crate::skirmish_launch::NETWORK_PLAYER_SLOT_COUNT))
 }
 
 impl From<Match> for crate::app::shell_wol::WolMatch {
     fn from(value: Match) -> Self {
+        // Older watch lists carry these seat totals on the match itself.
+        let summary = value.summary.or_else(|| {
+            (value.observers.is_some() || value.computers.is_some()).then_some(WolRoomSummary {
+                observers: value.observers,
+                computers: value.computers,
+                ..Default::default()
+            })
+        });
         Self {
             match_id: value.match_id,
             name: value.name.unwrap_or_default(),
@@ -288,6 +293,7 @@ impl From<Match> for crate::app::shell_wol::WolMatch {
             watchers: value.watchers,
             max_watchers: value.max_watchers,
             names: value.names,
+            summary,
         }
     }
 }
@@ -467,9 +473,47 @@ mod tests {
     use crate::map::source::TransferResource;
     use crate::skirmish_launch::{
         AiDifficulty, HostRules, LaunchCountry, LaunchHumanRole, LaunchStartPosition, LaunchTeam,
-        PreFillHouseRoster, ROOM_TEAMS, SkirmishAiSlot, SkirmishHumanSlot, SkirmishLaunchMode,
-        SkirmishLaunchOptions, SkirmishLaunchSession, SkirmishLocalSlot,
+        ROOM_TEAMS, SkirmishAiSlot, SkirmishHumanSlot, SkirmishLaunchMode, SkirmishLaunchOptions,
+        SkirmishLaunchSession, SkirmishLocalSlot,
     };
+
+    #[test]
+    fn public_room_summary_is_optional_and_never_sent_by_the_host() {
+        let mut room = json!({"kind":41,"max_users":16,"users":8,"name":"Friday Night"});
+        let old: Channel = serde_json::from_value(room.clone()).unwrap();
+        assert!(WolChannel::from(old).summary.is_none());
+        room["room_summary"] = json!({"map":"Heck Freezes Over","teams":[0,4,0,4],"observers":2});
+        let record = WolChannel::from(serde_json::from_value::<Channel>(room.clone()).unwrap());
+        let summary = record.summary.as_ref().unwrap();
+        assert_eq!(summary.teams.as_deref(), Some([0, 4, 0, 4].as_slice()));
+        assert_eq!(summary.map.as_deref(), Some("Heck Freezes Over"));
+        assert_eq!(summary.observers, Some(2));
+        assert!(
+            serde_json::to_value(Channel::from(record))
+                .unwrap()
+                .get("room_summary")
+                .is_none()
+        );
+
+        room["room_summary"]["teams"] = json!([30, 30]);
+        let record = WolChannel::from(serde_json::from_value::<Channel>(room).unwrap());
+        assert_eq!(record.name, "Friday Night");
+        assert!(record.summary.is_none());
+
+        let watch: Match = serde_json::from_value(json!({
+            "match_id":"running","map":"Snow Valley","watchers":1,"max_watchers":10,
+            "observers":2,"computers":1
+        }))
+        .unwrap();
+        let watch = crate::app::shell_wol::WolMatch::from(watch);
+        let seats = watch
+            .summary
+            .expect("older lobbies already list seated spectators and AI");
+        assert_eq!(
+            (seats.observers, seats.computers, seats.teams),
+            (Some(2), Some(1), None)
+        );
+    }
 
     fn human(row: u8, team: LaunchTeam) -> SkirmishHumanSlot {
         SkirmishHumanSlot {
@@ -488,8 +532,8 @@ mod tests {
         }
     }
 
-    fn map(file: &str, player_capacity: i32, official: bool, digest: String) -> MapMetadata {
-        MapMetadata {
+    fn map(file: &str, player_capacity: i32, official: bool, digest: String) -> NetworkMapMetadata {
+        NetworkMapMetadata {
             display_name: file.into(),
             player_capacity,
             official,
@@ -504,30 +548,28 @@ mod tests {
     /// and the game's own House roster for its people and AI.
     fn room(
         mode: i32,
-        map: MapMetadata,
+        map: NetworkMapMetadata,
         humans: Vec<SkirmishHumanSlot>,
         opponents: Vec<SkirmishAiSlot>,
         options: SkirmishLaunchOptions,
     ) -> Options {
-        let mut launch = SkirmishLaunchSession {
-            mode: SkirmishLaunchMode::stock(mode).unwrap(),
-            selected_map_file: Some(map.display_name.clone()),
+        let launch = SkirmishLaunchSession::from_rows(
+            SkirmishLaunchMode::stock(mode).unwrap(),
+            Some(map.display_name.clone()),
             humans,
-            local_player_index: 0,
-            ai_player_count: opponents.len() as i32,
+            0,
             opponents,
-            pre_fill_house_roster: PreFillHouseRoster::new(Vec::new(), Vec::new()),
             options,
-        };
-        launch.rebuild_house_roster();
+        );
         Options {
             launch,
             map_metadata: map,
             random_map: None,
-            vacancies: [Vacancy::Closed; crate::skirmish_launch::NETWORK_PLAYER_SLOT_COUNT],
+            vacancies: [NetworkVacancy::Closed; crate::skirmish_launch::NETWORK_PLAYER_SLOT_COUNT],
             observer_row: None,
             cooperative_difficulty: 1,
             cooperative_campaign: None,
+            campaign: None,
             seed: Some(0),
             watching: None,
         }
@@ -622,9 +664,9 @@ mod tests {
                 byte_length: TransferResource::Preview.limit(),
             },
         });
-        generated.vacancies[2] = Vacancy::Waiting;
-        generated.vacancies[3..28].fill(Vacancy::Open);
-        generated.vacancies[29] = Vacancy::Observer;
+        generated.vacancies[2] = NetworkVacancy::Waiting;
+        generated.vacancies[3..28].fill(NetworkVacancy::Open);
+        generated.vacancies[29] = NetworkVacancy::OpenObserver;
         generated.observer_row = Some(29);
 
         // Cooperative: two players and the host's campaign record.
