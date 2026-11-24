@@ -95,6 +95,10 @@ The Kotlin `LauncherActivity` uses platform Android Views and a landscape-first 
 
 See [android-launcher.md](android-launcher.md) for launcher sections, supported controls, current limitations, and baseline verification.
 
+## Mod menu music
+
+Menu music plays automatically on the game's main menu through the selected mod's `[INTRO]` theme entry. If a selected mod has no playable `INTRO`, Iron Harbor uses the first playable `Normal=yes` theme from that mod's selected theme catalog. Vanilla Yuri's Revenge keeps its own `INTRO` behavior. Tracks must be WAV or AUD files reachable through the selected game/mod asset stack; BSM decoding is not supported. This is automatic at game startup, not a launcher music-picker screen.
+
 ## Release signing and ARM64 build b3
 
 The b3 fork uses the independent product name **Iron Harbor Mobile** and application ID `org.ironharbor.mobile`; `org.vera20k` remains the JNI namespace for the existing native entry points. Its release signing key is machine-specific and must never be committed. Create `android/.android/android-release.jks` and supply `ANDROID_RELEASE_STORE_FILE`, `ANDROID_RELEASE_STORE_PASSWORD`, `ANDROID_RELEASE_KEY_ALIAS`, and `ANDROID_RELEASE_KEY_PASSWORD` to Gradle from a secure local secret store. The checkout ignores `android/.android/`.

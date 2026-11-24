@@ -285,6 +285,10 @@ pub(crate) struct ThemeAllowContext {
 #[derive(Debug)]
 pub(crate) struct ThemeRuntime {
     catalog: Option<ThemeCatalog>,
+    /// Resolved once with the startup resource stack: use the mod's authored
+    /// INTRO when playable, otherwise its first playable normal theme. Stock
+    /// play always keeps INTRO (`Main__PrepareSession @ 0x0052D9A0`).
+    menu_theme_index: Option<i32>,
     /// Player-supplied in-match BGM, indexed once from `musics/` at startup.
     /// `None` keeps the retail playlist exactly as gamemd drives it.
     custom_music: Option<Arc<CustomMusicLibrary>>,
@@ -310,10 +314,34 @@ pub(crate) struct ThemeRuntime {
     allow_context: ThemeAllowContext,
 }
 
+fn select_menu_theme(
+    catalog: &ThemeCatalog,
+    mod_selected: bool,
+    mut can_play: impl FnMut(&str) -> bool,
+) -> i32 {
+    let intro = catalog.from_name(MENU_THEME_SECTION);
+    let intro_track = catalog.entry(intro).map(|entry| entry.sound.as_str());
+    if !mod_selected || intro_track.is_some_and(|sound| !sound.is_empty() && can_play(sound)) {
+        return intro;
+    }
+    catalog
+        .entries()
+        .iter()
+        .enumerate()
+        .find(|(index, entry)| {
+            *index as i32 != intro
+                && entry.normal
+                && !entry.sound.is_empty()
+                && can_play(&entry.sound)
+        })
+        .map_or(intro, |(index, _)| index as i32)
+}
+
 impl Default for ThemeRuntime {
     fn default() -> Self {
         Self {
             catalog: None,
+            menu_theme_index: None,
             custom_music: None,
             custom_music_in_match: false,
             resolved_sides: Vec::new(),
@@ -364,6 +392,22 @@ impl ThemeRuntime {
             } else {
                 catalog.without_scan()
             };
+            let menu_theme_index =
+                select_menu_theme(&catalog, assets.mod_dir().is_some(), |sound| {
+                    gates.launcher_audio_available
+                        && !gates.startup_suppressed
+                        && prepare_track(sound, assets).is_some()
+                });
+            if assets.mod_dir().is_some()
+                && menu_theme_index != catalog.from_name(MENU_THEME_SECTION)
+                && let Some(entry) = catalog.entry(menu_theme_index)
+            {
+                log::info!(
+                    "Mod menu music: INTRO unavailable; using theme '{}'",
+                    entry.key
+                );
+            }
+            self.menu_theme_index = Some(menu_theme_index);
             self.resolved_sides = vec![-1; catalog.entries().len()];
             self.catalog = Some(catalog);
         }
@@ -662,7 +706,12 @@ impl ThemeRuntime {
         gates: ThemeGates,
         physical: MusicOutputState,
     ) -> ThemeAction {
-        self.play_track(MENU_THEME_SECTION, assets, gates, physical)
+        self.initialize_catalog(assets, gates);
+        let index = self
+            .menu_theme_index
+            .unwrap_or_else(|| self.from_name(MENU_THEME_SECTION));
+        let mut prepare = |stem: &str| prepare_track(stem, assets);
+        self.play_song(index, gates, physical, &mut prepare)
     }
 
     /// `ScenarioClass__Start_Scenario @ 0x00683AB0` after `Read_Scenario`:
@@ -1159,6 +1208,31 @@ mod tests {
             vec![0.0, 0.0],
             22_050,
         ))
+    }
+
+    #[test]
+    fn mod_menu_uses_first_playable_normal_theme_when_intro_is_silent() {
+        let mut entries = catalog_from_ini(&IniFile::from_str(
+            "[Themes]\n1=INTRO\n2=MenuSong\n3=MatchSong\n\
+             [INTRO]\nSound=nothing\nNormal=no\nRepeat=yes\n\
+             [MenuSong]\nSound=MenuSong\nNormal=yes\n\
+             [MatchSong]\nSound=MatchSong\nNormal=yes\n",
+        ));
+        for entry in &mut entries {
+            entry.available = !entry.sound.eq_ignore_ascii_case("nothing");
+        }
+        let catalog = ThemeCatalog::from_entries_for_test(entries);
+
+        assert_eq!(
+            select_menu_theme(&catalog, true, |sound| sound == "MenuSong"),
+            catalog.from_name("MenuSong"),
+            "mods with a silent INTRO should use their first playable normal theme"
+        );
+        assert_eq!(
+            select_menu_theme(&catalog, false, |_| true),
+            catalog.from_name("INTRO"),
+            "vanilla keeps its exact INTRO choice"
+        );
     }
 
     fn no_draw(_low: i32, _high: i32) -> i32 {
