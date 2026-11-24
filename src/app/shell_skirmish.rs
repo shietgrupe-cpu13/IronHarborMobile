@@ -297,11 +297,29 @@ impl App {
 
     pub(crate) fn ensure_skirmish_shell_chrome(state: &mut AppState) -> bool {
         let yr_original_style = state.persistence.options_profile.plays_yr_original_style();
+        // Ares country names are populated as the selected mod's Rules are
+        // retained. The atlas may already have been built for the launcher
+        // before those names were available, so include them in its identity.
+        let extra_flags = if state.process_assets.reads_ares_way() {
+            state
+                .process_assets
+                .native_rules()
+                .map(|rules| rules.country_flag_files())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         if state
             .frontend
             .skirmish_shell_chrome
             .as_ref()
-            .is_some_and(|atlas| atlas.yr_original_style == yr_original_style)
+            .is_some_and(|atlas| {
+                atlas.yr_original_style == yr_original_style
+                    && crate::render::skirmish_shell_chrome::same_country_flag_files(
+                        &atlas.country_flag_files,
+                        &extra_flags,
+                    )
+            })
         {
             return true;
         }
@@ -316,18 +334,6 @@ impl App {
             return false;
         };
 
-        // Ares' country flags join the atlas when Ares.dll is loaded (the
-        // game is read the Ares way).
-        let ares = state.process_assets.reads_ares_way();
-        let extra_flags = if ares {
-            state
-                .process_assets
-                .native_rules()
-                .map(|rules| rules.country_flag_files())
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
         let dialog_background = state.frontend.shell_dialog_background.clone();
         let started = crate::util::time::Instant::now();
         state.frontend.skirmish_shell_chrome =
