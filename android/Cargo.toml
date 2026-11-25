@@ -16,8 +16,7 @@ crate-type = ["cdylib"]
 
 # The client's feature gates reach Android through this crate, so a shipped
 # build can turn the dev overlays off exactly as the desktop release workflow
-# does (`--no-default-features`). A second capability would be added the same
-# way.
+# does (`--no-default-features`).
 [features]
 default = ["dev-overlays"]
 dev-overlays = ["vera20k/dev-overlays"]
@@ -25,6 +24,7 @@ dev-overlays = ["vera20k/dev-overlays"]
 # rules/runtime support. The feature is opt-in at build time and does not
 # change the default behavior of vanilla Yuri's Revenge data.
 phobos = ["vera20k/phobos"]
+npatch = ["vera20k/npatch"]
 
 [target.'cfg(target_os = "android")'.dependencies]
 # The client, for entry::run_with_loop and the App it drives.
