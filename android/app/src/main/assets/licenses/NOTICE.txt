@@ -1,0 +1,10 @@
+Iron Harbor Mobile — unofficial modified Android fork based on VERA20K.
+Copyright © 2026 Halvor Nikolai Rusten and VERA20K contributors.
+Android adaptations maintained by Gamerbry. Notice added 2026-11-25.
+GPLv3 with upstream additional terms; no warranty under GPLv3 sections 15–16.
+This product includes software developed by the Ares Contributors.
+This product includes software developed by the Phobos Developers.
+Source: https://github.com/shietgrupe-cpu13/IronHarborMobile
+Published source revisions: https://github.com/shietgrupe-cpu13/IronHarborMobile/blob/android-development/docs/ANDROID_RELEASE_SOURCES.md
+The distributor must provide the corresponding source for the exact APK build.
+See accompanying license files. This directory is an initial notice bundle, not a complete dependency inventory; update it for each release.
