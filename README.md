@@ -10,13 +10,15 @@ This fork adapts the Rust engine for Android devices, including mobile input, An
 
 ## Downloads and source
 
-See this repository's [releases](https://github.com/shietgrupe-cpu13/vera20kMobile/releases) for any published builds. Players must supply their own lawfully obtained Red Alert 2: Yuri's Revenge game files.
+See this repository's [releases](https://github.com/shietgrupe-cpu13/IronHarborMobile/releases) for any published builds. Players must supply their own lawfully obtained Red Alert 2: Yuri's Revenge game files.
 
 The project's source is available in this repository under GPLv3 and the applicable additional terms. APK distributions must identify the exact corresponding source revision and provide access to the complete corresponding source, including applicable build scripts and configuration, under GPLv3 section 6. This policy applies to test builds distributed outside GitHub as well. A link to the moving main branch alone does not establish that a particular APK matches its source.
 
+The current Android source is on the [android-development branch](https://github.com/shietgrupe-cpu13/IronHarborMobile/tree/android-development). See the [release source index](docs/ANDROID_RELEASE_SOURCES.md) and [release compliance procedure](docs/ANDROID_RELEASE_COMPLIANCE.md).
+
 ## Development and support
 
-Android-specific source and integration files are in [android/](android/). The Rust engine is in [src/](src/). Report issues specific to this fork through this repository's [issue tracker](https://github.com/shietgrupe-cpu13/vera20kMobile/issues). For official upstream documentation and releases, visit [YuriPlanet/vera20k](https://github.com/YuriPlanet/vera20k).
+Android-specific source and integration files are in [android/ on android-development](https://github.com/shietgrupe-cpu13/IronHarborMobile/tree/android-development/android). The Rust engine is in [src/](src/). Report issues specific to this fork through this repository's [issue tracker](https://github.com/shietgrupe-cpu13/IronHarborMobile/issues). For official upstream documentation and releases, visit [YuriPlanet/vera20k](https://github.com/YuriPlanet/vera20k).
 
 ## Upstream support
 
