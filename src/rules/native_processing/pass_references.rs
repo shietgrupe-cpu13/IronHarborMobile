@@ -320,11 +320,10 @@ impl RulesPassProcessor {
             } else {
                 section
             };
-            // An ordinary build never reads the NPSE extension, so it neither
-            // allocates the canopy's AnimType nor keeps the pointer.
-            if key == "VehicleParachute" && !crate::rules::NPATCH_ENABLED {
-                continue;
-            }
+            // NPSE's General reader runs after the stock reads, so its
+            // FindOrAllocate identity lands after the vanilla pointers. All
+            // builds read it; only its presence turns on the per-game switch.
+            let _npatch = (key == "VehicleParachute").then(crate::rules::ares_switch::npatch_reads);
             if ares_way
                 && key != "DefaultMirageDisguises"
                 && ARES_GENERAL_LISTS.iter().any(|&(name, _)| name == key)

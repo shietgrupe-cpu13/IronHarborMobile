@@ -988,6 +988,8 @@ pub struct RuleSet {
     /// Whether Phobos plays in this game, decided once from its Rules
     /// projection by `rules::phobos_switch`. Read through [`Self::phobos`].
     phobos: bool,
+    /// Whether NPatch plays in this game, decided from its Rules data.
+    npatch: bool,
     /// VERA: whether this game plays RA2 Mode (docs/ra2-mode.md), decided once
     /// at load from the launch's choice (`util::ra2_launch`). Read through
     /// [`Self::ra2`].

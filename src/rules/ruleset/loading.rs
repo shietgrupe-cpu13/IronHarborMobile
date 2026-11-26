@@ -41,9 +41,9 @@ impl RuleSet {
 
     /// Project processed Rules into the game's rules, the Ares way when their
     /// registry reads that way (`ares_switch::ares_way`). The projection's
-    /// reader lookups are recorded, so the per-game Ares and Phobos switches
-    /// it stores ([`Self::ares`], [`Self::phobos`]) also count the keys only
-    /// these readers read.
+    /// reader lookups are recorded, so the per-game Ares, Phobos and NPatch
+    /// switches it stores ([`Self::ares`], [`Self::phobos`], [`Self::npatch`])
+    /// also count the keys only these readers read.
     pub fn from_processed_rules(processed: &ProcessedRulesLayers) -> Result<Self, RulesError> {
         let _ares_way = crate::rules::ares_switch::read_ares_way(
             processed.native_registry_state().reads_ares_way(),
@@ -53,6 +53,7 @@ impl RuleSet {
         rules.ares = processed.ares_inputs().decide(&reads);
         rules.ares_kept_off = processed.ares_inputs().kept_off(&reads);
         rules.phobos = crate::rules::phobos_switch::decide(&reads);
+        rules.npatch = processed.npatch_inputs().decide(&reads);
         rules.reads_ares_way = processed.native_registry_state().reads_ares_way();
         rules.apply_ra2(crate::util::ra2_launch::enabled());
         Ok(rules)
@@ -2064,6 +2065,7 @@ impl RuleSet {
             ares: false,
             ares_kept_off: false,
             phobos: false,
+            npatch: false,
             ra2: false,
             reads_ares_way: false,
             ares_global_controls: processed.ares_global_controls().clone(),

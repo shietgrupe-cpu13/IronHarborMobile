@@ -35,6 +35,17 @@ impl ProcessedRulesLayers {
         &self.ares_inputs
     }
 
+    pub(crate) fn npatch_inputs(&self) -> crate::rules::npatch_switch::NPatchInputs {
+        if self.npatch_inputs.is_empty() {
+            crate::rules::npatch_switch::NPatchInputs::from_saved_rules(
+                &self.ini,
+                &self.native_type_construction_trace,
+            )
+        } else {
+            self.npatch_inputs.clone()
+        }
+    }
+
     pub(crate) fn ares_global_controls(&self) -> &AresGlobalControls {
         &self
             .native_type_construction_trace

@@ -157,30 +157,40 @@ fn gsi_17_02_header_roundtrip_carries_identity_versions_and_description() {
 
 #[test]
 fn snapshot_capability_rejects_foreign_mode_before_body_decode() {
-    let bytes = GameSnapshot::save_validated(&Simulation::new(), 0, 0, "synthetic", 0);
-    let mut header = GameSnapshot::read_header(&bytes).unwrap();
+    let mut header = GameSnapshotHeader {
+        product_magic: SNAPSHOT_PRODUCT_MAGIC,
+        envelope_version: SNAPSHOT_ENVELOPE_VERSION,
+        layout: snapshot_layout(),
+        description: "synthetic".to_owned(),
+        map_hash: 0,
+        rules_hash: 0,
+        tick: 0,
+        save_timestamp: 0,
+        map_name: "OFFICIAL.MAP".to_owned(),
+        compatibility: RulesCompatibility::default(),
+    };
     // Flip every capability bit: the result is a foreign mode for any build.
     // No build records the Ares bit any more, so it flips to set.
     header.compatibility = RulesCompatibility::from_capabilities(
         true,
         !crate::rules::PHOBOS_ENABLED,
-        !crate::rules::NPATCH_ENABLED,
+        true,
         !crate::rules::VERAX_ENABLED,
         !crate::rules::NPBUG_ENABLED,
     );
     // A complete header with no body proves capability admission runs before
     // Simulation deserialization, even without bound scenario resources.
     let bytes = save_codec::serialize(&header).unwrap();
-    for result in [
+    assert!(matches!(
         GameSnapshot::load(&bytes),
+        Err(SnapshotError::CapabilityMismatch { expected, found })
+            if expected == RulesCompatibility::default() && found == header.compatibility
+    ));
+    assert!(matches!(
         GameSnapshot::load_with_resources(&bytes),
-    ] {
-        assert!(matches!(
-            result,
-            Err(SnapshotError::CapabilityMismatch { expected, found })
-                if expected == RulesCompatibility::default() && found == header.compatibility
-        ));
-    }
+        Err(SnapshotError::CapabilityMismatch { expected, found })
+            if expected == RulesCompatibility::default() && found == header.compatibility
+    ));
     let metadata = GameSnapshot::read_metadata(&bytes).unwrap();
     assert_eq!(metadata.compatibility, header.compatibility);
     assert!(!metadata.is_compatible());

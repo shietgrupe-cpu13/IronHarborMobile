@@ -121,6 +121,18 @@ impl NativeTypeConstructionTrace {
         &self.registry_state
     }
 
+    pub(crate) fn npatch_type_sections(&self) -> impl Iterator<Item = (&IniSection, bool)> {
+        self.registry_state
+            .families
+            .iter()
+            .flat_map(|(family, members)| {
+                let is_building = *family == RulesTypeFamily::Building;
+                members
+                    .iter()
+                    .map(move |member| (&member.body, is_building))
+            })
+    }
+
     pub(crate) fn into_parts(
         self,
     ) -> (

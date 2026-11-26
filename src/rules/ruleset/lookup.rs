@@ -851,6 +851,12 @@ impl RuleSet {
         self.phobos
     }
 
+    /// Whether this game's Rules enable NPatch-specific behavior.
+    #[inline]
+    pub fn npatch(&self) -> bool {
+        self.npatch
+    }
+
     /// VERA: whether this game plays RA2 Mode (docs/ra2-mode.md): original
     /// Red Alert 2's rules where they differ from Yuri's Revenge. Sim and
     /// rules read this one answer; app, asset and INI-root code read the

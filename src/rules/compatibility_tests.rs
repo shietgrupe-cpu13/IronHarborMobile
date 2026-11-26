@@ -20,6 +20,17 @@ fn processed() -> ProcessedRulesLayers {
 }
 
 #[test]
+fn processed_rules_from_before_npatch_inputs_default_the_extension_off() {
+    let mut wire = serde_json::to_value(processed()).unwrap();
+    let fields = wire.as_object_mut().unwrap();
+    assert!(!fields.contains_key("npatch_inputs"));
+
+    let restored: ProcessedRulesLayers = serde_json::from_value(wire).unwrap();
+    let rules = RuleSet::from_processed_rules(&restored).unwrap();
+    assert!(!rules.npatch());
+}
+
+#[test]
 fn compiled_capability_controls_real_readers_and_roundtrip() {
     for ares_way in [false, true] {
         let _ares = crate::rules::ares_switch::read_ares_way(ares_way);
@@ -159,10 +170,14 @@ fn all_capability_combinations_round_trip_and_describe_themselves() {
         !RulesCompatibility::default().has_ares(),
         "no build records Ares any more"
     );
+    assert!(
+        !RulesCompatibility::default().has_npatch(),
+        "NPatch is a per-game switch, not a build capability"
+    );
     let other = RulesCompatibility::from_capabilities(
         true,
         !PHOBOS_ENABLED,
-        !crate::rules::NPATCH_ENABLED,
+        true,
         !VERAX_ENABLED,
         !crate::rules::NPBUG_ENABLED,
     );

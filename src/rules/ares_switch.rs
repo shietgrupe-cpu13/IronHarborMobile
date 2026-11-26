@@ -196,6 +196,22 @@ pub(crate) fn phobos_reads() -> PhobosReads {
     PhobosReads(PhantomData)
 }
 
+/// Marks the reads made while it lives as an NPatch reader's.
+#[must_use = "the scope ends when the guard drops"]
+pub(crate) struct NpatchReads(OnThisThread);
+
+/// Open an NPatch reader scope.
+pub(crate) fn npatch_reads() -> NpatchReads {
+    RECORDER.with_borrow_mut(|recorder| recorder.npatch_depth += 1);
+    NpatchReads(PhantomData)
+}
+
+impl Drop for NpatchReads {
+    fn drop(&mut self) {
+        RECORDER.with_borrow_mut(|recorder| recorder.npatch_depth -= 1);
+    }
+}
+
 impl Drop for PhobosReads {
     fn drop(&mut self) {
         RECORDER.with_borrow_mut(|recorder| recorder.phobos_depth -= 1);
@@ -213,6 +229,8 @@ struct Recorder {
     not_ares_depth: u32,
     /// Open [`phobos_reads`] scopes, which win over `ares_depth`.
     phobos_depth: u32,
+    /// Open [`npatch_reads`] scopes, which win over `ares_depth`.
+    npatch_depth: u32,
     /// The innermost [`record`] run, if one is open on this thread.
     active: Option<KeyReads>,
 }
@@ -230,6 +248,8 @@ pub(crate) fn note_found(section: &str, key: &str) {
             Reader::Stock
         } else if recorder.phobos_depth > 0 {
             Reader::Phobos
+        } else if recorder.npatch_depth > 0 {
+            Reader::Npatch
         } else if recorder.ares_depth > 0 {
             Reader::Ares
         } else {
@@ -247,6 +267,7 @@ enum Reader {
     Stock,
     Ares,
     Phobos,
+    Npatch,
 }
 
 /// The present keys one recorded run's readers found, split by who asked.
@@ -254,6 +275,7 @@ enum Reader {
 pub(crate) struct KeyReads {
     ares: SectionKeys,
     phobos: SectionKeys,
+    npatch: SectionKeys,
     stock: SectionKeys,
 }
 
@@ -266,6 +288,7 @@ impl KeyReads {
             Reader::Stock => &mut self.stock,
             Reader::Ares => &mut self.ares,
             Reader::Phobos => &mut self.phobos,
+            Reader::Npatch => &mut self.npatch,
         };
         let keys = match map.get_mut(section) {
             Some(keys) => keys,
@@ -281,6 +304,7 @@ impl KeyReads {
         for (map, later) in [
             (&mut self.ares, later.ares),
             (&mut self.phobos, later.phobos),
+            (&mut self.npatch, later.npatch),
             (&mut self.stock, later.stock),
         ] {
             for (section, keys) in later {
@@ -301,7 +325,9 @@ impl KeyReads {
 
     /// Whether a stock or Phobos reader of these reads saw the key.
     fn read_outside_ares(&self, section: &str, key: &str) -> bool {
-        Self::found(&self.stock, section, key) || Self::found(&self.phobos, section, key)
+        Self::found(&self.stock, section, key)
+            || Self::found(&self.phobos, section, key)
+            || Self::found(&self.npatch, section, key)
     }
 
     /// The Ares readers' keys that no stock or Phobos reader of these reads
@@ -314,7 +340,18 @@ impl KeyReads {
     /// saw (`phobos_switch`).
     pub(super) fn phobos_only(&self) -> impl Iterator<Item = (&str, &str)> {
         Self::keys(&self.phobos).filter(|(section, key)| {
-            !Self::found(&self.stock, section, key) && !Self::found(&self.ares, section, key)
+            !Self::found(&self.stock, section, key)
+                && !Self::found(&self.ares, section, key)
+                && !Self::found(&self.npatch, section, key)
+        })
+    }
+
+    /// The NPatch readers' keys that no stock, Ares or Phobos reader found.
+    pub(super) fn npatch_only(&self) -> impl Iterator<Item = (&str, &str)> {
+        Self::keys(&self.npatch).filter(|(section, key)| {
+            !Self::found(&self.stock, section, key)
+                && !Self::found(&self.ares, section, key)
+                && !Self::found(&self.phobos, section, key)
         })
     }
 }

@@ -67,7 +67,7 @@ fn browser_admission_rejects_other_build_capability() {
     let other_capability = crate::rules::compatibility::RulesCompatibility::from_capabilities(
         true,
         !crate::rules::PHOBOS_ENABLED,
-        !crate::rules::NPATCH_ENABLED,
+        true,
         !crate::rules::VERAX_ENABLED,
         !crate::rules::NPBUG_ENABLED,
     );

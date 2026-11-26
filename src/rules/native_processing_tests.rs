@@ -3,6 +3,69 @@
 use super::*;
 use crate::util::save_codec;
 
+#[derive(serde::Serialize)]
+struct ProcessedRulesLayersBeforeNpatchInputs<'a> {
+    ini: &'a IniFile,
+    content_hash: u64,
+    native_type_construction_trace: &'a NativeTypeConstructionTrace,
+    ares_inputs: &'a crate::rules::ares_switch::AresInputs,
+}
+
+#[test]
+fn processed_rules_saved_before_npatch_inputs_deserialize_with_default_switch_data() {
+    let current = RulesLayerStack::new(IniFile::from_str("[General]\nParachute=PARACH\n"))
+        .process()
+        .unwrap();
+    let previous = ProcessedRulesLayersBeforeNpatchInputs {
+        ini: &current.ini,
+        content_hash: current.content_hash,
+        native_type_construction_trace: &current.native_type_construction_trace,
+        ares_inputs: &current.ares_inputs,
+    };
+    let bytes = save_codec::serialize(&previous).unwrap();
+    let restored: ProcessedRulesLayers = save_codec::deserialize(&bytes).unwrap();
+    assert!(
+        !restored
+            .npatch_inputs()
+            .decide(&crate::rules::ares_switch::KeyReads::default())
+    );
+    assert!(!RuleSet::from_processed_rules(&restored).unwrap().npatch());
+
+    let active = RulesLayerStack::new(IniFile::from_str(
+        "[VehicleTypes]\n0=TANK\n[TANK]\nStrength=100\nAIBuildLimit=2\n",
+    ))
+    .process()
+    .unwrap();
+    let bytes = save_codec::serialize(&active).unwrap();
+    let restored: ProcessedRulesLayers = save_codec::deserialize(&bytes).unwrap();
+    assert!(RuleSet::from_processed_rules(&restored).unwrap().npatch());
+
+    for key in [
+        "EnableAIBuildLimitation",
+        "DisableParallelAIQueues",
+        "DisableAIParallelProduction",
+    ] {
+        let active = RulesLayerStack::new(IniFile::from_str(&format!("[General]\n{key}=yes\n")))
+            .process()
+            .unwrap();
+        let bytes = save_codec::serialize(&active).unwrap();
+        let restored: ProcessedRulesLayers = save_codec::deserialize(&bytes).unwrap();
+        assert!(
+            RuleSet::from_processed_rules(&restored).unwrap().npatch(),
+            "{key}"
+        );
+    }
+
+    let ignored = RulesLayerStack::new(IniFile::from_str(
+        "[VehicleTypes]\n0=TANK\n[TANK]\nStrength=100\nAIPlanningCount=2\n",
+    ))
+    .process()
+    .unwrap();
+    let bytes = save_codec::serialize(&ignored).unwrap();
+    let restored: ProcessedRulesLayers = save_codec::deserialize(&bytes).unwrap();
+    assert!(!RuleSet::from_processed_rules(&restored).unwrap().npatch());
+}
+
 #[test]
 fn weapon_types_register_before_animation_reads_each_rules_layer() {
     let _ares = crate::rules::ares_switch::read_ares_way(true);
@@ -4502,7 +4565,6 @@ fn ares_country_reads_start_in_multiplayer_with_const() {
 /// them from AudioVisual, while the YR profile ignores an AudioVisual-only key.
 #[test]
 fn ra2_reads_moved_general_references_from_audiovisual() {
-
     let build = |section: &str| {
         let layers = RulesLayerStack::new(IniFile::from_str(&format!(
             "[Animations]\n0=PARACH\n[General]\n\n[{section}]\nParachute=PARACH\nDropZoneAnim=PARACH\n"
@@ -4522,10 +4584,7 @@ fn ra2_reads_moved_general_references_from_audiovisual() {
         "YR ignores an AudioVisual-only Parachute"
     );
     let yr_general = build("General");
-    assert_eq!(
-        yr_general.general.parachute_shp.as_deref(),
-        Some("PARACH")
-    );
+    assert_eq!(yr_general.general.parachute_shp.as_deref(), Some("PARACH"));
 
     crate::util::ra2_launch::clear_override();
 }

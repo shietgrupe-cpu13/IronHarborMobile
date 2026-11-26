@@ -74,7 +74,7 @@ rustup target add aarch64-linux-android
 #    "ld.lld: error: unable to find library -laaudio".
 $env:CARGO_PROFILE_SHIPPING_STRIP = "symbols"
 cargo ndk -t arm64-v8a --platform 26 -o android\app\src\main\jniLibs build `
-  --profile shipping -p vera20k-android --no-default-features --features phobos,npatch
+  --profile shipping -p vera20k-android --no-default-features --features phobos
 
 # 2. Package. Point android\local.properties at the SDK first:
 #    sdk.dir=D\:\\Programming\\android-sdk
@@ -103,7 +103,7 @@ Menu music plays automatically on the game's main menu through the selected mod'
 
 The b3 fork uses the independent product name **Iron Harbor Mobile** and application ID `org.ironharbor.mobile`; `org.vera20k` remains the JNI namespace for the existing native entry points. Its release signing key is machine-specific and must never be committed. Create `android/.android/android-release.jks` and supply `ANDROID_RELEASE_STORE_FILE`, `ANDROID_RELEASE_STORE_PASSWORD`, `ANDROID_RELEASE_KEY_ALIAS`, and `ANDROID_RELEASE_KEY_PASSWORD` to Gradle from a secure local secret store. The checkout ignores `android/.android/`.
 
-For an ARM64 shipping build, set `CARGO_PROFILE_SHIPPING_STRIP=symbols`, build with `cargo ndk -t arm64-v8a --platform 26 -o android/app/src/main/jniLibs build --locked --profile shipping -p vera20k-android --no-default-features --features phobos,npatch`, then run `android/gradlew.bat -p android :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease`. The explicit `phobos` feature enables MO/Phobos mod behavior, and `npatch` compiles NPatch compatibility; both remain data-gated so vanilla Yuri's Revenge retains its existing behavior. Use JDK 17+, Android SDK 36/build-tools 36.1.0, NDK 28.2.13676358, and Gradle 8.13. The app declares only `arm64-v8a`, matching the native library produced by this recipe.
+For an ARM64 shipping build, set `CARGO_PROFILE_SHIPPING_STRIP=symbols`, build with `cargo ndk -t arm64-v8a --platform 26 -o android/app/src/main/jniLibs build --locked --profile shipping -p vera20k-android --no-default-features --features phobos`, then run `android/gradlew.bat -p android :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease`. The explicit `phobos` feature enables MO/Phobos mod behavior; NPatch support is present in every build and switches on from NPatch-specific game data. Vanilla Yuri's Revenge keeps its existing behavior. Use JDK 17+, Android SDK 36/build-tools 36.1.0, NDK 28.2.13676358, and Gradle 8.13. The app declares only `arm64-v8a`, matching the native library produced by this recipe.
 
 Build b3 verified six Android JVM tests, a shipping-profile ARM64 Rust build, signed debug and release APKs, the release application ID/SDK levels, 16 KB APK native-entry alignment, and 16 KB ELF LOAD alignment. The package contains no Yuri's Revenge installation files. No device was attached during this build; Android 16 POCO gameplay remains unverified. See [the b3 report](android-release-b3.md); detailed build logs are retained in the local `out/logs/` directory.
 

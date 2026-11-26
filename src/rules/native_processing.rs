@@ -536,12 +536,15 @@ impl RulesLayerStack {
                     self.ships_ares,
                     self.ares_keys_off,
                 );
+                let npatch_inputs =
+                    crate::rules::npatch_switch::NPatchInputs::from_passes(&processor.ares_reads);
                 let (ini, native_type_construction_trace) = processor.clone().finish();
                 let prefix = ProcessedRulesLayers {
                     ini,
                     content_hash: self.content_hash_for_layers(index + 1),
                     native_type_construction_trace,
                     ares_inputs,
+                    npatch_inputs,
                 };
                 let rules = match RuleSet::from_processed_rules(&prefix) {
                     Ok(rules) => rules,
@@ -571,6 +574,8 @@ impl RulesLayerStack {
             self.ships_ares,
             self.ares_keys_off,
         );
+        let npatch_inputs =
+            crate::rules::npatch_switch::NPatchInputs::from_passes(&processor.ares_reads);
         let (ini, native_type_construction_trace) = processor.finish();
         Ok((
             ProcessedRulesLayers {
@@ -578,6 +583,7 @@ impl RulesLayerStack {
                 content_hash: self.content_hash(),
                 native_type_construction_trace,
                 ares_inputs,
+                npatch_inputs,
             },
             after_map_result,
         ))
@@ -883,6 +889,10 @@ pub struct ProcessedRulesLayers {
     /// What the passes give the per-game Ares switch; saved with the rules,
     /// so a loaded game projects the same answer.
     ares_inputs: crate::rules::ares_switch::AresInputs,
+    /// NPatch-only pass keys. This is derived from the retained INI/type bodies
+    /// after loading; omitting it keeps the existing save wire layout stable.
+    #[serde(skip)]
+    npatch_inputs: crate::rules::npatch_switch::NPatchInputs,
 }
 
 #[cfg(all(test, tests_rules_a_n))]

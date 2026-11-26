@@ -33,12 +33,8 @@ const _: () = assert!(
     cfg!(feature = "phobos") == rules::PHOBOS_ENABLED,
     "enable Phobos through the vera20k package's phobos feature"
 );
-// The same boundary for the NPatch placeholder.
-const _: () = assert!(
-    cfg!(feature = "npatch") == rules::NPATCH_ENABLED,
-    "enable NPatch through the vera20k package's npatch feature"
-);
-// The same boundary for VERA20K's own VeraX extension capability.
+// VERA20K's own VeraX capability; NPatch has no build boundary because every
+// build carries its per-game switch.
 const _: () = assert!(
     cfg!(feature = "verax") == rules::VERAX_ENABLED,
     "enable VeraX through the vera20k package's verax feature"
