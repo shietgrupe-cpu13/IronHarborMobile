@@ -24,7 +24,7 @@ use crate::rules::tiberium_type::TiberiumTypeRegistry;
 use crate::rules::voxel_anim_type::{VoxelAnimType, VoxelAnimTypeId};
 use crate::rules::warhead_type::WarheadType;
 use crate::rules::weapon_type::WeaponType;
-use crate::util::lookup_hash::LookupMap;
+use crate::util::lookup_hash::{LookupMap, LookupSet};
 
 use super::{
     AI_BASE_SPACING_LIMIT, BridgeRules, CategoryIndex, CountryIdx, CountryRules, ElevationModel,
@@ -1780,7 +1780,9 @@ impl RuleSet {
         // the processor's whole Warhead family: the [Warheads] values and
         // every reference-driven allocation, weapons' warheads and the
         // [Radiation] RadSiteWarhead included.
-        let warhead_ids: HashSet<String> = parse_registry(ini, "Warheads").into_iter().collect();
+        // Assign handles in projected registry order. Iterating a RandomState
+        // HashSet here could give identical rule loads different handles.
+        let warhead_ids = parse_registry(ini, "Warheads");
         let mut warheads: LookupMap<String, WarheadHandle> = LookupMap::default();
         let mut warhead_types: Vec<WarheadType> = Vec::new();
         for warhead_id in &warhead_ids {
@@ -1801,13 +1803,18 @@ impl RuleSet {
         // Step 4: Collect projectile IDs referenced by weapons and parse them.
         let mut projectiles: LookupMap<String, ProjectileHandle> = LookupMap::default();
         let mut projectile_types: Vec<ProjectileType> = Vec::new();
-        let mut projectile_ids: HashSet<String> = HashSet::new();
+        // Assign handles in first weapon-reference order. The membership set
+        // only drops repeated references; it never supplies iteration order.
+        let mut projectile_ids = Vec::new();
+        let mut seen_projectile_ids = LookupSet::default();
         for weapon in &weapon_types {
-            if let Some(ref proj_id) = weapon.projectile {
-                projectile_ids.insert(proj_id.clone());
+            if let Some(proj_id) = weapon.projectile.as_deref()
+                && seen_projectile_ids.insert(proj_id)
+            {
+                projectile_ids.push(proj_id);
             }
         }
-        for proj_id in &projectile_ids {
+        for proj_id in projectile_ids {
             if let Some(section) = ini.section(proj_id) {
                 // Find-or-allocate by canonical section name (see warheads above).
                 // Stock rulesmd references [InvisibleLow] as both "InvisibleLow"

@@ -43,6 +43,72 @@ Strength=750
 }
 
 #[test]
+fn warhead_handles_follow_the_registry_order() {
+    const COUNT: usize = 12;
+    let mut text = String::from("[Warheads]\n");
+    for index in 0..COUNT {
+        text.push_str(&format!("{index}=Head{}\n", COUNT - index));
+    }
+    for number in 1..=COUNT {
+        text.push_str(&format!("[Head{number}]\nVerses=100%\n"));
+    }
+    let ini = IniFile::from_str(&text);
+    let first = RuleSet::from_ini(&ini).expect("the rules read");
+    let second = RuleSet::from_ini(&ini).expect("the rules read");
+    for index in 0..COUNT {
+        let name = format!("Head{}", COUNT - index);
+        let first_handle = first.warhead_handle(&name).expect("the warhead reads");
+        let second_handle = second.warhead_handle(&name).expect("the warhead reads");
+        assert_eq!(first_handle, second_handle, "{name} across loads");
+        assert_eq!(first_handle.0 as usize, index, "{name} in registry order");
+    }
+}
+
+#[test]
+fn projectile_handles_follow_the_weapons_that_name_them() {
+    const COUNT: usize = 12;
+    let mut text = String::from("[VehicleTypes]\n");
+    for index in 0..=COUNT + 1 {
+        text.push_str(&format!("{index}=Unit{index}\n"));
+    }
+    for index in 0..COUNT {
+        let number = COUNT - index;
+        text.push_str(&format!(
+            "[Unit{index}]\nPrimary=Weapon{index}\n\
+             [Weapon{index}]\nDamage=10\nProjectile=Proj{number}\n\
+             [Proj{number}]\nAA=yes\n",
+        ));
+    }
+    text.push_str(&format!(
+        "[Unit{COUNT}]\nPrimary=Repeat\n[Repeat]\nDamage=10\nProjectile=Proj{COUNT}\n",
+    ));
+    text.push_str(&format!(
+        "[Unit{}]\nPrimary=CaseVariant\n[CaseVariant]\nDamage=10\nProjectile=pROJ{COUNT}\n",
+        COUNT + 1,
+    ));
+    let ini = IniFile::from_str(&text);
+    let first = RuleSet::from_ini(&ini).expect("the rules read");
+    let second = RuleSet::from_ini(&ini).expect("the rules read");
+    for index in 0..COUNT {
+        let name = format!("Proj{}", COUNT - index);
+        let first_handle = first
+            .projectile_handle(&name)
+            .expect("the projectile reads");
+        let second_handle = second
+            .projectile_handle(&name)
+            .expect("the projectile reads");
+        assert_eq!(first_handle, second_handle, "{name} across loads");
+        assert_eq!(first_handle.0 as usize, index, "{name} in weapon order");
+    }
+    assert_eq!(first.projectile_types.len(), COUNT);
+    assert_eq!(
+        first.projectile_handle(&format!("pRoJ{COUNT}")),
+        first.projectile_handle(&format!("Proj{COUNT}")),
+        "case variants resolve to the canonical section"
+    );
+}
+
+#[test]
 fn ares_emp_ai_global_mission_uses_production_layers_and_config_hash() {
     use crate::rules::{
         mission_data::MissionType,
