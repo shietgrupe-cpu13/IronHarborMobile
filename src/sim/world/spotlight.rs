@@ -242,6 +242,11 @@ pub struct BuildingSpotlight {
 }
 
 impl Simulation {
+    /// Stable ids of stored spotlights, ascending by id.
+    pub fn spotlight_ids(&self) -> impl Iterator<Item = u64> + '_ {
+        self.substrate.spotlights.iter().map(|(&id, _)| id)
+    }
+
     /// BuildingLightDraw435BE0 uses the child's coordinates, the parent's
     /// virtual center/operational state, and the retained rules. No draw query
     /// mutates gameplay, RNG or timers. `viewer` is the player whose map draws

@@ -186,15 +186,17 @@ before it returns that world for a write.
 
 What the snapshot costs the main thread:
 
-- The records are captured on the worker pool while the scene frame is
-  captured on the calling thread. A record asks only what a drawer of that
-  object reads: an action line only for a selected or psychically detected
-  object, the airstrike tint only for a Structure, a Carryall's cargo only
-  for an Aircraft, the mind-control count only for a capture manager.
+- The object records, their lookup/culling indexes, the Display order, anim
+  coordinates, parachutes and control groups are captured on the worker pool
+  while the scene frame is captured on the calling thread. A record asks only
+  what a drawer of that object reads: an action line only for a selected or
+  psychically detected object, the airstrike tint only for a Structure, a
+  Carryall's cargo only for an Aircraft, the mind-control count only for a
+  capture manager.
 - A retired frame's object records and draw caches are freed on the pool
   (`sim::parallel::drop_on_pool`), as is the old world copy's unsynced part.
-- The world copy's syncs run on the pool beside the clone of its other parts
-  and the local player's fog.
+- The world copy's syncs, the local player's fog and the Anim store clone run
+  on the pool beside the clone of its other parts.
 - The first world copy is a whole one; desktop takes it when a scenario is
   installed (`SimHost::install`), so the first lent tick only syncs it.
 

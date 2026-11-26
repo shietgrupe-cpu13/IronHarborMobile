@@ -69,6 +69,7 @@ fn a_fogged_building_draws_no_spotlight() {
         .building_light
         .light()
         .unwrap();
+    assert_eq!(sim.spotlight_ids().collect::<Vec<_>>(), [id]);
     sim.set_spotlight_behavior(id, 2);
     let (player, other) = (
         sim.interner.intern("Americans"),

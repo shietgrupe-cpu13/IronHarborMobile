@@ -823,6 +823,38 @@ mod tests {
     use crate::sim::command_queue::{ChecksumMismatch, FrameInfo, FrameInfoCompareGate};
     use crate::sim::world::Simulation;
 
+    /// Presentation copying keeps the captured world's animations in both
+    /// the retained live world and the copy used by rendering.
+    #[test]
+    fn the_world_copy_holds_the_anims_the_live_world_keeps() {
+        use crate::rules::{art_data::ArtRegistry, ini_parser::IniFile, ruleset::RuleSet};
+        use crate::sim::{anim_class::AnimWorldCoord, components::AnimClassSpawnDescriptor};
+        let rules_ini = IniFile::from_str("[Animations]\n0=FIRE\n");
+        let art_ini = IniFile::from_str("[FIRE]\nEnd=20\n");
+        let mut rules = RuleSet::from_ini_with_fixed_art_for_test(&rules_ini, &art_ini).unwrap();
+        rules.install_art_data(ArtRegistry::from_ini(&art_ini));
+        rules.bind_anim_frame_count_for_test("FIRE", 20);
+        let mut sim = Simulation::with_seed(31);
+        let fire = sim.intern("FIRE");
+        let coord = AnimWorldCoord {
+            x: 16512,
+            y: 16512,
+            z: 0,
+        };
+        let (rx, ry, sub_x, sub_y, z) = coord.to_cell_sub_z();
+        let anim = sim
+            .spawn_anim_at_world(
+                &rules,
+                AnimClassSpawnDescriptor::new(fire, rx, ry, sub_x, sub_y, z),
+                coord,
+            )
+            .unwrap();
+        let mut runtime = SimRuntime::from_simulation(sim);
+        let copy = runtime.presentation_copy(None, None);
+        assert!(copy.simulation.anim(anim).is_some());
+        assert!(runtime.simulation.anim(anim).is_some());
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn returning_to_skirmish_can_write_rules_while_the_old_frame_is_being_freed() {

@@ -420,17 +420,26 @@ impl Simulation {
             crate::sim::parallel::drop_on_pool(old);
             (theirs, old_fog)
         });
+        // The Anim store is copied into the presentation world. Clone it on
+        // the pool beside the other presentation-copy work.
+        let anims = std::mem::take(&mut self.substrate.anims);
         let mut copy = None;
         let mut fog_copy = None;
+        let mut anims_copy = None;
         let this = &*self;
         let fog_ref = &mut fog;
-        // The three parts share only reads, so they run at once: the syncs
-        // and the viewer's fog on the pool, the clone of the rest here.
+        let anims_ref = &anims;
+        // The parts share only reads, so they run at once: the syncs, the
+        // viewer's fog, and the Anim clone on the pool; the rest is cloned
+        // on the caller.
         crate::sim::parallel::alongside(
             || synced.sync_into(&mut theirs),
             || {
                 crate::sim::parallel::alongside(
-                    || fog_copy = Some(fog_ref.presentation_copy(viewer, old_fog)),
+                    || {
+                        fog_copy = Some(fog_ref.presentation_copy(viewer, old_fog));
+                        anims_copy = Some(anims_ref.clone());
+                    },
                     || copy = Some(this.clone()),
                 )
             },
@@ -440,14 +449,17 @@ impl Simulation {
         }
         let mut copy = copy.expect("cloned beside the syncs");
         let fog_copy = fog_copy.expect("fog copied beside the clone");
+        let anims_copy = anims_copy.expect("anims cloned beside the rest");
         synced.put(self);
         theirs.put(&mut copy);
         copy.fog = fog_copy;
+        copy.substrate.anims = anims_copy;
         copy.house_alliances = self
             .house_alliances
             .detached(&self.interner, &copy.interner);
         copy.shared_cell_dummy = copy.shared_cell_dummy.fork_query_identity();
         self.fog = fog;
+        self.substrate.anims = anims;
         self.substrate.entities = entities;
         self.zone_grid = zone_grid;
         self.path_grid = path_grid;
