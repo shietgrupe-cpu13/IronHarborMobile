@@ -852,6 +852,10 @@ pub struct ParticleSystemStore {
     /// ([`Self::take_touched`]). Transient: never saved, compared or hashed.
     #[serde(skip)]
     touched: TouchLogs<{ ParticleTouchReader::COUNT }>,
+    /// Reused reverse-walk buffer for gas and fire ticks. Transient: empty
+    /// between walks, never saved, compared or hashed.
+    #[serde(skip)]
+    walk_scratch: Vec<(usize, u64)>,
 }
 
 /// A product derived from the particle systems that re-derives from the touch
@@ -1138,6 +1142,36 @@ impl ParticleSystemStore {
         id
     }
 
+    /// Copy a system's admitted particles in reverse storage order. Tick
+    /// callbacks may append or remove particles, so callers resolve each
+    /// `(index, id)` against the live store before committing its update.
+    /// Nested walks use a separate buffer while this one is lent out.
+    pub(crate) fn take_reverse_walk(
+        &mut self,
+        system: u64,
+        keep: impl Fn(&Particle) -> bool,
+    ) -> Option<Vec<(usize, u64)>> {
+        let particles = &self.systems.get(&system)?.particles;
+        let mut walk = std::mem::take(&mut self.walk_scratch);
+        walk.extend(
+            particles
+                .iter()
+                .enumerate()
+                .rev()
+                .filter(|(_, particle)| keep(particle))
+                .map(|(index, particle)| (index, particle.stable_id())),
+        );
+        Some(walk)
+    }
+
+    /// Return a completed walk and retain the larger buffer for the next tick.
+    pub(crate) fn return_walk(&mut self, mut walk: Vec<(usize, u64)>) {
+        walk.clear();
+        if walk.capacity() > self.walk_scratch.capacity() {
+            self.walk_scratch = walk;
+        }
+    }
+
     /// Resolve a child across synchronous callbacks which may append or compact
     /// its system. The ordinary store keeps the system's display identity live.
     pub(crate) fn particle_for_tick(&self, system: u64, index: usize, id: u64) -> Option<Particle> {
@@ -1354,5 +1388,31 @@ mod tests {
         assert_eq!(restored.particles[0].stable_id(), 24);
         assert_eq!(restored.particles[0].native_unique_id(), -25);
         assert_eq!(restored.particles[0].velocity().bits(), 0x4000_0000);
+    }
+
+    #[test]
+    fn reverse_particle_walk_reuses_capacity_and_keeps_reverse_order() {
+        let mut store = ParticleSystemStore::new();
+        let mut system = fake_system(23);
+        for id in [24, 25, 26] {
+            let mut particle = Particle::test_fixture(ParticleTypeId(0), IVec3::ZERO);
+            particle.stable_id = id;
+            system.particles.push(particle);
+        }
+        store.insert(system);
+
+        let walk = store
+            .take_reverse_walk(23, |particle| particle.stable_id() != 25)
+            .expect("system exists");
+        assert_eq!(walk, [(2, 26), (0, 24)]);
+        let capacity = walk.capacity();
+        store.return_walk(walk);
+
+        let walk = store
+            .take_reverse_walk(23, |_| true)
+            .expect("system exists");
+        assert_eq!(walk, [(2, 26), (1, 25), (0, 24)]);
+        assert_eq!(walk.capacity(), capacity);
+        store.return_walk(walk);
     }
 }

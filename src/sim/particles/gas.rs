@@ -5,11 +5,11 @@
 //! particle synchronously. AI visits the original reverse list; the subsequent
 //! Move/destruction walk includes those new births, as the original does.
 
+use super::Particle;
 use super::spark::{SparkMotionStep, resolve_collision};
 use super::spark_world::{SparkCollisionWorld, SparkWorldError, constructor_ground_height};
 use super::system_ai::SparkSystemTickError;
 use super::wind::{GAS_WIND_DX, GAS_WIND_DY};
-use super::{Particle, ParticleSystem};
 use crate::rules::particle_type::{ParticleBehavesLike, ParticleTypeId};
 use crate::rules::ruleset::RuleSet;
 use crate::sim::combat::{
@@ -70,16 +70,6 @@ impl Simulation {
     }
 }
 
-pub(super) fn reverse_ids(system: &ParticleSystem) -> Vec<(usize, u64)> {
-    system
-        .particles
-        .iter()
-        .enumerate()
-        .rev()
-        .map(|(index, p)| (index, p.stable_id()))
-        .collect()
-}
-
 pub(super) fn tick_system(
     sim: &mut Simulation,
     rules: &RuleSet,
@@ -90,8 +80,14 @@ pub(super) fn tick_system(
         return;
     };
     let (owner_house, owner_entity) = (sys.owner_house, sys.owner_entity);
-    let ids = reverse_ids(sys);
-    for (index, id) in ids {
+    let Some(walk) = sim
+        .substrate
+        .particle_systems
+        .take_reverse_walk(system, |_| true)
+    else {
+        return;
+    };
+    for &(index, id) in &walk {
         let Some(mut p) = sim.particle_systems().particle_for_tick(system, index, id) else {
             continue;
         };
@@ -114,10 +110,15 @@ pub(super) fn tick_system(
             .particle_systems
             .commit_particle_tick(system, index, p);
     }
-    let Some(sys) = sim.particle_systems().get(system) else {
+    sim.substrate.particle_systems.return_walk(walk);
+    let Some(walk) = sim
+        .substrate
+        .particle_systems
+        .take_reverse_walk(system, |_| true)
+    else {
         return;
     };
-    for (index, id) in reverse_ids(sys) {
+    for &(index, id) in &walk {
         let Some(mut p) = sim.particle_systems().particle_for_tick(system, index, id) else {
             continue;
         };
@@ -152,6 +153,7 @@ pub(super) fn tick_system(
                 .commit_particle_tick(system, index, p);
         }
     }
+    sim.substrate.particle_systems.return_walk(walk);
 }
 
 /// Complete Gas body; the dispatcher separately owns its word-EC tail.
