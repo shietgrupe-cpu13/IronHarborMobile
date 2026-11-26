@@ -252,6 +252,25 @@ jobs:
               2>&1 | tee build-logs/rust-android-arm64.log
           fi
 
+      - name: Create ephemeral CI debug signing key
+        if: steps.meta.outputs.build_type == 'debug'
+        shell: bash
+        run: |
+          set -euo pipefail
+          key="$RUNNER_TEMP/ironharbor-ci-debug.keystore"
+          "$JAVA_HOME/bin/keytool" -genkeypair -noprompt \
+            -keystore "$key" -storepass android \
+            -alias androiddebugkey -keypass android \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Android Debug, OU=Iron Harbor CI, O=Iron Harbor, C=US"
+          chmod 600 "$key"
+          {
+            echo "ANDROID_DEBUG_STORE_FILE=$key"
+            echo "ANDROID_DEBUG_STORE_PASSWORD=android"
+            echo "ANDROID_DEBUG_KEY_ALIAS=androiddebugkey"
+            echo "ANDROID_DEBUG_KEY_PASSWORD=android"
+          } >> "$GITHUB_ENV"
+
       - name: Run Android JVM tests and package APK
         env:
           BUILD_TYPE: ${{ steps.meta.outputs.build_type }}
