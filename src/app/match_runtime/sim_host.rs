@@ -261,11 +261,14 @@ impl SimHost {
             let costs = self.snapshot_costs.take();
             log::info!(
                 "Simulation thread: {} of the last {} ticks were taken back early; \
-                 frame capture {:.3} ms mean over {}, world copy {:.3} ms mean over {}",
+                 frame capture {:.3} ms mean over {}, display members {:.3} ms mean over {}, \
+                 world copy {:.3} ms mean over {}",
                 self.early_returns,
                 self.lent_jobs,
                 costs.capture_ms(),
                 costs.captures,
+                costs.display_members_ms(),
+                costs.display_members_builds,
                 costs.copy_ms(),
                 costs.copies,
             );
@@ -388,9 +391,14 @@ impl SimHost {
             let viewer = runtime.simulation.session().current_house();
             let reuse = self.spare.take();
             let started = Instant::now();
-            // Box selection (AddSelectable 0x006D9EF0) can ask for the order
-            // before drawing. Sort while the Ground objects are still attached.
-            frame.display_order(&runtime.simulation);
+            // File members before the tick leaves, while the Ground objects
+            // and effects are still attached; the frame captured its order.
+            let members_started = Instant::now();
+            frame.display_members(&runtime.simulation);
+            let mut costs = self.snapshot_costs.get();
+            costs.display_members += members_started.elapsed();
+            costs.display_members_builds += 1;
+            self.snapshot_costs.set(costs);
             self.presentation = Some(Box::new(runtime.presentation_copy(viewer, reuse)));
             let mut costs = self.snapshot_costs.get();
             costs.copy += started.elapsed();
@@ -554,6 +562,8 @@ pub(crate) fn home_answer<T: Clone>(
 struct SnapshotCosts {
     capture: Duration,
     captures: u32,
+    display_members: Duration,
+    display_members_builds: u32,
     copy: Duration,
     copies: u32,
 }
@@ -565,6 +575,10 @@ impl SnapshotCosts {
 
     fn copy_ms(self) -> f64 {
         self.copy.as_secs_f64() * 1000.0 / f64::from(self.copies.max(1))
+    }
+
+    fn display_members_ms(self) -> f64 {
+        self.display_members.as_secs_f64() * 1000.0 / f64::from(self.display_members_builds.max(1))
     }
 }
 
@@ -928,6 +942,7 @@ mod tests {
             .prepare_unit_voice_visits(Default::default());
         assert!(host.lend(Box::new(|_| Box::new(()))));
         assert_eq!(host.snapshot_costs.get().captures, 1);
+        assert_eq!(host.snapshot_costs.get().display_members_builds, 1);
         assert!(host.take_job_result().is_some());
     }
 

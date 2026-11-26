@@ -34,10 +34,11 @@ pub fn configure_worker_count(workers: NonZeroUsize) -> Result<(), rayon::Thread
         .build_global()
 }
 
-/// `work` over every item, results in item order. Threads take the items a
-/// few at a time, so slower cores (efficiency cores, a busy host) take fewer.
-/// A worker's panic resumes on the caller.
-pub(crate) fn map<T: Sync, R: Send>(items: &[T], work: impl Fn(&T) -> R + Sync) -> Vec<R> {
+/// Apply `work` to every item and return the results in item order. Threads
+/// take the items a few at a time, so slower cores (efficiency cores, a busy
+/// host) take fewer. Used by the client presentation layer as well as the
+/// core simulation. A worker's panic resumes on the caller.
+pub fn map<T: Sync, R: Send>(items: &[T], work: impl Fn(&T) -> R + Sync) -> Vec<R> {
     if caller_takes() {
         return pulled(Takes::chunked(items.len()), (), |(), index| {
             Some(work(&items[index]))

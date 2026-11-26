@@ -54,8 +54,24 @@ fn a_frame_finds_records_by_id_and_keeps_one_display_order() {
         assert_eq!(frame.object(id).map(|record| record.stable_id()), Some(id));
     }
     assert!(frame.object(8).is_none() && frame.object(21).is_none());
-    let order = frame.display_order(&sim);
-    assert!(std::ptr::eq(order, frame.display_order(&sim)));
+    let order = frame.display_order();
+    assert!(std::ptr::eq(order, frame.display_order()));
+}
+
+/// A bucket lookup answers like a full sorted-id search for dense and sparse
+/// ids, including values outside and between the stored ids.
+#[test]
+fn the_slot_index_answers_as_a_search_of_every_id() {
+    let ids = [5, 6, 7, 8, 300, 301, 4_000, 1_000_000];
+    let index = SlotIndex::of(&ids);
+    for id in [
+        0, 4, 5, 8, 9, 300, 302, 4_000, 999_999, 1_000_000, 1_000_001,
+    ] {
+        assert_eq!(index.slot(&ids, id), ids.binary_search(&id).ok(), "id {id}");
+    }
+    assert_eq!(index.slot(&ids, u64::MAX), None);
+    assert_eq!(SlotIndex::of(&[]).slot(&[], 5), None);
+    assert_eq!(SlotIndex::of(&[9]).slot(&[9], 9), Some(0));
 }
 
 /// The building walk lists exactly the Structure records, in stable-id

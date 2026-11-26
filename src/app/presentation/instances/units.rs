@@ -492,21 +492,16 @@ pub(crate) fn build_unit_instances(
     objects: &mut PlannedObjects,
     display_order: &NativeDisplayOrder,
 ) {
-    let Some(sim) = state
-        .match_state
-        .sim_runtime
-        .presentation()
-        .map(|rt| &rt.simulation)
-    else {
+    if state.match_state.sim_runtime.presentation().is_none() {
         return;
-    };
+    }
     let Some(frame) = state.match_state.sim_runtime.frame() else {
         return;
     };
     let Some(mut visit) = unit_visitor(state, display_order) else {
         return;
     };
-    for (entity, band) in super::helpers::drawn_display_entities(sim, frame) {
+    for (entity, band) in super::helpers::drawn_display_entities(frame) {
         visit(objects, entity, band, None);
     }
 }

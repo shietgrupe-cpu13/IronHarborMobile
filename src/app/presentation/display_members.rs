@@ -127,13 +127,47 @@ impl DisplayMembers {
     /// captured from.
     pub(crate) fn of(frame: &PresentationFrame, sim: &Simulation) -> Self {
         let particles: LookupMap<_, _> = sim.particle_systems().display_particle_places().collect();
+        let runs: Vec<_> = frame.display_order().ordered().chunks(FILED_RUN).collect();
+        let filed =
+            crate::sim::parallel::map(&runs, |run| Self::file_run(frame, sim, &particles, run));
+        let mut objects = Vec::with_capacity(filed.iter().map(|(objects, _)| objects.len()).sum());
+        let mut effects = Vec::with_capacity(filed.iter().map(|(_, effects)| effects.len()).sum());
+        for (run_objects, run_effects) in filed {
+            objects.extend(run_objects);
+            effects.extend(run_effects);
+        }
+        // The presentation anims hold no Display slot; they follow every
+        // member here, and the draw order places each in its own layer
+        // (`NativeDisplayOrder::from_world`).
+        for (id, _) in sim.presentation_anims() {
+            if let Some(anim) = sim.anim(id) {
+                effects.push(EffectMember {
+                    id,
+                    kind: EffectKind::Anim(anim_screen_point(frame, anim, id)),
+                });
+            }
+        }
+        Self {
+            objects,
+            effects,
+            particles,
+        }
+    }
+
+    /// The objects and effects from one ordered slice of Display members.
+    fn file_run(
+        frame: &PresentationFrame,
+        sim: &Simulation,
+        particles: &LookupMap<u64, DisplayParticlePlace>,
+        run: &[(DisplayLayer, u64)],
+    ) -> (Vec<ObjectMember>, Vec<EffectMember>) {
         let mut objects = Vec::new();
         let mut effects = Vec::new();
         // Every object store shares one id namespace
         // (`Simulation::allocate_stable_id`), so an id has one store and the
         // order of these tests picks no winner: records, Anims and Terrain
         // objects, the many, are asked first.
-        for &(layer, id) in frame.display_order(sim).ordered() {
+        for &(layer, id) in run {
             let object = |kind| ObjectMember { layer, id, kind };
             let kind = if let Some((slot, span)) = frame.slot_and_span(id) {
                 objects.push(object(ObjectKind::Record { slot, span }));
@@ -170,22 +204,7 @@ impl DisplayMembers {
             };
             effects.push(EffectMember { id, kind });
         }
-        // The presentation anims hold no Display slot; they follow every
-        // member here, and the draw order places each in its own layer
-        // (`NativeDisplayOrder::from_world`).
-        for (id, _) in sim.presentation_anims() {
-            if let Some(anim) = sim.anim(id) {
-                effects.push(EffectMember {
-                    id,
-                    kind: EffectKind::Anim(anim_screen_point(frame, anim, id)),
-                });
-            }
-        }
-        Self {
-            objects,
-            effects,
-            particles,
-        }
+        (objects, effects)
     }
 
     /// The units, buildings, infantry, aircraft, Bullets and debris.
@@ -203,6 +222,10 @@ impl DisplayMembers {
         self.particles.get(&id).copied()
     }
 }
+
+/// Keep each pool task large enough to amortize dispatch while preserving
+/// the original Display order when the ordered task results are joined.
+const FILED_RUN: usize = 512;
 
 #[cfg(all(test, tests_app_presentation))]
 #[path = "display_members_tests.rs"]

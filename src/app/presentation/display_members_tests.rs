@@ -85,6 +85,48 @@ fn each_display_member_is_filed_under_its_store_and_terrain_is_left_out() {
     assert!(std::ptr::eq(members, frame.display_members(&sim)));
 }
 
+/// Joining worker-filed Display slices keeps the frame's captured order,
+/// even when the source world changes and the order crosses a slice boundary.
+#[test]
+fn filed_members_keep_captured_order_across_pool_slices() {
+    let mut sim = Simulation::new();
+    let owner = sim.intern("Americans");
+    let tank = sim.intern("MTNK");
+    let ids: Vec<u64> = (1..=FILED_RUN as u64 + 2).collect();
+    for &id in &ids {
+        sim.entities_mut_for_test()
+            .insert(GameEntity::new_at_frame_zero_for_test(
+                id,
+                10 + id as u16,
+                10,
+                0,
+                0,
+                owner,
+                Health::new(100),
+                tank,
+                EntityCategory::Unit,
+                0,
+                5,
+                false,
+            ));
+        sim.submit_object_display_for_test(id, DisplayLayer::GROUND);
+    }
+    let frame = PresentationFrame::of_test(&sim, RuleSet::empty_for_test());
+    frame.display_order();
+    sim.entities_mut_for_test()
+        .get_mut_for_test(1)
+        .expect("stored")
+        .position
+        .set_rx_for_test(20 + ids.len() as u16);
+    let filed: Vec<u64> = frame
+        .display_members(&sim)
+        .objects()
+        .iter()
+        .map(|member| member.id)
+        .collect();
+    assert_eq!(filed, ids);
+}
+
 /// An aircraft's shadow, drawn on the ground below it, lies in its span for
 /// Fly and for Rocket, whose shadow sinks below the ground by its height:
 /// the pass-by keeps an aircraft over the view's top edge whose shadow is in

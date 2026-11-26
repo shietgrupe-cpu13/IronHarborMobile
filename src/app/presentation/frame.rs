@@ -19,6 +19,7 @@
 //! local player, never on the camera, the cursor or render caches.
 
 use crate::app::presentation::instances::TetherDraw;
+use crate::app::presentation::render::draw_plan_lowering::NativeDisplayOrder;
 use crate::app::presentation::render_pose::RenderPose;
 use crate::map::entities::EntityCategory;
 use crate::render::draw_state::ObserverDrawContext;
@@ -1194,6 +1195,53 @@ impl Flashing {
     }
 }
 
+/// Where a frame's ascending record ids hold each id, found without searching
+/// all of them. The range is divided into buckets no wider than the mean id
+/// gap, and `starts` records each bucket's first slot.
+#[derive(Debug, Default)]
+struct SlotIndex {
+    base: u64,
+    shift: u32,
+    starts: Vec<u32>,
+}
+
+impl SlotIndex {
+    fn of(ids: &[u64]) -> Self {
+        let (Some(&base), Some(&last)) = (ids.first(), ids.last()) else {
+            return Self::default();
+        };
+        debug_assert!(ids.is_sorted_by(|a, b| a < b), "record ids ascend");
+        let gap = (last - base) / ids.len() as u64;
+        let shift = (u64::BITS - gap.leading_zeros()).min(u64::BITS - 1);
+        let buckets = (last - base) >> shift;
+        let mut starts = Vec::with_capacity(buckets as usize + 2);
+        let mut slot = 0;
+        for bucket in 0..=buckets {
+            while ids
+                .get(slot)
+                .is_some_and(|&id| (id - base) >> shift < bucket)
+            {
+                slot += 1;
+            }
+            starts.push(slot as u32);
+        }
+        starts.push(ids.len() as u32);
+        Self {
+            base,
+            shift,
+            starts,
+        }
+    }
+
+    fn slot(&self, ids: &[u64], id: u64) -> Option<usize> {
+        let bucket = usize::try_from(id.checked_sub(self.base)? >> self.shift).ok()?;
+        let start = *self.starts.get(bucket)? as usize;
+        let end = *self.starts.get(bucket + 1)? as usize;
+        let at = ids.get(start..end)?.binary_search(&id).ok()?;
+        Some(start + at)
+    }
+}
+
 /// Every stored object's record, for one world state and local player.
 #[derive(Debug, Default)]
 pub(crate) struct PresentationFrame {
@@ -1203,6 +1251,8 @@ pub(crate) struct PresentationFrame {
     /// searches. A draw asks for every Display member, and a search over the
     /// records themselves lands on a different large record at each step.
     ids: Vec<u64>,
+    /// Starting slot for a record id's bounded search in `ids`.
+    index: SlotIndex,
     /// Each record's screen span, in the same order: what the object loop
     /// culls from without reading the record.
     spans: Vec<crate::app::presentation::display_members::ScreenSpan>,
@@ -1216,16 +1266,9 @@ pub(crate) struct PresentationFrame {
     /// by the first draw that asks ([`Self::display_members`]).
     display_members:
         crate::util::sync::OnceLock<crate::app::presentation::display_members::DisplayMembers>,
-    /// The Display order of the world this frame was captured from, built by
-    /// the first live-world read or before publishing a detached copy. The frame is
-    /// dropped before that world can change, so every later draw of it reads
-    /// the same order.
-    display_order: crate::util::sync::OnceLock<
-        crate::app::presentation::render::draw_plan_lowering::NativeDisplayOrder,
-    >,
-    /// The rules the world was captured under, which the Ground draw order
-    /// reads (`Simulation::ground_draw_order`).
-    resources: CapturedRules,
+    /// The Display order of the world this frame was captured from, sorted
+    /// beside its records.
+    display_order: NativeDisplayOrder,
     /// Every anim's absolute coordinate (`Simulation::anim_absolute_coord`),
     /// which an attached anim takes from its owner object.
     anim_coords: crate::util::lookup_hash::LookupMap<u64, crate::sim::anim_class::AnimWorldCoord>,
@@ -1239,21 +1282,9 @@ pub(crate) struct PresentationFrame {
     pub(crate) psychic_detection: bool,
 }
 
-/// The resources a frame was captured under; none for a default frame.
-#[derive(Default)]
-struct CapturedRules(Option<std::sync::Arc<crate::sim::runtime::SimResources>>);
-
-impl std::fmt::Debug for CapturedRules {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("CapturedRules")
-    }
-}
-
 impl PresentationFrame {
-    /// Release the live match's resources before the host accepts its next Rules write.
-    /// Freeing the frame's 20,000 object records can still run on the pool.
-    pub(crate) fn retire(mut self: Box<Self>) {
-        self.resources.0 = None;
+    /// Free the frame's records on the pool. It does not retain match resources.
+    pub(crate) fn retire(self: Box<Self>) {
         crate::sim::parallel::drop_on_pool(self);
     }
 
@@ -1286,14 +1317,23 @@ impl PresentationFrame {
                 (!sites.is_empty()).then_some((viewer, sites))
             }),
         };
-        // The scene frame reads no record, so it is captured beside them.
+        // The scene frame and Display order read no record, so capture both
+        // beside the records; sorting also runs on the worker pool.
         let mut objects = Vec::new();
+        let mut display_order = None;
         let mut scene = None;
         crate::sim::parallel::alongside(
             || {
-                objects = sim
-                    .entities()
-                    .par_map(|_, entity| ObjectRecord::capture(entity, &at));
+                crate::sim::parallel::alongside(
+                    || {
+                        display_order = Some(NativeDisplayOrder::from_world(sim, Some(at.rules())));
+                    },
+                    || {
+                        objects = sim
+                            .entities()
+                            .par_map(|_, entity| ObjectRecord::capture(entity, &at));
+                    },
+                )
             },
             || {
                 scene = Some(crate::app::presentation::frame_scene::SceneFrame::capture(
@@ -1302,6 +1342,7 @@ impl PresentationFrame {
             },
         );
         let scene = scene.expect("captured beside the records");
+        let display_order = display_order.expect("sorted beside the records");
         let anim_coords = sim.anim_absolute_coords().collect();
         let parachute_animations = sim
             .entities()
@@ -1331,13 +1372,13 @@ impl PresentationFrame {
         }
         Self {
             objects,
+            index: SlotIndex::of(&ids),
             ids,
             spans,
             structures,
             line_sources,
             display_members: Default::default(),
-            display_order: Default::default(),
-            resources: CapturedRules(Some(runtime.resources.clone())),
+            display_order,
             anim_coords,
             parachute_animations,
             scene,
@@ -1346,9 +1387,8 @@ impl PresentationFrame {
     }
 
     pub(crate) fn object(&self, id: u64) -> Option<&ObjectRecord> {
-        self.ids
-            .binary_search(&id)
-            .ok()
+        self.index
+            .slot(&self.ids, id)
             .and_then(|slot| self.record_at(slot))
     }
 
@@ -1357,7 +1397,7 @@ impl PresentationFrame {
         &self,
         id: u64,
     ) -> Option<(usize, crate::app::presentation::display_members::ScreenSpan)> {
-        let slot = self.ids.binary_search(&id).ok()?;
+        let slot = self.index.slot(&self.ids, id)?;
         Some((slot, *self.spans.get(slot)?))
     }
 
@@ -1377,18 +1417,9 @@ impl PresentationFrame {
         })
     }
 
-    /// `sim`'s draw order for this frame's draws. `sim` is the world the
-    /// frame was captured from.
-    pub(crate) fn display_order(
-        &self,
-        sim: &Simulation,
-    ) -> &crate::app::presentation::render::draw_plan_lowering::NativeDisplayOrder {
-        self.display_order.get_or_init(|| {
-            crate::app::presentation::render::draw_plan_lowering::NativeDisplayOrder::from_world(
-                sim,
-                self.resources.0.as_ref().map(|resources| &resources.rules),
-            )
-        })
+    /// The draw order of the world this frame was captured from.
+    pub(crate) fn display_order(&self) -> &NativeDisplayOrder {
+        &self.display_order
     }
 
     /// `Simulation::anim_absolute_coord` of anim `id`.
