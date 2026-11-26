@@ -89,9 +89,10 @@ needs no target. By default it affects enemies on water only.
 ## Not included
 
 `Type=DropPod` (needs the DropPod locomotor), `NoCursor`/`Cursor`
-(Ares `[MouseCursors]` cursor types), `Light.*`, `Message.Abort`
-and the retail-type redirects (`IronCurtain`/`ForceShield` through Protect and the
-other stock handlers) remain outside this port, as do the AI's Stealth and
-IronCurtain target pickers (a computer House does not fire SonarPulse or
-Protect on its own). The trigger events raised on activation and deactivation
-are in [ares-triggers.md](ares-triggers.md).
+(Ares `[MouseCursors]` cursor types), `Light.*`, `Message.Abort`, and stock-type
+redirects other than Iron Curtain through Protect remain outside this port. Ares
+`SW_Protect::HandlesType` at `Ares.dll 0x10074B40` selects Protect for
+`Type=IronCurtain` when Ares is enabled; without Ares, VERA keeps the stock Iron
+Curtain path. The AI's Stealth and Iron Curtain target pickers are also outside this
+port (a computer House does not fire SonarPulse or Protect on its own). The trigger
+events raised on activation and deactivation are in [ares-triggers.md](ares-triggers.md).

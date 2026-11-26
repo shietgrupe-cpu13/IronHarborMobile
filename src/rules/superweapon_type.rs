@@ -115,6 +115,15 @@ impl AresSuperWeaponFlags {
 }
 
 impl SuperWeaponKind {
+    /// SW_Protect::HandlesType (Ares.dll 0x10074B40) also claims the
+    /// original Iron Curtain. Keep the stored kind for stock play and indices.
+    pub const fn ares_handler_kind(self) -> Self {
+        match self {
+            Self::IronCurtain => Self::Protect,
+            other => other,
+        }
+    }
+
     /// The implemented NewSWType Activate owners, which only a game read the
     /// Ares way uses: the new types and the stock Types whose redirect is
     /// ported.
@@ -126,15 +135,17 @@ impl SuperWeaponKind {
     /// 1006CFB0 asks each type's HandlesType): SW_ChronoSphere (1006EF00),
     /// SW_ChronoWarp (100700A0), SW_NuclearMissile (10073350),
     /// SW_GeneticMutator (10072080), SW_PsychicDominator (10070980),
-    /// SW_PsychicReveal (100752E0), SW_SpyPlane (100757F0), SW_LightningStorm (10072C30), SW_ParaDrop
-    /// (10073DA0: ParaDrop and AmerParaDrop). Its handler's
+    /// SW_PsychicReveal (100752E0), SW_SpyPlane (100757F0), SW_LightningStorm (10072C30),
+    /// SW_ParaDrop (10073DA0: ParaDrop and AmerParaDrop), SW_Protect
+    /// (10074B40: IronCurtain). Its handler's
     /// Initialize, LoadFromINI,
     /// Activate and Flags replace the stock reads and Launch case; the other
     /// stock Types keep their stock owners in this port.
     pub(crate) const fn is_ares_redirect(self) -> bool {
         matches!(
             self,
-            Self::ChronoSphere
+            Self::IronCurtain
+                | Self::ChronoSphere
                 | Self::ChronoWarp
                 | Self::MultiMissile
                 | Self::GeneticConverter
@@ -917,7 +928,7 @@ impl SuperWeaponType {
             // InitializeConstants supplies an Attack cursor. Stock ReadAction
             // keeps its 0x20-byte ReadString (`0x00474EE0`), which a stock-way
             // read uses for every Type.
-            action: match kind {
+            action: match kind.ares_handler_kind() {
                 _ if !ares_way => section.read_action_name("Action").map(str::to_string),
                 SuperWeaponKind::GenericWarhead => Some("Attack".to_string()),
                 // SW_HunterSeeker::Initialize clears Action (10072A16) after

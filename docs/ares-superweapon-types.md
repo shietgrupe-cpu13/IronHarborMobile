@@ -54,8 +54,10 @@ plays `SW.Sound`, raises the radar event and prints `Message.Launch`, each unles
 Flags skip it, and remembers the House's last Super (SWLastIndex), which a PostClick
 Super uses as its source.
 
-The Iron Curtain and Force Shield keep their stock handlers. The paradrops,
-Spy Plane, Lightning Storm and Psychic Reveal use their Ares redirects.
+The stock `Type=IronCurtain` is redirected to Ares Protect (`SW_Protect::HandlesType`,
+`Ares.dll 0x10074B40`); its stored kind and retail type index remain IronCurtain. The
+Force Shield keeps its stock handler. The paradrops, Spy Plane, Lightning Storm and
+Psychic Reveal use their Ares redirects.
 
 ## Psychic Reveal
 
