@@ -1242,11 +1242,22 @@ fn sync_view(state: &mut AppState) {
     );
     let (_, tactical_y, _, _) = crate::app::input::camera::tactical_viewport_px(state);
     let top = state.renderer.performance_overlay.message_top();
-    state.match_state.match_presentation.message_list.set_view(
-        x,
-        y.max(tactical_y as i32 + top),
-        width,
-    );
+    #[cfg(target_os = "android")]
+    let (x, y) = {
+        let window = state.platform.window.inner_size();
+        let (dx, dy) = crate::util::display_insets::frame_offset(
+            (state.render_width(), state.render_height()),
+            (window.width, window.height),
+        );
+        (x + dx, y.max(tactical_y as i32 + top + dy))
+    };
+    #[cfg(not(target_os = "android"))]
+    let y = y.max(tactical_y as i32 + top);
+    state
+        .match_state
+        .match_presentation
+        .message_list
+        .set_view(x, y, width);
 }
 
 /// Prepare one successful offline TextLabel paint, using raw wall time for

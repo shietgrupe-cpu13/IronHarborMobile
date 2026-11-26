@@ -13,6 +13,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Process
 import android.provider.DocumentsContract
@@ -22,6 +23,7 @@ import android.system.Os
 import android.text.InputType
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
+import android.view.RoundedCorner
 import android.view.WindowInsets
 import android.widget.EditText
 import java.io.File
@@ -59,6 +61,12 @@ class VeraActivity : NativeActivity() {
     private var touchHud: TouchHudOverlay? = null
     private var immersiveFullscreen = ImmersiveFullscreenSettings.DEFAULT_ENABLED
 
+    @Volatile
+    private var displayInsetLeft = 0
+
+    @Volatile
+    private var displayInsetTop = 0
+
     override fun onCreate(savedInstanceState: Bundle?) {
         val launchPreference = if (intent.hasExtra(ImmersiveFullscreenSettings.INTENT_EXTRA)) {
             intent.getBooleanExtra(
@@ -94,10 +102,14 @@ class VeraActivity : NativeActivity() {
         super.onCreate(savedInstanceState)
         GameImmersiveMode.apply(window, immersiveFullscreen)
         window.decorView.setOnApplyWindowInsetsListener { _, insets ->
+            updateDisplayInsets(insets)
             touchHud?.updateWindowInsets(insets)
             insets
         }
         window.decorView.requestApplyInsets()
+        window.decorView.post {
+            window.decorView.rootWindowInsets?.let(::updateDisplayInsets)
+        }
         if (appliedMode != TouchHudSettings.MODE_EXTERNAL) {
             window.decorView.post {
                 if (!isFinishing && !isDestroyed) {
@@ -131,6 +143,25 @@ class VeraActivity : NativeActivity() {
             }
         }
     }
+
+    /** Safe top-left screen area used by the native message lane and diagnostics. */
+    private fun updateDisplayInsets(insets: WindowInsets) {
+        val cutout = if (Build.VERSION.SDK_INT >= 28) insets.displayCutout else null
+        var left = cutout?.safeInsetLeft ?: 0
+        val top = cutout?.safeInsetTop ?: 0
+        if (Build.VERSION.SDK_INT >= 31) {
+            val corner = insets.getRoundedCorner(RoundedCorner.POSITION_TOP_LEFT)
+            if (corner != null) left = maxOf(left, corner.radius)
+        }
+        displayInsetLeft = left
+        displayInsetTop = top
+    }
+
+    /** JNI: display cutout/rounded-corner safe inset in physical window pixels. */
+    fun displayInsetLeft(): Int = displayInsetLeft
+
+    /** JNI: display cutout top inset in physical window pixels. */
+    fun displayInsetTop(): Int = displayInsetTop
 
     private fun applyGameplayWindowMode() {
         GameImmersiveMode.apply(window, immersiveFullscreen)

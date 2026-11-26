@@ -20,6 +20,7 @@ pub mod config;
 pub mod direction;
 pub mod direction_tables;
 pub mod device_identity;
+pub mod display_insets;
 pub mod fixed_math;
 pub mod flh_transform;
 pub mod fnv;

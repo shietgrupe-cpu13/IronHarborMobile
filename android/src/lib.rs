@@ -63,6 +63,22 @@ fn cancel_import() -> bool {
     .unwrap_or(false)
 }
 
+/// Read the top-left display safe area from the Android game activity.
+fn display_insets() -> vera20k::util::display_insets::Insets {
+    with_activity(|env, activity| {
+        let inset = |env: &mut jni::JNIEnv, name: &str| -> i32 {
+            env.call_method(activity, name, "()I", &[])
+                .and_then(|value| value.i())
+                .unwrap_or(0)
+        };
+        vera20k::util::display_insets::Insets {
+            left: inset(env, "displayInsetLeft"),
+            top: inset(env, "displayInsetTop"),
+        }
+    })
+    .unwrap_or_default()
+}
+
 /// Launcher and app-switcher icon hook for `vera20k::util::app_icon`.
 ///
 /// The choice lives in the two activity aliases, which only `PackageManager`
@@ -1121,6 +1137,9 @@ fn android_main(app: AndroidApp) {
     let profiled_rayon_workers = configure_profiled_rayon_workers();
     keep_screen_on(&app);
     vera20k::util::folder_picker::install(request_folder_picker, cancel_import);
+    vera20k::util::display_insets::install(vera20k::util::display_insets::Hooks {
+        insets: display_insets,
+    });
     // The launcher icon is a compiled resource, so the VERA Icon box's choice
     // reaches the two activity aliases only through PackageManager.
     vera20k::util::app_icon::install(apply_app_icon);
