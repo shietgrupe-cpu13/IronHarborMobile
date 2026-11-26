@@ -27,6 +27,32 @@ const WEST_STEP: u8 = 6;
 /// out asks it.
 const CODE2: WaitingRequest = WaitingRequest::Code2Ladder { urgency: 1 };
 
+#[test]
+fn foot_search_key_keeps_single_contact_inline_and_dock_slots_exact() {
+    let empty_single = crate::sim::radio::contacts::Contacts::default();
+    assert_eq!(ContactsKey::of(&empty_single), ContactsKey::One(None));
+    let mut occupied_single = empty_single.clone();
+    occupied_single.set_slot(0, 41);
+    assert_eq!(
+        ContactsKey::of(&occupied_single),
+        ContactsKey::One(Some(41))
+    );
+
+    let mut dock_slots = crate::sim::radio::contacts::Contacts::with_capacity(3);
+    dock_slots.set_slot(2, 41);
+    assert_eq!(
+        ContactsKey::of(&dock_slots),
+        ContactsKey::Slots(dock_slots.clone())
+    );
+    let mut different_slot = dock_slots.clone();
+    different_slot.set_slot(2, 0);
+    different_slot.set_slot(1, 41);
+    assert_ne!(
+        ContactsKey::of(&dock_slots),
+        ContactsKey::of(&different_slot)
+    );
+}
+
 /// A tank, a tank that cannot move, an armed tank, an infantryman and a
 /// one-cell building.
 fn rules() -> RuleSet {

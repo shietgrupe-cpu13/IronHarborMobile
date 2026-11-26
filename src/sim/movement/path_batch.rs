@@ -551,7 +551,25 @@ struct FootSearchKey {
     mission: MissionId,
     nav_com: Option<NavTargetRef>,
     attack_target: Option<TargetKind>,
-    radio_contacts: Contacts,
+    radio_contacts: ContactsKey,
+}
+
+/// A mover's contact slots as [`FootSearchKey`] compares them. The ordinary
+/// one-slot case stays inline; dock buildings retain their exact sparse slots.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ContactsKey {
+    One(Option<u64>),
+    Slots(Contacts),
+}
+
+impl ContactsKey {
+    fn of(contacts: &Contacts) -> Self {
+        if contacts.capacity() == 1 {
+            Self::One(contacts.slot(0))
+        } else {
+            Self::Slots(contacts.clone())
+        }
+    }
 }
 
 /// The destination a code-2 ladder searches toward: Walk's destination or
@@ -1174,7 +1192,7 @@ impl Simulation {
             mission: actor.mission.current(),
             nav_com: actor.navigation.nav_com(),
             attack_target: actor.attack_target.target(),
-            radio_contacts: actor.seldom.radio_contacts.clone(),
+            radio_contacts: ContactsKey::of(&actor.seldom.radio_contacts),
         })
     }
 }
