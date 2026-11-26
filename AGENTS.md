@@ -384,3 +384,22 @@ treating past conclusions as current.
 ## Claude Code notes
 
 Memory holds durable preferences, not progress claims.
+
+## Iron Harbor Android build routing
+
+For this Android fork, heavy Rust ARM64 compilation and APK packaging run on the
+standard free `ubuntu-latest` GitHub-hosted runner through
+`.github/workflows/android-arm64.yml`. Do not start local `cargo ndk`, full Android
+Rust builds, or Gradle APK builds unless the user explicitly requests a local
+fallback. Source inspection, formatting, YAML lint, and metadata-only commands may run locally; run Rust tests, JNI/native builds, and APK packaging through GitHub Actions by default. Keep
+local project files, caches, logs and downloaded artifacts on E: as configured by
+this workspace. CI must keep the existing Android NativeActivity, Rust engine,
+launcher, and `Documents/RA2Harbor` behavior; do not bundle game installation files
+or use paid runners/services. Use the optimized `fast` profile for debug/test APKs
+and preserve the existing `shipping` profile for signed releases. Debug builds use
+the `.debug` application ID suffix. Release signing credentials are repository
+secrets only and never belong in source, workflow logs, or artifacts. Use Cargo and
+Gradle caches with profile/target/feature separation; retain build logs and cache
+hit statistics. `ccache` is not part of the current Android pipeline because it
+has no C/C++ compilation step. Never report a successful Android gameplay or device
+test from a hosted compile alone.

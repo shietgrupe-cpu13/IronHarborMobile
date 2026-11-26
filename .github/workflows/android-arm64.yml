@@ -1,0 +1,468 @@
+name: Android ARM64
+
+on:
+  push:
+    branches: [android-development]
+    tags: ["ironharbor-v*"]
+    paths:
+      - "**/*.rs"
+      - "**/*.toml"
+      - "Cargo.lock"
+      - "android/**"
+      - "build.rs"
+      - ".cargo/**"
+      - ".github/workflows/android-arm64.yml"
+  pull_request:
+    branches: [android-development]
+    paths:
+      - "**/*.rs"
+      - "**/*.toml"
+      - "Cargo.lock"
+      - "android/**"
+      - "build.rs"
+      - ".cargo/**"
+      - ".github/workflows/android-arm64.yml"
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: "Build the installable debug APK or a signed shipping release APK"
+        type: choice
+        required: true
+        default: debug
+        options: [debug, release]
+      version_name:
+        description: "Optional Android version name; stable tags override this"
+        type: string
+        required: false
+      source_ref:
+        description: "Branch, tag, or commit to build manually"
+        type: string
+        required: false
+        default: android-development
+  schedule:
+    - cron: "0 5 * * *"
+
+concurrency:
+  group: android-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ARM64 APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    outputs:
+      artifact_name: ${{ steps.meta.outputs.artifact_name }}
+      source_sha: ${{ steps.meta.outputs.source_sha }}
+      build_type: ${{ steps.meta.outputs.build_type }}
+      version_name: ${{ steps.meta.outputs.version_name }}
+      build_label: ${{ steps.meta.outputs.build_label }}
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      ANDROID_NDK_VERSION: "28.2.13676358"
+      ANDROID_COMPILE_SDK: "36"
+      ANDROID_BUILD_TOOLS: "36.1.0"
+      CARGO_PROFILE_SHIPPING_STRIP: symbols
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - name: Check out Android source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'schedule' && 'android-development' || (github.event_name == 'workflow_dispatch' && (inputs.source_ref || 'android-development')) || github.ref }}
+
+      - name: Resolve build metadata
+        id: meta
+        env:
+          REQUESTED_BUILD_TYPE: ${{ inputs.build_type || 'debug' }}
+          REQUESTED_VERSION_NAME: ${{ inputs.version_name || '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build-logs dist android/.android
+          if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/tags/ironharbor-v* ]]; then
+            build_type=release
+            version_name="${GITHUB_REF_NAME#ironharbor-v}"
+          elif [[ "$GITHUB_EVENT_NAME" == schedule ]]; then
+            build_type=debug
+            base_version="$(sed -n 's/.*orElse("\([^"]*\)").*/\1/p' android/app/build.gradle.kts | head -n 1)"
+            version_name="${base_version}-nightly.${GITHUB_RUN_NUMBER}"
+          else
+            build_type="$REQUESTED_BUILD_TYPE"
+            base_version="$(sed -n 's/.*orElse("\([^"]*\)").*/\1/p' android/app/build.gradle.kts | head -n 1)"
+            version_name="${REQUESTED_VERSION_NAME:-$base_version}"
+          fi
+          if [[ "$build_type" != debug && "$build_type" != release ]]; then
+            echo "Unsupported build type: $build_type" >&2
+            exit 1
+          fi
+          if [[ ! "$version_name" =~ ^[0-9]+(\.[0-9]+){1,2}(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "Invalid Android version name: $version_name" >&2
+            exit 1
+          fi
+          build_label="$(sed -n 's/^val veraBuildLabel = "\([^"]*\)"/\1/p' android/app/build.gradle.kts)"
+          source_sha="$(git rev-parse HEAD)"
+          artifact_name="ironharbor-android-${build_label}-${version_name}-${build_type}-${GITHUB_RUN_ID}"
+          {
+            echo "build_type=$build_type"
+            echo "version_name=$version_name"
+            echo "build_label=$build_label"
+            echo "source_sha=$source_sha"
+            echo "artifact_name=$artifact_name"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### Android ARM64 build"
+            echo "- Type: $build_type"
+            echo "- Version: $version_name ($build_label)"
+            echo "- Source: $source_sha"
+            echo "- Runner: ubuntu-latest (standard GitHub-hosted)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set up Temurin JDK 17
+        uses: actions/setup-java@8df1039502a15bceb9433410b1a100fbe190c53b # v4.5.0
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Configure Gradle and GitHub-hosted cache
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-provider: basic
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
+
+      - name: Install pinned Android SDK and NDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager --install \
+            "platforms;android-${ANDROID_COMPILE_SDK}" \
+            "build-tools;${ANDROID_BUILD_TOOLS}" \
+            "ndk;${ANDROID_NDK_VERSION}" \
+            2>&1 | tee build-logs/android-sdk-install.log
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
+          mkdir -p android/.android build-logs dist
+          {
+            java -version
+            sdkmanager --list_installed
+          } > build-logs/android-toolchain.txt 2>&1
+
+      - name: Set up Rust and Android target
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup show active-toolchain | tee build-logs/rust-toolchain.txt
+          rustup target add aarch64-linux-android 2>&1 | tee -a build-logs/rust-toolchain.txt
+          rustc -vV >> build-logs/rust-toolchain.txt
+          cargo -V >> build-logs/rust-toolchain.txt
+
+      - name: Cache Cargo dependencies and profile artifacts
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: ironharbor-android-arm64
+          key: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/ironharbor-v') || inputs.build_type == 'release') && 'shipping-phobos' || 'fast-phobos' }}
+          cache-targets: ${{ !((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/ironharbor-v')) || inputs.build_type == 'release') }}
+          env-vars: CARGO_TARGET_DIR CARGO_PROFILE_SHIPPING_STRIP
+          save-if: ${{ github.event_name != 'pull_request' }}
+
+      - name: Set up sccache for Rust compiler caching
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.16.0
+
+      - name: Install cargo-ndk
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo install cargo-ndk --version 4.1.2 --locked 2>&1 | tee build-logs/cargo-ndk-install.log
+          cargo ndk --version | tee -a build-logs/rust-toolchain.txt
+
+      - name: Record native compiler cache applicability
+        shell: bash
+        run: |
+          {
+            echo "Android module builds Rust plus Kotlin/Java packaging; it has no C/C++ compile task, CMake project, or ndk-build task."
+            echo "ccache is not installed because it cannot cache this Rust-only native pipeline; sccache caches non-incremental Rust compiler invocations."
+            echo "The debug fast profile keeps its Cargo incremental target artifacts in rust-cache."
+          } | tee build-logs/cache-mode.txt
+
+      - name: Validate stable release version code
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/ironharbor-v')
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build-logs
+          current_code="$(sed -n 's/^val veraVersionCode = \([0-9][0-9]*\)$/\1/p' android/app/build.gradle.kts)"
+          previous_tag="$(git tag --list 'ironharbor-v*' --sort=-version:refname | grep -Fxv "$GITHUB_REF_NAME" | head -n 1 || true)"
+          if [[ -n "$previous_tag" ]]; then
+            prior_code="$(git show "$previous_tag:android/app/build.gradle.kts" | sed -n 's/^val veraVersionCode = \([0-9][0-9]*\)$/\1/p')"
+            if [[ -z "$prior_code" || "$current_code" -le "$prior_code" ]]; then
+              echo "Stable release versionCode $current_code must exceed $previous_tag versionCode $prior_code." >&2
+              exit 1
+            fi
+          fi
+          echo "Stable versionCode check passed: $current_code" | tee build-logs/stable-version-code.txt
+
+      - name: Prepare release signing key
+        if: steps.meta.outputs.build_type == 'release'
+        env:
+          ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
+          ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$ANDROID_RELEASE_KEYSTORE_BASE64" || -z "$ANDROID_RELEASE_STORE_PASSWORD" || -z "$ANDROID_RELEASE_KEY_ALIAS" || -z "$ANDROID_RELEASE_KEY_PASSWORD" ]]; then
+            echo "Signed release builds require ANDROID_RELEASE_KEYSTORE_BASE64, ANDROID_RELEASE_STORE_PASSWORD, ANDROID_RELEASE_KEY_ALIAS, and ANDROID_RELEASE_KEY_PASSWORD repository secrets." >&2
+            exit 1
+          fi
+          printf '%s' "$ANDROID_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/ironharbor-release.jks"
+          chmod 600 "$RUNNER_TEMP/ironharbor-release.jks"
+          {
+            echo "ANDROID_RELEASE_STORE_FILE=$RUNNER_TEMP/ironharbor-release.jks"
+            echo "ANDROID_RELEASE_STORE_PASSWORD=$ANDROID_RELEASE_STORE_PASSWORD"
+            echo "ANDROID_RELEASE_KEY_ALIAS=$ANDROID_RELEASE_KEY_ALIAS"
+            echo "ANDROID_RELEASE_KEY_PASSWORD=$ANDROID_RELEASE_KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+
+      - name: Build Android ARM64 Rust library
+        env:
+          BUILD_TYPE: ${{ steps.meta.outputs.build_type }}
+          RUSTC_WRAPPER: sccache
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$BUILD_TYPE" == release ]]; then
+            cargo ndk -t arm64-v8a --platform 26 -o android/app/src/main/jniLibs build \
+              --message-format=json-render-diagnostics --locked --profile shipping \
+              -p vera20k-android --no-default-features --features phobos \
+              2>&1 | tee build-logs/rust-android-arm64.log
+          else
+            cargo ndk -t arm64-v8a --platform 26 -o android/app/src/main/jniLibs build \
+              --message-format=json-render-diagnostics --locked --profile fast \
+              -p vera20k-android --no-default-features --features phobos \
+              2>&1 | tee build-logs/rust-android-arm64.log
+          fi
+
+      - name: Run Android JVM tests and package APK
+        env:
+          BUILD_TYPE: ${{ steps.meta.outputs.build_type }}
+          VERSION_NAME: ${{ steps.meta.outputs.version_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd android
+          if [[ "$BUILD_TYPE" == release ]]; then
+            ./gradlew :app:testDebugUnitTest :app:assembleRelease \
+              -PironHarborVersionName="$VERSION_NAME" \
+              --build-cache --profile --console=plain \
+              2>&1 | tee ../build-logs/gradle-apk.log
+            cp app/build/outputs/apk/release/app-release.apk ../dist/
+          else
+            ./gradlew :app:testDebugUnitTest :app:assembleDebug \
+              -PironHarborVersionName="$VERSION_NAME" \
+              -PironHarborSideBySideDebug=true \
+              --build-cache --profile --console=plain \
+              2>&1 | tee ../build-logs/gradle-apk.log
+            cp app/build/outputs/apk/debug/app-debug.apk ../dist/
+          fi
+          cd ..
+          cp android/build/reports/profile/*.html build-logs/ 2>/dev/null || true
+
+      - name: Verify APK, package identity, signature, ABI, and 16 KB alignment
+        env:
+          BUILD_TYPE: ${{ steps.meta.outputs.build_type }}
+          VERSION_NAME: ${{ steps.meta.outputs.version_name }}
+          BUILD_LABEL: ${{ steps.meta.outputs.build_label }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk="$(find dist -maxdepth 1 -name '*.apk' -print -quit)"
+          test -n "$apk"
+          expected_id=org.ironharbor.mobile
+          if [[ "$BUILD_TYPE" == debug ]]; then expected_id+=.debug; fi
+          aapt="$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS/aapt"
+          zipalign="$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS/zipalign"
+          apksigner="$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS/apksigner"
+          readelf="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          "$aapt" dump badging "$apk" | tee build-logs/apk-badging.txt
+          package_line="$(grep -m1 '^package:' build-logs/apk-badging.txt)"
+          grep -F "name='$expected_id'" <<< "$package_line" >/dev/null
+          grep -F "versionName='$VERSION_NAME'" <<< "$package_line" >/dev/null
+          expected_code="$(sed -n 's/^val veraVersionCode = \([0-9][0-9]*\)$/\1/p' android/app/build.gradle.kts)"
+          grep -F "versionCode='$expected_code'" <<< "$package_line" >/dev/null          grep -F "sdkVersion:'26'" build-logs/apk-badging.txt >/dev/null
+          grep -F "targetSdkVersion:'36'" build-logs/apk-badging.txt >/dev/null
+          grep -F "native-code: 'arm64-v8a'" build-logs/apk-badging.txt >/dev/null
+          grep -F "\"$BUILD_LABEL\"" android/app/build.gradle.kts >/dev/null
+          unzip -Z1 "$apk" | tee build-logs/apk-entries.txt
+          unzip -Z1 "$apk" | grep -Fx 'lib/arm64-v8a/libvera20k_android.so' >/dev/null
+          if unzip -Z1 "$apk" | grep -Eiq '\.(mix|shp|vxl|hva|csf|pal)$'; then
+            echo "APK contains a game installation asset; refusing to publish it." >&2
+            exit 1
+          fi
+          unzip -p "$apk" lib/arm64-v8a/libvera20k_android.so > "$RUNNER_TEMP/libvera20k_android.so"
+          "$readelf" -h "$RUNNER_TEMP/libvera20k_android.so" > build-logs/native-elf-header.txt
+          "$readelf" -lW "$RUNNER_TEMP/libvera20k_android.so" > build-logs/native-elf-program-headers.txt
+          grep -F 'AArch64' build-logs/native-elf-header.txt >/dev/null
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          text = Path("build-logs/native-elf-program-headers.txt").read_text()
+          alignments = [int(match.group(1), 16) for line in text.splitlines() if re.match(r"\s*LOAD\s", line) for match in [re.search(r"(0x[0-9a-fA-F]+)\s*$", line)] if match]
+          if not alignments:
+              raise SystemExit("ELF has no readable PT_LOAD alignment entries")
+          if any(value < 0x4000 for value in alignments):
+              raise SystemExit(f"ELF PT_LOAD alignment below 16 KB: {[hex(value) for value in alignments]}")
+          print("ELF PT_LOAD alignments: " + ", ".join(hex(value) for value in alignments))
+          PY
+          "$zipalign" -c -P 16 4 "$apk" | tee build-logs/zipalign.txt
+          "$apksigner" verify --verbose --print-certs "$apk" 2>&1 | tee build-logs/apksigner.txt
+          sha256sum "$apk" | tee dist/SHA256SUMS.txt
+          {
+            echo "### APK verification"
+            echo "- Package: $expected_id"
+            echo "- Version: $VERSION_NAME ($BUILD_LABEL, code $expected_code)"
+            echo "- ABI: arm64-v8a; native library present"
+            echo "- ELF LOAD alignment: at least 16 KB"
+            echo "- APK ZIP alignment: 16 KB"
+            echo "- APK signature and game-file exclusion: passed"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Generate changelog and build log manifest
+        if: always()
+        env:
+          SOURCE_SHA: ${{ steps.meta.outputs.source_sha }}
+          BUILD_TYPE: ${{ steps.meta.outputs.build_type }}
+          VERSION_NAME: ${{ steps.meta.outputs.version_name }}
+          BUILD_LABEL: ${{ steps.meta.outputs.build_label }}
+          EVENT_BEFORE: ${{ github.event.before || '' }}
+        shell: bash
+        run: |
+          mkdir -p build-logs
+          previous=""
+          if [[ "$GITHUB_EVENT_NAME" == push && -n "$EVENT_BEFORE" && "$EVENT_BEFORE" != 0000000000000000000000000000000000000000 ]]; then
+            previous="$EVENT_BEFORE"
+          else
+            previous="$(git describe --tags --abbrev=0 --match 'ironharbor-v*' 2>/dev/null || true)"
+          fi
+          if [[ -n "$SOURCE_SHA" ]] && [[ -n "$previous" ]] && git rev-parse "$previous" >/dev/null 2>&1; then
+            git log --no-merges --pretty='- %s (%h)' "$previous..$SOURCE_SHA" > build-logs/changelog.txt || true
+          elif [[ -n "$SOURCE_SHA" ]]; then
+            git log --no-merges --pretty='- %s (%h)' -n 50 "$SOURCE_SHA" > build-logs/changelog.txt || true
+          else
+            echo "Build stopped before source metadata was resolved." > build-logs/changelog.txt
+          fi
+          {
+            printf 'build_type=%s\nversion_name=%s\nbuild_label=%s\nsource_sha=%s\n' "$BUILD_TYPE" "$VERSION_NAME" "$BUILD_LABEL" "$SOURCE_SHA"
+            printf 'runner=ubuntu-latest-standard\n'
+            printf 'workflow_run=%s\n' "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } > build-logs/build-manifest.txt
+
+      - name: Report sccache statistics
+        if: always()
+        shell: bash
+        run: |
+          if command -v sccache >/dev/null 2>&1; then
+            sccache --show-stats 2>&1 | tee build-logs/sccache-stats.txt
+          else
+            echo "sccache was not installed" | tee build-logs/sccache-stats.txt
+          fi
+
+      - name: Upload APK and diagnostics artifact
+        if: success()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.meta.outputs.artifact_name }}
+          path: |
+            dist/*.apk
+            dist/SHA256SUMS.txt
+            build-logs/**
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ironharbor-android-failure-${{ github.run_id }}
+          path: build-logs/**
+          if-no-files-found: warn
+          retention-days: 14
+
+  publish:
+    name: Publish nightly or stable release
+    needs: build
+    if: >-
+      success() &&
+      (github.event_name == 'schedule' ||
+       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/ironharbor-v')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified APK artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ needs.build.outputs.artifact_name }}
+          path: release-assets
+
+      - name: Create immutable nightly prerelease
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_NAME: ${{ needs.build.outputs.version_name }}
+          BUILD_LABEL: ${{ needs.build.outputs.build_label }}
+          SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="ironharbor-nightly-${GITHUB_RUN_NUMBER}"
+          apk="$(find release-assets/dist -maxdepth 1 -name '*.apk' -print -quit)"
+          test -n "$apk"
+          {
+            echo "Iron Harbor Mobile nightly build from \`$SOURCE_SHA\`."
+            echo
+            echo "This is a debug-signed ARM64 test build ($VERSION_NAME, $BUILD_LABEL). It is not a stable release and may require uninstalling an earlier nightly before installation if the debug signing key changed."
+            echo
+            echo "### Changes"
+            cat release-assets/build-logs/changelog.txt
+            echo
+            echo "SHA-256: \`$(sha256sum "$apk" | cut -d' ' -f1)\`"
+          } > release-assets/release-notes.md
+          gh release create "$tag" "$apk" --repo "$GITHUB_REPOSITORY" \
+            --title "Iron Harbor Mobile Nightly $GITHUB_RUN_NUMBER" \
+            --notes-file release-assets/release-notes.md --prerelease --target "$SOURCE_SHA"
+
+      - name: Create stable version release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/ironharbor-v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_NAME: ${{ needs.build.outputs.version_name }}
+          BUILD_LABEL: ${{ needs.build.outputs.build_label }}
+          SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          apk="$(find release-assets/dist -maxdepth 1 -name '*.apk' -print -quit)"
+          test -n "$apk"
+          {
+            echo "Iron Harbor Mobile $VERSION_NAME ($BUILD_LABEL), built from \`$SOURCE_SHA\`."
+            echo
+            echo "Android ARM64 release. Users provide their own lawfully obtained game files; none are bundled."
+            echo
+            echo "### Changes"
+            cat release-assets/build-logs/changelog.txt
+            echo
+            echo "SHA-256: \`$(sha256sum "$apk" | cut -d' ' -f1)\`"
+          } > release-assets/release-notes.md
+          gh release create "$tag" "$apk" --repo "$GITHUB_REPOSITORY" \
+            --title "Iron Harbor Mobile $VERSION_NAME" \
+            --notes-file release-assets/release-notes.md --verify-tag --target "$SOURCE_SHA"
