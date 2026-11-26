@@ -1433,6 +1433,59 @@ fn solo_skirmish_option_accepts_no_opponent_and_no_team_split() {
 }
 
 #[test]
+fn an_ares_front_end_skips_skirmish_side_gates() {
+    let ini = IniFile::from_str("[General]\nTogglePowerAllowed=yes\n");
+    let stock = crate::rules::ruleset::RuleSet::from_ini(&IniFile::empty()).unwrap();
+    let ares = {
+        let _way = crate::rules::ares_switch::read_ares_way(true);
+        crate::rules::ruleset::RuleSet::from_ini(&ini).unwrap()
+    };
+    assert!(!stock.ares());
+    assert!(ares.ares());
+    assert!(start_skips_side_gates(true, Some(&stock)));
+
+    let maps = [test_map_entry_with_starts("solo.mmx", 2)];
+    let modes = stock_skirmish_modes();
+    let mut shell = controlled_country_shell();
+    for opponent in &mut shell.opponents {
+        opponent.row_type = SkirmishAiRowType::None;
+    }
+    let start = |shell: &SkirmishShellState, rules| {
+        launch_session(
+            shell,
+            &maps,
+            &modes,
+            start_skips_side_gates(false, Some(rules)),
+        )
+    };
+    assert_eq!(
+        start(&shell, &stock).unwrap_err(),
+        LaunchValidationError::NoEnabledOpponent
+    );
+    assert!(
+        start(&shell, &ares)
+            .expect("Ares starts a solo skirmish")
+            .opponents
+            .is_empty()
+    );
+
+    shell.player_team = 0;
+    shell.opponents[0].row_type = SkirmishAiRowType::Normal;
+    shell.opponents[0].team = 0;
+    assert_eq!(
+        start(&shell, &stock).unwrap_err(),
+        LaunchValidationError::SameExplicitTeam { team: 0 }
+    );
+    assert_eq!(
+        start(&shell, &ares)
+            .expect("Ares skips the same-team gate")
+            .opponents
+            .len(),
+        1
+    );
+}
+
+#[test]
 fn solo_skirmish_option_accepts_every_opponent_on_the_local_team() {
     let mut shell = controlled_country_shell();
     shell.player_team = 0;
