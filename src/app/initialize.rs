@@ -758,11 +758,18 @@ impl App {
             .map(|cfg| u64::from(cfg.gameplay.input_delay_ticks))
             .unwrap_or_else(|| u64::from(crate::util::config::default_input_delay_ticks()));
         let sidebar_layout_spec = SidebarChromeLayoutSpec::stock();
+        #[cfg(target_os = "android")]
+        let ares_support_dir = game_config
+            .as_ref()
+            .map(|config| config.paths.ares_support_dir());
+        #[cfg(not(target_os = "android"))]
+        let ares_support_dir: Option<std::path::PathBuf> = None;
         let mut startup_asset_manager = game_config.as_ref().and_then(|config| {
             startup_asset_or_error(
-                AssetManager::with_mod_and_ares(
+                AssetManager::with_mod_and_ares_support(
                     &config.paths.ra2_dir,
                     mods.dir(),
+                    ares_support_dir.as_deref(),
                     startup_options.media_archive_mode,
                     ares_setting,
                     &resources.archives,
@@ -895,6 +902,7 @@ impl App {
             .with_mod_name(mods.active.as_ref().map(|active| active.folder.clone()))
             .with_personal_rules(personal_rules)
             .with_ares_setting(ares_setting)
+            .with_ares_support_dir(ares_support_dir.clone())
             .with_kratos_setting(kratos_setting);
             process_assets.csf = startup_csf;
             let (startup_rules, startup_rules_projection) = startup_asset_manager

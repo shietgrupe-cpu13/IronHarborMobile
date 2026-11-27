@@ -8,11 +8,11 @@ Updated 2026-11-27. Authoritative specification: [IRON_HARBOR_MASTER_PLAN.md](IR
 
 ## Phase 3 — Original launcher, storage and configuration
 
-**Storage integration in progress; original launcher GUI not yet migrated.** The current engine is still upstream `GameActivity`, not the original Iron Harbor launcher. Current local changes add optional, informed All files access; a primary-volume SAF-folder-to-path mapping; engine-owned installation validation; direct game-file selection; a SAF copy fallback; persisted data-root selection; and config lookup in the legacy Android `Config` location. JVM and Rust regression tests have been added but are not run locally. CI must validate the current candidate before any claim of completion.
+**Storage and launcher integration in progress.** The `LauncherActivity` source restores Iron Harbor's launcher experience around the upstream GameActivity engine. Current uncommitted changes restore the shared-root helper, direct read-in-place game selection, profile-aware RA2/YR validation, canonical and legacy config-file selection, and Ares support archive precedence. The legacy GameActivity SAF copier remains; it is not yet connected as a fallback from the launcher for provider-only trees. Kotlin/JVM and Rust regressions are scheduled in Actions but have not run for this candidate.
 
-The canonical data root is `Documents/Ra2Harbor`. Reuse an existing `RA2Harbor`, `IronHarborRA2YR`, or `RA2IRONHARBOR` directory before creating a new root. Never move/delete user data. Direct access is optional and explicitly disclosed; SAF remains the fallback. Existing installed game files are read in place when direct access is used.
+The canonical fresh data root is `Documents/RA2Harbor`. Reuse existing `Ra2Harbor`, `IronHarborRA2YR`, or `RA2IRONHARBOR` folders before creating it. Never move/delete user data. Direct access is optional and explicitly disclosed; existing game files are read in place. Shared Ares support applies only with a selected mod; the mod's own `ares.mix` takes precedence, and vanilla cannot see the shared archive.
 
-Remaining work: complete review/CI for storage and config-root selection; preserve/migrate existing private app data safely; restore the original launcher GUI and lifecycle; then migrate mod/profile selection, map management, diagnostics and only supported renderer controls. Current upstream documents Vulkan-only Android support; do not expose a GLES selector until the engine actually supports it.
+Remaining work: Actions validation; connect launcher SAF-copy fallback; test private-data migration and profile transitions; physical-device checks for revoked permissions and direct read access; then complete launcher mod/map/config, diagnostics and supported renderer workflows. Current upstream documents Vulkan-only Android support; do not expose a GLES selector until the engine actually supports it.
 
 ## Phase 4 — Dynamic in-game HUD
 

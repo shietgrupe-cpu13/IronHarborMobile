@@ -406,12 +406,13 @@ pub extern "system" fn Java_org_vera20k_VeraActivity_nativeConfigForImport(
         let settings_directory: String = env.get_string(&settings_directory)?.into();
         let settings_path = std::path::PathBuf::from(&settings_directory);
         let previous = android_config_contents(&settings_path)?;
-        let contents = vera20k::util::config::set_paths_key(&previous, "ra2_dir", &directory);
-        let contents = vera20k::util::config::set_paths_key(
-            &contents,
-            "settings_dir",
+        let (config_path, _) = read_launcher_config(&settings_path)?;
+        let contents = launcher_config_for_game_directory(
+            &previous,
+            &directory,
             &settings_directory,
-        );
+            &config_path,
+        )?;
         Ok(env.new_string(contents)?.into_raw())
     })();
     match result {
@@ -438,12 +439,13 @@ pub extern "system" fn Java_org_vera20k_VeraActivity_nativeConfigForDirectSelect
         let settings_directory: String = env.get_string(&settings_directory)?.into();
         let settings_path = std::path::PathBuf::from(&settings_directory);
         let previous = android_config_contents(&settings_path)?;
-        let contents = vera20k::util::config::set_paths_key(&previous, "ra2_dir", &directory);
-        let contents = vera20k::util::config::set_paths_key(
-            &contents,
-            "settings_dir",
+        let (config_path, _) = read_launcher_config(&settings_path)?;
+        let contents = launcher_config_for_game_directory(
+            &previous,
+            &directory,
             &settings_directory,
-        );
+            &config_path,
+        )?;
         Ok(env.new_string(contents)?.into_raw())
     })();
     match result {
@@ -466,6 +468,16 @@ pub extern "system" fn Java_org_vera20k_VeraActivity_nativeValidateGameDirectory
     let result = (|| -> anyhow::Result<String> {
         let directory: String = env.get_string(&directory)?.into();
         let path = std::path::Path::new(&directory);
+        let has_base = vera20k::util::case_insensitive_path::find(path, "ra2.mix")
+            .is_some_and(|archive| archive.is_file());
+        let has_expansion = vera20k::util::case_insensitive_path::find(path, "ra2md.mix")
+            .is_some_and(|archive| archive.is_file());
+        if has_base && !has_expansion {
+            return Ok(format!(
+                "ok:{} (base RA2 archive detected; full engine validation occurs during launch)",
+                path.display()
+            ));
+        }
         vera20k::assets::asset_manager::AssetManager::inspect_install(
             path,
             vera20k::assets::asset_manager::MediaArchiveMode::STOCK_DIGITAL,
@@ -480,6 +492,243 @@ pub extern "system" fn Java_org_vera20k_VeraActivity_nativeValidateGameDirectory
     match env.new_string(message) {
         Ok(value) => value.into_raw(),
         Err(_) => std::ptr::null_mut(),
+    }
+}
+
+fn launcher_profile(value: &str) -> anyhow::Result<vera20k::util::ini_roots::IniProfile> {
+    value.parse().map_err(anyhow::Error::msg)
+}
+
+fn launcher_config_for_selection(
+    data_dir: &std::path::Path,
+    mod_name: &str,
+    profile: vera20k::util::ini_roots::IniProfile,
+) -> anyhow::Result<String> {
+    vera20k::util::platform_dir::set(data_dir.to_path_buf());
+    let (config_path, previous) = read_launcher_config(data_dir)?;
+    let contents = vera20k::util::config::set_paths_key(&previous, "mod", mod_name);
+    let contents = vera20k::util::config::set_ini_profile(&contents, profile);
+    let config = vera20k::util::config::GameConfig::parse_text_at(&contents, &config_path)
+        .map_err(|error| anyhow::anyhow!("The selected configuration is not valid for the engine: {error:#}"))?;
+    validate_launcher_paths(&config)?;
+    // Read the exact mod manifest through the engine's resource resolver at
+    // selection time. Archive-backed root validation occurs once at Play and
+    // again in normal engine startup; this avoids parsing mod.ini in Kotlin.
+    let _ = selected_launcher_resources_without_archives(&config)?;
+    Ok(contents)
+}
+
+fn selected_launcher_resources_without_archives(
+    config: &vera20k::util::config::GameConfig,
+) -> anyhow::Result<vera20k::util::mod_definition::ResourceConfig> {
+    let mod_dir = launcher_mod_directory(config)?;
+    let Some(mod_dir) = mod_dir else {
+        return Ok(vera20k::util::mod_definition::ResourceConfig::from_ini(config.ini.clone()));
+    };
+    let folder = vera20k::util::mod_package::ModFolder::loose(mod_dir.clone());
+    let definition = vera20k::util::mod_definition::ModDefinition::read(&mod_dir)
+        .map_err(anyhow::Error::msg)?;
+    vera20k::assets::asset_manager::mod_resources(&folder, &definition, &config.ini)
+        .map_err(anyhow::Error::msg)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeConfigForImport(
+    mut env: jni::JNIEnv,
+    _activity: JObject,
+    directory: JString,
+    files_directory: JString,
+) -> jstring {
+    let result = (|| -> anyhow::Result<jstring> {
+        let directory: String = env.get_string(&directory)?.into();
+        let files_directory: String = env.get_string(&files_directory)?.into();
+        let data_dir = std::path::Path::new(&files_directory);
+        let (config_path, previous) = read_launcher_config(data_dir)?;
+        let mut contents = vera20k::util::config::set_paths_key(&previous, "ra2_dir", &directory);
+        contents = vera20k::util::config::set_paths_key(&contents, "settings_dir", &files_directory);
+        let game_dir = std::path::Path::new(&directory);
+        let is_base_ra2 = vera20k::util::case_insensitive_path::find(game_dir, "ra2.mix").is_some()
+            && vera20k::util::case_insensitive_path::find(game_dir, "ra2md.mix").is_none();
+        if is_base_ra2 {
+            contents = vera20k::util::config::set_ini_profile(
+                &contents,
+                vera20k::util::ini_roots::IniProfile::Ra2,
+            );
+        } else if let Ok(config) = vera20k::util::config::GameConfig::parse_text_at(&contents, &config_path)
+            && config.ini.profile == vera20k::util::ini_roots::IniProfile::Ra2
+        {
+            contents = vera20k::util::config::set_ini_profile(
+                &contents,
+                vera20k::util::ini_roots::IniProfile::Yr,
+            );
+        }
+        let _ = vera20k::util::config::GameConfig::parse_text_at(&contents, &config_path)
+            .map_err(|error| anyhow::anyhow!("The engine rejected the selected game configuration: {error:#}"))?;
+        Ok(env.new_string(contents)?.into_raw())
+    })();
+    match result {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = env.throw_new("java/io/IOException", error.to_string());
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeConfigForSelection(
+    mut env: jni::JNIEnv,
+    _activity: JObject,
+    mod_name: JString,
+    profile: JString,
+    files_directory: JString,
+) -> jstring {
+    let result = (|| -> anyhow::Result<jstring> {
+        let mod_name: String = env.get_string(&mod_name)?.into();
+        let profile: String = env.get_string(&profile)?.into();
+        let files_directory: String = env.get_string(&files_directory)?.into();
+        let contents = launcher_config_for_selection(
+            std::path::Path::new(&files_directory),
+            &mod_name,
+            launcher_profile(&profile)?,
+        )?;
+        Ok(env.new_string(contents)?.into_raw())
+    })();
+    match result {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = env.throw_new("java/io/IOException", error.to_string());
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeConfigForMod(
+    mut env: jni::JNIEnv,
+    _activity: JObject,
+    mod_name: JString,
+    files_directory: JString,
+) -> jstring {
+    let result = (|| -> anyhow::Result<jstring> {
+        let mod_name: String = env.get_string(&mod_name)?.into();
+        let files_directory: String = env.get_string(&files_directory)?.into();
+        let profile = if mod_name.is_empty() {
+            vera20k::util::ini_roots::IniProfile::Yr
+        } else {
+            vera20k::util::ini_roots::IniProfile::Auto
+        };
+        let contents = launcher_config_for_selection(
+            std::path::Path::new(&files_directory),
+            &mod_name,
+            profile,
+        )?;
+        Ok(env.new_string(contents)?.into_raw())
+    })();
+    match result {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = env.throw_new("java/io/IOException", error.to_string());
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeValidateCurrentSelection(
+    mut env: jni::JNIEnv,
+    _activity: JObject,
+    files_directory: JString,
+) -> jstring {
+    let result = (|| -> anyhow::Result<jstring> {
+        let files_directory: String = env.get_string(&files_directory)?.into();
+        let data_dir = std::path::Path::new(&files_directory);
+        vera20k::util::platform_dir::set(data_dir.to_path_buf());
+        let (config_path, contents) = read_launcher_config(data_dir)?;
+        let config = vera20k::util::config::GameConfig::parse_text_at(&contents, &config_path)?;
+        let roots = selected_launcher_resources(&config)?;
+        let message = format!(
+            "Validated {:?} profile; Rules={}, Art={}, AI={}",
+            config.ini.profile,
+            roots.rules(),
+            roots.art(),
+            roots.ai(),
+        );
+        Ok(env.new_string(message)?.into_raw())
+    })();
+    match result {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = env.throw_new("java/io/IOException", error.to_string());
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeMapsDirectory(
+    mut env: jni::JNIEnv,
+    _activity: JObject,
+    files_directory: JString,
+) -> jstring {
+    let result = (|| -> anyhow::Result<jstring> {
+        let files_directory: String = env.get_string(&files_directory)?.into();
+        let data_dir = std::path::PathBuf::from(files_directory);
+        vera20k::util::platform_dir::set(data_dir.clone());
+        let (path, contents) = read_launcher_config(&data_dir)?;
+        let config = vera20k::util::config::GameConfig::parse_text_at(&contents, &path)?;
+        Ok(env.new_string(config.paths.downloaded_maps_dir().to_string_lossy())?.into_raw())
+    })();
+    match result {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = env.throw_new("java/io/IOException", error.to_string());
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeGetAresSetting(
+    mut env: jni::JNIEnv,
+    _activity: JObject,
+    files_directory: JString,
+) -> jstring {
+    let result = (|| -> anyhow::Result<jstring> {
+        let files_directory: String = env.get_string(&files_directory)?.into();
+        let value = read_launcher_ares_setting(std::path::Path::new(&files_directory))?;
+        Ok(env.new_string(value.ini_value())?.into_raw())
+    })();
+    match result {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = env.throw_new("java/io/IOException", error.to_string());
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeSetAresSetting(
+    mut env: jni::JNIEnv,
+    _activity: JObject,
+    value: JString,
+    files_directory: JString,
+) -> jstring {
+    let result = (|| -> anyhow::Result<jstring> {
+        let value: String = env.get_string(&value)?.into();
+        let files_directory: String = env.get_string(&files_directory)?.into();
+        let setting = vera20k::util::ares_launch::AresSetting::parse(&value)
+            .ok_or_else(|| anyhow::anyhow!("Unsupported Ares setting: {value}"))?;
+        write_launcher_ares_setting(std::path::Path::new(&files_directory), setting)?;
+        Ok(env.new_string(setting.ini_value())?.into_raw())
+    })();
+    match result {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = env.throw_new("java/io/IOException", error.to_string());
+            std::ptr::null_mut()
+        }
     }
 }
 
@@ -538,7 +787,7 @@ fn register_folder_picker_native() -> bool {
             },
             jni::NativeMethod {
                 name: "nativeConfigForImport".into(),
-                sig: "(Ljava/lang/String;)Ljava/lang/String;".into(),
+                sig: "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;".into(),
                 fn_ptr: Java_org_vera20k_VeraActivity_nativeConfigForImport
                     as *mut std::ffi::c_void,
             },
@@ -600,11 +849,23 @@ fn install_packaged_map(app: &AndroidApp) -> anyhow::Result<()> {
 /// Use the player-selected shared data directory when its pointer is valid.
 /// The pointer itself remains in app-private storage so it can be read before
 /// the engine changes its working directory.
-fn android_user_data_root(internal_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+fn android_user_data_root(
+    internal_dir: &std::path::Path,
+) -> anyhow::Result<Option<std::path::PathBuf>> {
     let pointer = internal_dir.join("launcher-data-root.txt");
-    let value = std::fs::read_to_string(pointer).ok()?;
+    let value = match std::fs::read_to_string(&pointer) {
+        Ok(value) => value,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
     let path = std::path::PathBuf::from(value.trim());
-    (path.is_absolute() && path.is_dir()).then_some(path)
+    anyhow::ensure!(path.is_absolute(), "the saved shared data path is not absolute");
+    anyhow::ensure!(
+        path.is_dir(),
+        "the saved shared data directory is unavailable at {}; restore folder access instead of choosing another data root",
+        path.display()
+    );
+    Ok(Some(path))
 }
 
 /// Read the configuration associated with the selected Android data root,
@@ -612,13 +873,13 @@ fn android_user_data_root(internal_dir: &std::path::Path) -> Option<std::path::P
 fn android_config_contents(data_dir: &std::path::Path) -> anyhow::Result<String> {
     let active_dir = vera20k::util::platform_dir::get();
     let mut candidates = vec![
-        data_dir.join("config.toml"),
         data_dir.join("Config/config.toml"),
+        data_dir.join("config.toml"),
     ];
     if let Some(active_dir) = active_dir {
         for candidate in [
-            active_dir.join("config.toml"),
             active_dir.join("Config/config.toml"),
+            active_dir.join("config.toml"),
         ] {
             if !candidates.contains(&candidate) {
                 candidates.push(candidate);
@@ -633,6 +894,216 @@ fn android_config_contents(data_dir: &std::path::Path) -> anyhow::Result<String>
         }
     }
     Ok(String::new())
+}
+
+fn read_launcher_config(
+    data_dir: &std::path::Path,
+) -> anyhow::Result<(std::path::PathBuf, String)> {
+    let primary = data_dir.join("Config/config.toml");
+    let legacy = data_dir.join("config.toml");
+    let path = if primary.exists() || !legacy.exists() { primary } else { legacy };
+    Ok((path, android_config_contents(data_dir)?))
+}
+
+/// Update a game source without losing the selected RA2/YR engine profile.
+/// A base RA2 installation has the base archive and no YR expansion archive;
+/// switching back to a YR install restores the YR profile when the previous
+/// selection was RA2. Every result is parsed and validated by the engine.
+fn launcher_config_for_game_directory(
+    previous: &str,
+    game_directory: &str,
+    settings_directory: &str,
+    config_path: &std::path::Path,
+) -> anyhow::Result<String> {
+    use vera20k::util::ini_roots::IniProfile;
+
+    let contents = vera20k::util::config::set_paths_key(previous, "ra2_dir", game_directory);
+    let contents = vera20k::util::config::set_paths_key(
+        &contents,
+        "settings_dir",
+        settings_directory,
+    );
+    let game_dir = std::path::Path::new(game_directory);
+    let is_base_ra2 = vera20k::util::case_insensitive_path::find(game_dir, "ra2.mix")
+        .is_some_and(|path| path.is_file())
+        && vera20k::util::case_insensitive_path::find(game_dir, "ra2md.mix")
+            .is_none_or(|path| !path.is_file());
+    let profile = vera20k::util::config::GameConfig::parse_text_at(&contents, config_path)
+        .map_err(|error| anyhow::anyhow!("The engine rejected the selected game configuration: {error:#}"))?
+        .ini
+        .profile;
+    let contents = if is_base_ra2 {
+        vera20k::util::config::set_ini_profile(&contents, IniProfile::Ra2)
+    } else if profile == IniProfile::Ra2 {
+        vera20k::util::config::set_ini_profile(&contents, IniProfile::Yr)
+    } else {
+        contents
+    };
+    let config = vera20k::util::config::GameConfig::parse_text_at(&contents, config_path)
+        .map_err(|error| anyhow::anyhow!("The engine rejected the selected game configuration: {error:#}"))?;
+    validate_launcher_paths(&config)?;
+    Ok(contents)
+}
+
+fn launcher_mod_directory(
+    config: &vera20k::util::config::GameConfig,
+) -> anyhow::Result<Option<std::path::PathBuf>> {
+    let Some(name) = config.paths.mod_name() else {
+        return Ok(None);
+    };
+    let requested = std::path::Path::new(name);
+    if requested.is_absolute() {
+        let metadata = std::fs::symlink_metadata(requested).map_err(|error| {
+            anyhow::anyhow!("The selected mod folder is unavailable at {}: {error}", requested.display())
+        })?;
+        anyhow::ensure!(
+            metadata.file_type().is_dir() && !metadata.file_type().is_symlink(),
+            "The selected absolute mod path must be a real folder"
+        );
+        return Ok(Some(std::fs::canonicalize(requested)?));
+    }
+
+    let components: Vec<_> = requested.components().collect();
+    anyhow::ensure!(
+        !name.contains('\\')
+            && !components.is_empty()
+            && components.len() <= 4
+            && components
+                .iter()
+                .all(|part| matches!(part, std::path::Component::Normal(_))),
+        "The selected mod must be a folder path within Mods"
+    );
+    let root = config.paths.mods_dir();
+    let mut path = root.clone();
+    for component in components {
+        path.push(component.as_os_str());
+        let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
+            anyhow::anyhow!("The selected mod folder is unavailable at {}: {error}", path.display())
+        })?;
+        anyhow::ensure!(
+            metadata.file_type().is_dir() && !metadata.file_type().is_symlink(),
+            "The selected mod path contains a non-folder or symbolic link"
+        );
+    }
+    let root = std::fs::canonicalize(root)?;
+    let path = std::fs::canonicalize(path)?;
+    anyhow::ensure!(path != root && path.starts_with(&root), "The selected mod folder escapes Mods");
+    Ok(Some(path))
+}
+
+fn validate_launcher_paths(config: &vera20k::util::config::GameConfig) -> anyhow::Result<()> {
+    use vera20k::util::ini_roots::IniProfile;
+    let game_dir = &config.paths.ra2_dir;
+    anyhow::ensure!(game_dir.is_dir(), "The configured game folder is unavailable: {}", game_dir.display());
+    if config.ini.profile == IniProfile::Ra2 {
+        anyhow::ensure!(
+            vera20k::util::case_insensitive_path::find(game_dir, "ra2.mix").is_some(),
+            "The configured Red Alert 2 folder is missing ra2.mix: {}",
+            game_dir.display()
+        );
+    } else {
+        anyhow::ensure!(
+            vera20k::assets::asset_manager::holds_master_archives(game_dir),
+            "The configured Yuri's Revenge folder is missing ra2.mix or ra2md.mix: {}",
+            game_dir.display()
+        );
+    }
+    let _ = launcher_mod_directory(config)?;
+    Ok(())
+}
+
+fn selected_launcher_resources(
+    config: &vera20k::util::config::GameConfig,
+) -> anyhow::Result<vera20k::util::ini_roots::IniRoots> {
+    validate_launcher_paths(config)?;
+    let mod_dir = launcher_mod_directory(config)?;
+    let folder = mod_dir
+        .as_ref()
+        .map(|path| vera20k::util::mod_package::ModFolder::loose(path.clone()));
+    let definition = mod_dir
+        .as_deref()
+        .map(vera20k::util::mod_definition::ModDefinition::read)
+        .transpose()
+        .map_err(anyhow::Error::msg)?;
+    let resources = match (&folder, &definition) {
+        (Some(folder), Some(definition)) => {
+            vera20k::assets::asset_manager::mod_resources(folder, definition, &config.ini)
+                .map_err(anyhow::Error::msg)?
+        }
+        _ => vera20k::util::mod_definition::ResourceConfig::from_ini(config.ini.clone()),
+    };
+    let ares = read_launcher_ares_setting(config.paths.settings_dir())?;
+    let ares = resources.effective_ares(ares).map_err(anyhow::Error::msg)?;
+    let manager = vera20k::assets::asset_manager::AssetManager::with_mod_and_ares_support(
+        &config.paths.ra2_dir,
+        mod_dir.as_deref(),
+        Some(&config.paths.ares_support_dir()),
+        vera20k::assets::asset_manager::MediaArchiveMode::STOCK_DIGITAL,
+        ares,
+        &resources.archives,
+    )?
+    .with_resource_config(&resources)?;
+    Ok(manager.ini_roots().clone())
+}
+
+fn launcher_ares_path(settings_dir: &std::path::Path) -> std::path::PathBuf {
+    let config = settings_dir.join("Config");
+    vera20k::util::case_insensitive_path::find(&config, "VERA.INI")
+        .or_else(|| vera20k::util::case_insensitive_path::find(settings_dir, "VERA.INI"))
+        .unwrap_or_else(|| config.join("VERA.INI"))
+}
+
+fn read_launcher_ares_setting(
+    settings_dir: &std::path::Path,
+) -> anyhow::Result<vera20k::util::ares_launch::AresSetting> {
+    let path = launcher_ares_path(settings_dir);
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Default::default()),
+        Err(error) => return Err(error.into()),
+    };
+    let ini = vera20k::rules::ini_parser::IniFile::from_bytes(&bytes)
+        .map_err(|error| anyhow::anyhow!("VERA.INI is invalid: {error}"))?;
+    let value = ini
+        .section_names()
+        .into_iter()
+        .find(|name| name.eq_ignore_ascii_case("VERA"))
+        .and_then(|name| ini.section(name))
+        .and_then(|section| section.raw_entries().find(|(key, _)| key.eq_ignore_ascii_case("Ares")))
+        .map(|(_, value)| value)
+        .unwrap_or("Auto");
+    Ok(vera20k::util::ares_launch::AresSetting::from_ini_text(value))
+}
+
+fn write_launcher_ares_setting(
+    settings_dir: &std::path::Path,
+    setting: vera20k::util::ares_launch::AresSetting,
+) -> anyhow::Result<()> {
+    use std::io::Write;
+    let target = launcher_ares_path(settings_dir);
+    let previous = match std::fs::read(&target) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => return Err(error.into()),
+    };
+    std::fs::create_dir_all(target.parent().unwrap_or(settings_dir))?;
+    let updated = vera20k::util::ini_writer::set_ini_values(
+        &previous,
+        "VERA",
+        &[("Ares", setting.ini_value())],
+    );
+    let temporary = target.with_file_name(format!(".VERA.INI.{}.tmp", std::process::id()));
+    let result = (|| -> anyhow::Result<()> {
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&temporary)?;
+        file.write_all(&updated)?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, &target)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(temporary);
+    }
+    result
 }
 
 /// Resolved by `android-activity`'s loader trampoline; the name is the ABI.
@@ -685,15 +1156,24 @@ fn android_main(app: AndroidApp) {
         set_secret: ime_set_secret,
     });
     // Android starts every process in "/" with no writable home. Adopt the
-    // selected shared data root when its app-private pointer is valid; otherwise
-    // use the app's private folder. The chosen root becomes the working and
-    // settings directory before logs, config.toml, saves or replays are opened.
+    // selected shared data root when its app-private pointer is valid. If a
+    // previously selected root is inaccessible, fail closed instead of writing
+    // into a new private folder and splitting the player's data.
     let data_dir = app.internal_data_path();
     match app.internal_data_path() {
         Some(internal_dir) => {
-            let dir = android_user_data_root(&internal_dir).unwrap_or(internal_dir);
-            if let Err(error) = vera20k::entry::adopt_android_data_dir(&dir) {
-                eprintln!("cannot use the app data directory: {error:#}");
+            match android_user_data_root(&internal_dir) {
+                Ok(Some(dir)) => {
+                    if let Err(error) = vera20k::entry::adopt_android_data_dir(&dir) {
+                        eprintln!("cannot use the selected shared data directory: {error:#}");
+                    }
+                }
+                Ok(None) => {
+                    if let Err(error) = vera20k::entry::adopt_android_data_dir(&internal_dir) {
+                        eprintln!("cannot use the app data directory: {error:#}");
+                    }
+                }
+                Err(error) => eprintln!("cannot access the selected shared data directory: {error:#}"),
             }
         }
         None => eprintln!("no internal data path; logs and settings will not persist"),

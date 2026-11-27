@@ -99,16 +99,18 @@ public class AssetImportJobTest {
         Path install = temporary.newFolder("original-game").toPath();
         Files.write(install.resolve("ra2.mix"), new byte[] {1});
         Files.write(install.resolve("ra2md.mix"), new byte[] {2});
-        Path config = files.toPath().resolve("config.toml");
-        writeUtf8(config, "[paths]\nra2_dir = \"old\"\n");
+        Path legacyConfig = files.toPath().resolve("config.toml");
+        writeUtf8(legacyConfig, "[paths]\nra2_dir = \"old\"\n");
+        Path config = files.toPath().resolve("Config/config.toml");
 
         AssetImportJob.publishConfig(files,
                 "[paths]\nra2_dir = \"" + install.toString().replace("\\", "\\\\") + "\"\n");
 
         assertTrue(readUtf8(config).contains(install.toString()));
+        assertTrue(readUtf8(legacyConfig).contains("ra2_dir = \"old\""));
         assertTrue(Files.exists(install.resolve("ra2.mix")));
         assertEquals(2, install.toFile().listFiles().length);
-        assertEquals(1, files.listFiles().length);
+        assertEquals(2, files.listFiles().length);
     }
 
     @Test public void publishesConfigUnderDocumentsCompatibilityDirectoryWhenNoRootConfigExists() throws Exception {

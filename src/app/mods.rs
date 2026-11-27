@@ -324,9 +324,19 @@ pub(crate) fn name_and_version(dir: &Path, folder: &str) -> (String, String) {
 use crate::util::version::version_serves;
 
 /// The folder in `mods_dir` that `name` names, whatever its case: its own
-/// spelling and its path. A name that is not one plain folder name (empty, a
-/// path, `..`) names nothing.
+/// spelling and its path. A relative path may name a selected nested mod
+/// folder, but cannot traverse links or escape the managed root.
 fn find_folder(mods_dir: &Path, name: &str) -> Option<(String, PathBuf)> {
+    let requested = Path::new(name);
+    if requested.is_absolute() {
+        let metadata = std::fs::symlink_metadata(requested).ok()?;
+        if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+            return None;
+        }
+        let dir = std::fs::canonicalize(requested).ok()?;
+        let folder = dir.file_name()?.to_str()?.to_owned();
+        return Some((folder, dir));
+    }
     let mut components = Path::new(name).components();
     let plain = matches!(components.next(), Some(std::path::Component::Normal(_)))
         && components.next().is_none()
@@ -939,6 +949,43 @@ mod tests {
             .unwrap()
             .paths;
         (root, paths)
+    }
+
+    #[test]
+    fn an_external_absolute_mod_is_resolved_in_place_and_symlink_roots_are_refused() {
+        let root = std::env::temp_dir().join(format!("vera-external-mod-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let mods = root.join("managed");
+        let external = root.join("chosen mod");
+        std::fs::create_dir_all(&mods).unwrap();
+        std::fs::create_dir_all(&external).unwrap();
+        let selected = find_folder(&mods, &external.to_string_lossy()).unwrap();
+        assert_eq!(selected.0, "chosen mod");
+        assert_eq!(selected.1, external.canonicalize().unwrap());
+        assert!(find_folder(&mods, "../chosen mod").is_none());
+        #[cfg(unix)]
+        {
+            let link = root.join("mod link");
+            std::os::unix::fs::symlink(&external, &link).unwrap();
+            assert!(find_folder(&mods, &link.to_string_lossy()).is_none());
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_nested_managed_mod_folder_is_resolved_without_accepting_escape_paths() {
+        let root = std::env::temp_dir().join(format!("vera-nested-mod-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let mods = root.join("Mods");
+        let nested = mods.join("Example").join("Variant");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        let selected = find_folder(&mods, "example/variant").unwrap();
+        assert_eq!(selected.0, "Variant");
+        assert_eq!(selected.1, nested.canonicalize().unwrap());
+        assert!(find_folder(&mods, "../outside").is_none());
+        assert!(find_folder(&mods, "Example\\Variant").is_none());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -44,6 +44,9 @@ pub fn init_file_logger(name: &str) -> io::Result<PathBuf> {
         Some(dir) => dir.to_path_buf(),
         None => std::env::current_dir()?,
     };
+    #[cfg(target_os = "android")]
+    log_dir.push("Logs");
+    #[cfg(not(target_os = "android"))]
     log_dir.push("logs");
     fs::create_dir_all(&log_dir)?;
 

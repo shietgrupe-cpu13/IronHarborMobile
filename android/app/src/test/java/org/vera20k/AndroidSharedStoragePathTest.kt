@@ -18,7 +18,7 @@ class AndroidSharedStoragePathTest {
 
         assertEquals(selected.canonicalFile,
             AndroidSharedStoragePath.fromDocumentId("primary:Games/Red Alert 2", primary))
-        assertEquals("Documents/Ra2Harbor",
+        assertEquals("Documents/RA2Harbor",
             AndroidSharedStoragePath.sharedDataRoot(primary).relativeTo(primary).path
                 .replace(File.separatorChar, '/'))
     }
@@ -41,11 +41,30 @@ class AndroidSharedStoragePathTest {
         assertNull(AndroidSharedStoragePath.fromDocumentId("primary:Games/Missing", primary))
     }
 
+    @Test fun managedModSelectionIsRelativeOnlyBelowModsRoot() {
+        val root = temporary.newFolder("mods")
+        val nested = File(root, "Example/Variant").apply { assertTrue(mkdirs()) }
+        val outside = temporary.newFolder("external-mod")
+
+        assertEquals("Example/Variant", AndroidSharedStoragePath.relativeFolderName(root, nested))
+        assertNull(AndroidSharedStoragePath.relativeFolderName(root, root))
+        assertNull(AndroidSharedStoragePath.relativeFolderName(root, outside))
+    }
+
     @Test fun reportsMissingArchivesCaseInsensitively() {
         val install = temporary.newFolder("install")
         File(install, "RA2.MIX").writeBytes(byteArrayOf(1))
         assertEquals(listOf("ra2md.mix"), GameFolderValidation.missingRequiredArchives(install))
         File(install, "Ra2Md.MiX").writeBytes(byteArrayOf(1))
-        assertTrue(GameFolderValidation.missingRequiredArchives(install).isEmpty())
+        assertTrue(GameFolderValidation.missingRequiredArchives(install, allowBaseRa2Detection = true).isEmpty())
+    }
+
+    @Test fun baseRa2DoesNotRequireYuriExpansionArchive() {
+        val install = temporary.newFolder("base-ra2")
+        File(install, "RA2.MIX").writeBytes(byteArrayOf(1))
+
+        assertEquals(listOf("ra2.mix"), GameFolderValidation.missingRequiredArchives(install, "yr"))
+        assertTrue(GameFolderValidation.missingRequiredArchives(install, "ra2").isEmpty())
+        assertTrue(GameFolderValidation.missingRequiredArchives(install, "yr", true).isEmpty())
     }
 }

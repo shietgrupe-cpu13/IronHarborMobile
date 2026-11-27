@@ -21,9 +21,10 @@
         android:required="false" />
 
     <application
-        android:label="VERA20K"
-        android:icon="@mipmap/ic_launcher_retail"
-        android:roundIcon="@mipmap/ic_launcher_retail"
+        android:name="org.vera20k.IronHarborApplication"
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher_ironharbor"
+        android:roundIcon="@mipmap/ic_launcher_ironharbor"
         android:hasCode="true"
         android:largeHeap="true"
         android:extractNativeLibs="false"
@@ -37,12 +38,21 @@
              reaches Rust as a resize instead of destroying the activity. -->
         <activity
             android:name="org.vera20k.VeraActivity"
-            android:exported="true"
+            android:exported="false"
             android:launchMode="singleTask"
+            android:process=":game"
             android:screenOrientation="sensorLandscape"
             android:resizeableActivity="true"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|density|uiMode|fontScale|locale|layoutDirection">
         </activity>
+
+        <activity
+            android:name="org.vera20k.LauncherActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:resizeableActivity="true"
+            android:configChanges="keyboard|keyboardHidden|navigation|uiMode|fontScale|locale|layoutDirection"
+            android:theme="@style/Theme.IronHarbor.Launcher" />
 
         <!-- Two launcher entries, one enabled at a time. A launcher icon is a
              resource compiled into the package, so the VERA Icon box cannot
@@ -51,13 +61,13 @@
              itself carries no LAUNCHER filter, or the app would show twice. -->
         <activity-alias
             android:name="org.vera20k.LauncherRetail"
-            android:targetActivity="org.vera20k.VeraActivity"
+            android:targetActivity="org.vera20k.LauncherActivity"
             android:exported="true"
             android:enabled="true"
-            android:icon="@mipmap/ic_launcher_retail"
-            android:roundIcon="@mipmap/ic_launcher_retail"
-            android:theme="@style/Theme.Vera20k.RetailSplash"
-            android:label="VERA20K">
+            android:icon="@mipmap/ic_launcher_ironharbor"
+            android:roundIcon="@mipmap/ic_launcher_ironharbor"
+            android:theme="@style/Theme.IronHarbor.PrimarySplash"
+            android:label="@string/app_name">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -66,18 +76,24 @@
 
         <activity-alias
             android:name="org.vera20k.LauncherVera"
-            android:targetActivity="org.vera20k.VeraActivity"
+            android:targetActivity="org.vera20k.LauncherActivity"
             android:exported="true"
             android:enabled="false"
-            android:icon="@mipmap/ic_launcher_vera"
-            android:roundIcon="@mipmap/ic_launcher_vera"
-            android:theme="@style/Theme.Vera20k.VeraSplash"
-            android:label="VERA20K">
+            android:icon="@mipmap/ic_launcher_ironharbor"
+            android:roundIcon="@mipmap/ic_launcher_ironharbor"
+            android:theme="@style/Theme.IronHarbor.SecondarySplash"
+            android:label="@string/app_name">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity-alias>
+
+        <provider
+            android:name="org.vera20k.DiagnosticArchiveProvider"
+            android:authorities="${applicationId}.diagnostics"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 
 </manifest>

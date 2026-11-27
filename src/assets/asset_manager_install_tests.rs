@@ -158,6 +158,51 @@ fn only_a_selected_mod_mounts_ares_mix() {
     assert_eq!(assets.get_ref("probe.csf"), Some(&b"mod ares"[..]));
 }
 
+#[test]
+fn shared_ares_support_is_mod_only_and_a_mod_archive_takes_precedence() {
+    let directory = audio_test_install("shared-ares-support");
+    let support = super::test_support::TestDirectory::new("shared-ares-support-root");
+    let mod_dir = super::test_support::TestDirectory::new("shared-ares-mod");
+    support.write_mix("ares.mix", "probe.csf", b"shared Ares");
+    let open = |mod_dir: Option<&Path>, setting| {
+        AssetManager::with_mod_and_ares_support(
+            directory.path(),
+            mod_dir,
+            Some(support.path()),
+            MediaArchiveMode::STOCK_DIGITAL,
+            setting,
+            &ArchiveNames::default(),
+        )
+        .unwrap()
+    };
+
+    let vanilla = open(None, crate::util::ares_launch::AresSetting::Auto);
+    assert!(!vanilla.ships_ares());
+    assert!(!vanilla.ares_mix_mounted());
+
+    let inherited = open(
+        Some(mod_dir.path()),
+        crate::util::ares_launch::AresSetting::Auto,
+    );
+    assert!(inherited.ships_ares());
+    assert_eq!(inherited.get_ref("probe.csf"), Some(&b"shared Ares"[..]));
+
+    let off = open(
+        Some(mod_dir.path()),
+        crate::util::ares_launch::AresSetting::Off,
+    );
+    assert!(!off.ships_ares());
+    assert!(!off.ares_mix_mounted());
+
+    mod_dir.write_mix("ares.mix", "probe.csf", b"mod Ares");
+    let overridden = open(
+        Some(mod_dir.path()),
+        crate::util::ares_launch::AresSetting::Auto,
+    );
+    assert!(overridden.ships_ares());
+    assert_eq!(overridden.get_ref("probe.csf"), Some(&b"mod Ares"[..]));
+}
+
 /// Ares Expand_MIX_Reorg (0x006BD7E3) runs Init_Base_Mix_Files ahead of
 /// LANGMD.MIX, and Load_Bootstrap_AresMIX (0x0053029E) registers ares.mix
 /// after the expansions and before RA2MD.MIX. With no mod selected, startup

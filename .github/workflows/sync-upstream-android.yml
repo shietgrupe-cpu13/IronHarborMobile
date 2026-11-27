@@ -137,10 +137,14 @@ jobs:
           shared-key: android-new-arm64
           key: fast
 
-      - name: Run focused Android data-root config regression
+      - name: Run focused storage, profile, mod-path, and Ares regressions
         if: steps.upstream.outputs.validate == 'true'
         shell: bash
-        run: python -m tools.cargo_run -- test -p vera20k-core --lib util::config::tests::android_data_config_is_searched_after_working_directory_and_before_executable
+        run: |
+          set -euo pipefail
+          python -m tools.cargo_run -- test -p vera20k-core --lib util::config::tests::android_config_folder_is_canonical_and_root_config_is_a_migration_fallback
+          python -m tools.cargo_run -- test -p vera20k --lib app::mods::tests::a_nested_managed_mod_folder_is_resolved_without_accepting_escape_paths
+          python -m tools.cargo_run -- test -p vera20k-core --lib assets::asset_manager::install_inspection_tests::shared_ares_support_is_mod_only_and_a_mod_archive_takes_precedence
 
       - name: Install pinned Android NDK
         if: steps.upstream.outputs.validate == 'true'

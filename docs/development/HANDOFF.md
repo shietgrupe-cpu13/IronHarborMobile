@@ -5,8 +5,8 @@ Updated 2026-11-27. Read [IRON_HARBOR_MASTER_PLAN.md](IRON_HARBOR_MASTER_PLAN.md
 ## Current checkout
 
 - `E:\VERA20K-ANDROID`, branch `android-new`; fork remote `vera20k-fork` is `shietgrupe-cpu13/IronHarborMobile`, upstream remote `origin` is `YuriPlanet/vera20k`.
-- HEAD `ea2bc99959c47eda1bbc297851e8d1c2b2a33c9e`; upstream `main` fetched at `d1e28004aa17dc445cbfee450cfe6fa55c5fe949` (11 ahead / 0 behind at last fetch).
-- Uncommitted source changes implement the shared-storage/config-root integration described in `PROGRESS.md`. Do not reset or overwrite them. The untracked `out/` tree is user data; leave it untouched.
+- HEAD `913e69cbfdd69d72f0abe9c3a8463ee188b95c4c`. The latest upstream refs have not been fetched during this storage pass.
+- Uncommitted changes span the launcher, shared storage, JNI/config integration, Ares archive resolver, focused tests and Actions workflow. Preserve them. The untracked `out/` tree is user data; leave it untouched.
 - No local Rust/Cargo/Gradle/APK compilation. Commit and push focused changes, validate with GitHub Actions, and inspect its logs/artifacts.
 
 ## Architecture decisions
@@ -21,9 +21,11 @@ Updated 2026-11-27. Read [IRON_HARBOR_MASTER_PLAN.md](IRON_HARBOR_MASTER_PLAN.md
 
 ## Current WIP and next action
 
-The local source diff adds primary-volume path resolution and validation, explicit storage permission UI, direct and SAF-copy flows, config publication under Android's `Config/`, and a native data-root pointer consumed at startup. Regression tests were added, not run. First finish a source-level review for permission revocation, atomic publication and config precedence. Run only non-build checks locally (`git diff --check`, targeted source search, Rust formatting on edited leaves); no compiler/test runner.
+The local source diff restores the legacy shared-root helper, profile-aware RA2/YR archive checks, canonical-plus-legacy config resolution, atomic config publication without overwriting the old root file, and non-destructive private-data migration. It also ports the shared Ares archive layer through runtime initialization, process asset reconstruction and launcher preflight: shared Ares support is mod-only and a mod-owned `ares.mix` wins. Tests were added/updated but have not run. The workflow regression filters were corrected and now include config, nested-mod and Ares behavior.
 
-Then update docs with exact diff, commit and push to `android-new`, monitor the workflow and fix real failures. Verify the uploaded APK artifact's presence/metadata against its exact source SHA. Once storage is CI-green, restore the original Iron Harbor launcher GUI and lifecycle from the legacy reference selectively; continue with mod/map management, renderer/diagnostics, dynamic HUD, and Phase 5 upstream candidates.
+JNI inventory: all seven `LauncherActivity` external functions have corresponding Rust exports. `VeraActivity` picker/import callbacks are dynamically registered and its other importer/network functions have matching exports. The HUD uses GameActivity's standard key callbacks. `CameraZoomSettingsService.nativeApplyCameraZoomLimits` is the one orphan declaration found: no current Rust export, manifest registration or call site; keep it dormant and record it as unsupported pending an independent migration.
+
+Then run `git diff --check` and targeted static review only, commit and push the coherent source changes to `android-new`, monitor Actions and fix actual failures. No local compilation. Verify the uploaded artifact against its source SHA. The main launcher still lacks a provider-backed SAF copy fallback; the old `VeraActivity` importer remains but is not a launcher route. Continue with that gap and remaining Phase 3–5 items after CI.
 
 ## Known manual gate
 

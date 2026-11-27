@@ -788,7 +788,25 @@ impl AssetManager {
     }
 
     fn from_roots(ra2_dir: &Path, mod_dir: Option<&Path>) -> Result<Self, AssetError> {
+        Self::from_roots_with_ares_support(ra2_dir, mod_dir, None)
+    }
+
+    fn from_roots_with_ares_support(
+        ra2_dir: &Path,
+        mod_dir: Option<&Path>,
+        support_dir: Option<&Path>,
+    ) -> Result<Self, AssetError> {
         let mut loose_files = Self::open_loose_root(ra2_dir)?;
+        // Android's optional shared Ares support directory contributes only
+        // ares.mix. It is layered over the game installation and under the
+        // selected mod, matching the old Iron Harbor precedence without
+        // changing vanilla lookup or copying archive data.
+        if let Some(support_dir) = support_dir.filter(|path| crate::util::file_system::is_dir(path))
+            && let Some(mut archive) = Self::open_loose_root(support_dir)?.remove("ares.mix")
+        {
+            archive.installation_copy = loose_files.remove("ares.mix").map(Box::new);
+            loose_files.insert("ares.mix".to_owned(), archive);
+        }
         if let Some(mod_dir) = mod_dir {
             // Archives are found through this catalogue too
             // (`mount_named_archive`), so a mod's `expandmd50.mix` mounts where
@@ -854,6 +872,7 @@ impl AssetManager {
         Self::open_startup_archives(
             ra2_dir,
             mod_dir,
+            None,
             media_mode,
             Default::default(),
             &ArchiveNames::default(),
@@ -874,9 +893,33 @@ impl AssetManager {
         ares_setting: crate::util::ares_launch::AresSetting,
         archive_names: &ArchiveNames,
     ) -> Result<Self, AssetError> {
+        Self::with_mod_and_ares_support(
+            ra2_dir,
+            mod_dir,
+            None,
+            media_mode,
+            ares_setting,
+            archive_names,
+        )
+    }
+
+    /// Android launcher variant with a shared Ares support root. Its archive
+    /// is considered only for a selected mod and never overrides that mod's
+    /// own `ares.mix`; vanilla launches cannot see this directory.
+    pub fn with_mod_and_ares_support(
+        ra2_dir: &Path,
+        mod_dir: Option<&Path>,
+        ares_support_dir: Option<&Path>,
+        media_mode: MediaArchiveMode,
+        ares_setting: crate::util::ares_launch::AresSetting,
+        archive_names: &ArchiveNames,
+    ) -> Result<Self, AssetError> {
         let manager = Self::open_startup_archives(
             ra2_dir,
             mod_dir,
+            ares_support_dir.filter(|_| {
+                mod_dir.is_some() && ares_setting != crate::util::ares_launch::AresSetting::Off
+            }),
             media_mode,
             ares_setting,
             archive_names,
@@ -905,6 +948,7 @@ impl AssetManager {
         let manager = Self::open_startup_archives(
             ra2_dir,
             None,
+            None,
             media_mode,
             Default::default(),
             &ArchiveNames::default(),
@@ -920,6 +964,7 @@ impl AssetManager {
     fn open_startup_archives(
         ra2_dir: &Path,
         mod_dir: Option<&Path>,
+        ares_support_dir: Option<&Path>,
         media_mode: MediaArchiveMode,
         ares_setting: crate::util::ares_launch::AresSetting,
         archive_names: &ArchiveNames,
@@ -951,7 +996,7 @@ impl AssetManager {
                 format: "archive names".into(),
                 detail,
             })?;
-        let mut manager = Self::from_roots(ra2_dir, mod_dir)?;
+        let mut manager = Self::from_roots_with_ares_support(ra2_dir, mod_dir, ares_support_dir)?;
         manager.ares_setting = ares_setting;
         manager.archive_names = archive_names.clone();
 

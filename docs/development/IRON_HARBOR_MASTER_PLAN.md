@@ -4,6 +4,8 @@
 
 Deliver the original Iron Harbor mobile frontend on the latest compatible YuriPlanet/vera20k engine, with minimal compatibility patches. Restore the existing launcher GUI, shared storage, mod/map management and renderer selection; improve the in-game HUD into a dynamic user-extensible editor. Continue autonomously through Phases 2–5, not merely producing recommendations.
 
+**Architectural clarification:** IronHarborMobile is the Android frontend and mobile distribution of VERA20K, not a rewritten or heavily modified engine. Treat current upstream VERA20K source, directory structure, engine architecture, rendering, simulation, AI, gameplay and existing functionality as authoritative. Restore the original Iron Harbor launcher, branding/logo, GUI/navigation, file and mod management, renderer selection, and `Documents/Ra2Harbor` storage directly from `android-development`; adapt only incompatible interfaces. Do not recreate working features, duplicate implementations, refactor the engine, or port unrelated gameplay changes. Keep HUD editing inside the game and extend the existing HUD with additional customizable floating buttons. Preserve upstream attribution and licensing.
+
 ## 2. Repository guardrails
 
 - Integration branch: `android-new` in `shietgrupe-cpu13/IronHarborMobile`. Legacy reference: `android-development`; preserve `backup/android-development-2026-11-27`.
@@ -30,12 +32,28 @@ Prioritize functional game launching over advanced HUD customization. Inspect th
 
 ### Mandatory shared-storage compatibility
 
-Default shared-storage root must remain **`Documents/Ra2Harbor/`**, normally `/storage/emulated/0/Documents/Ra2Harbor/` on the primary Android user volume. Resolve the actual platform path rather than assuming every device uses user 0.
+Reuse the complete existing `android-development` shared-storage architecture; do not reinvent it. The canonical fresh-install root is **`Documents/RA2Harbor/`**, normally `/storage/emulated/0/Documents/RA2Harbor/` on the primary Android user volume. Resolve the actual platform path rather than assuming every device uses user 0. Preserve this hierarchy and exact filenames:
 
-- Inspect and preserve the exact legacy directory hierarchy, folder names, configuration formats and organization; do not invent subfolders or rename Ra2Harbor to VERA20K/IronHarborMobile.
-- Automatically detect and reuse existing game files, mods, maps, profiles, settings and other supported data. Preserve configurations through safe, non-destructive migration; create missing directories only when needed.
-- Do not create a separate replacement root for android-new or duplicate existing assets unnecessarily. Never overwrite/delete user files without explicit approval. Allow alternative storage locations.
-- Existing users should be able to install the new APK, grant required permissions and reuse their existing Ra2Harbor files without reorganizing or reimporting them. Verify this as a mandatory acceptance criterion, including upgrade compatibility where signing permits.
+```text
+Documents/RA2Harbor/
+  Mods/
+    AresSupport/
+  Maps/
+  Saves/
+  Logs/
+  Config/
+    config.toml
+    VERA.INI
+```
+
+- Reuse existing `RA2Harbor`, `Ra2Harbor`, `IronHarborRA2YR` and `RA2IRONHARBOR` roots without splitting, copying or losing data. Preserve `ironharbor_user_storage` preferences and migrate compatible selected roots and game paths. Keep game installation source separate from writable engine data root.
+- Allow an existing game installation anywhere accessible on local shared storage; selecting it reads assets in place and never copies/moves them. Detect base RA2 and YR archive sets; `ra2md.mix` is not required for base RA2.
+- Reuse zero-copy mod selection: managed `Mods` children resolve to relative paths; external mods resolve to canonical absolute paths. Do not copy selected mods. Use the Rust config resolver/validator and atomically publish engine-generated config.
+- Restore RA2, YR, MO, AUTO and CUSTOM profiles only where current engine support exists. Preserve shared `Mods/AresSupport` management, per-mod archive precedence and vanilla isolation.
+- Restore alternative shared-data-root selection, persistent source selection, direct path browsing and permission recovery. Revoked permission must not silently redirect or create a second root; report the inaccessible selected path and provide a recovery action.
+- Retain SAF copy import only as an explicitly chosen fallback, not the normal existing-game workflow. Never treat a `content://` URI as a Rust path.
+- Restore legacy map importer/catalog behavior, including recursive discovery where supported, collision protection, supported extensions and safe path validation. Migrate old private configuration, saves, maps, mods and logs non-destructively.
+- Never overwrite/delete user files without approval. Existing users must reuse their `Documents/RA2Harbor` hierarchy without reorganization or reimport; validate this on device where possible.
 
 ### Storage modes and startup recovery
 
@@ -48,7 +66,7 @@ Default shared-storage root must remain **`Documents/Ra2Harbor/`**, normally `/s
 ### Launcher features
 
 - Restore original launcher GUI, main screen, branding, game installation selection, Play, settings, navigation and activity lifecycle.
-- Restore mod discovery, import, management, profile creation/switching directly in launcher, vanilla and compatible Ares/other supported profiles, persistent profile-specific settings, dependency and directory validation. Launch selected profile without unnecessary duplication.
+- Restore mod discovery, import, management, profile creation/switching directly in launcher, vanilla and compatible Ares/other supported profiles, persistent profile-specific settings, dependency and directory validation. Launch selected profile without unnecessary duplication; preserve zero-copy paths and Ares archive precedence described above.
 - Use Rust-owned configuration/profile validation as authoritative; audit legacy JNI interfaces (including `launcher_selection_config` and `validate_launcher_selection`) against current upstream. Do not duplicate INI parsing in Kotlin.
 - Restore custom map discovery/import/catalog, profile-specific availability, shared storage access, duplicate detection and invalid-map handling. Preserve user maps.
 - Restore compatible campaign progress/management only after verifying current progress ownership and UX.

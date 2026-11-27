@@ -793,7 +793,10 @@ class VeraActivity : GameActivity() {
                     documentId,
                     Environment.getExternalStorageDirectory(),
                 ) ?: throw IOException("Choose a folder on local primary storage; cloud and removable-volume folders need SAF copy import.")
-                val missing = GameFolderValidation.missingRequiredArchives(directory)
+                val missing = GameFolderValidation.missingRequiredArchives(
+                    directory,
+                    allowBaseRa2Detection = true,
+                )
                 if (missing.isNotEmpty()) {
                     throw IOException("Required game archives are missing or unreadable: ${missing.joinToString()}")
                 }
@@ -1119,7 +1122,11 @@ class VeraActivity : GameActivity() {
                 cursor.getString(0)?.lowercase()?.let(present::add)
             }
         }
-        return REQUIRED_ARCHIVES.filterNot(present::contains)
+        val selectedProfile = LauncherInstallation.read(profileDirectoryForCopy()).iniProfile
+        val baseRa2 = selectedProfile.equals("ra2", ignoreCase = true) ||
+            ("ra2.mix" in present && "ra2md.mix" !in present)
+        val required = if (baseRa2) listOf("ra2.mix") else REQUIRED_ARCHIVES
+        return required.filterNot(present::contains)
     }
 
     private fun copyChildren(treeUri: Uri, documentId: String, dir: File, job: AssetImportJob) {

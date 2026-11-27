@@ -113,6 +113,12 @@ impl PathsConfig {
         self.settings_dir.join("Mods")
     }
 
+    /// Android's optional shared Ares archive location. The game install is
+    /// read in place; this remains user-managed engine data under RA2Harbor.
+    pub fn ares_support_dir(&self) -> PathBuf {
+        self.mods_dir().join("AresSupport")
+    }
+
     /// The mod folder's name this launch asks for; `None` is the original game.
     pub fn mod_name(&self) -> Option<&str> {
         self.mod_name.as_deref().filter(|name| !name.is_empty())
@@ -283,6 +289,13 @@ pub const fn default_input_delay_ticks() -> u32 {
 }
 
 impl GameConfig {
+    /// Parse config text with the same path resolution and validation as a
+    /// file the engine loads. Android's launcher uses this before it atomically
+    /// publishes a selected game/profile configuration.
+    pub fn parse_text_at(contents: &str, path: &Path) -> Result<Self> {
+        Self::parse_from(contents, path)
+    }
+
     #[cfg(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown"))]
     pub fn load() -> Result<Self> {
         let path = Path::new("/config.toml");
@@ -596,6 +609,117 @@ pub fn set_paths_key(contents: &str, key: &str, value: &str) -> String {
     text
 }
 
+/// Set the engine-supported INI profile while preserving unrelated config.
+pub fn set_ini_profile(contents: &str, profile: crate::util::ini_roots::IniProfile) -> String {
+    let name = match profile {
+        crate::util::ini_roots::IniProfile::Yr => "yr",
+        crate::util::ini_roots::IniProfile::Auto => "auto",
+        crate::util::ini_roots::IniProfile::Ra2 => "ra2",
+        crate::util::ini_roots::IniProfile::Custom => "custom",
+    };
+    let contents = set_config_string_key(contents, "ini", "profile", name);
+    if profile == crate::util::ini_roots::IniProfile::Custom {
+        restore_custom_ini_keys(&contents)
+    } else {
+        comment_custom_ini_keys(&contents)
+    }
+}
+
+fn comment_custom_ini_keys(contents: &str) -> String {
+    edit_custom_ini_keys(contents, false)
+}
+
+fn restore_custom_ini_keys(contents: &str) -> String {
+    edit_custom_ini_keys(contents, true)
+}
+
+fn edit_custom_ini_keys(contents: &str, activate: bool) -> String {
+    let newline = if contents.contains("\r\n") { "\r\n" } else { "\n" };
+    let mut section = "";
+    let mut lines = Vec::new();
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            section = section_name(trimmed).unwrap_or_default();
+            lines.push(line.to_owned());
+            continue;
+        }
+        if section == "ini" {
+            let commented = trimmed.strip_prefix('#').map(str::trim);
+            let candidate = if activate { commented.unwrap_or(trimmed) } else { trimmed };
+            let key = candidate.split_once('=').map(|(key, _)| key.trim());
+            if matches!(key, Some("rules" | "art" | "ai")) {
+                if activate && commented.is_some() {
+                    lines.push(candidate.to_owned());
+                    continue;
+                }
+                if !activate && !trimmed.starts_with('#') {
+                    lines.push(format!("# {line}"));
+                    continue;
+                }
+            }
+        }
+        lines.push(line.to_owned());
+    }
+    let mut text = lines.join(newline);
+    if contents.ends_with('\n') || !contents.is_empty() {
+        text.push_str(newline);
+    }
+    text
+}
+
+fn set_config_string_key(contents: &str, target_section: &str, key: &str, value: &str) -> String {
+    let contents = contents.strip_prefix('\u{feff}').unwrap_or(contents);
+    let newline = if contents.contains("\r\n") { "\r\n" } else { "\n" };
+    let mut lines: Vec<String> = contents.lines().map(str::to_owned).collect();
+    let mut section = "";
+    let mut header = None;
+    let mut assigned = None;
+    let mut example = None;
+    for (index, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            section = section_name(trimmed).unwrap_or_default();
+            if section == target_section && header.is_none() {
+                header = Some(index);
+            }
+            continue;
+        }
+        if section != target_section {
+            continue;
+        }
+        let candidate = trimmed.strip_prefix('#').map(str::trim).unwrap_or(trimmed);
+        if candidate.split_once('=').is_some_and(|(name, _)| name.trim() == key) {
+            if trimmed.starts_with('#') {
+                example.get_or_insert(index);
+            } else {
+                assigned = Some(index);
+            }
+        }
+    }
+    let replacement = format!("{key} = {}", basic_string(value));
+    if let Some(index) = assigned.or(example) {
+        lines[index] = replacement;
+    } else if let Some(index) = header {
+        let insert_at = lines[index + 1..]
+            .iter()
+            .position(|line| line.trim().starts_with('['))
+            .map_or(lines.len(), |offset| index + 1 + offset);
+        lines.insert(insert_at, replacement);
+    } else {
+        if !lines.is_empty() && !lines.last().is_some_and(String::is_empty) {
+            lines.push(String::new());
+        }
+        lines.push(format!("[{target_section}]"));
+        lines.push(replacement);
+    }
+    let mut text = lines.join(newline);
+    if contents.ends_with('\n') || !contents.is_empty() {
+        text.push_str(newline);
+    }
+    text
+}
+
 /// The name in a `[section]` header line, or None when it is unterminated.
 fn section_name(line: &str) -> Option<&str> {
     let header = line.split('#').next().unwrap_or_default().trim_end();
@@ -741,7 +865,17 @@ fn config_candidates_with_android_data_dir(
     android_data_dir: Option<&Path>,
 ) -> Result<Vec<PathBuf>> {
     let root = retail_asset_root_from_executable(executable)?;
-    let mut candidates = vec![working_dir.join(CONFIG_FILE_NAME)];
+    let mut candidates = Vec::new();
+    if let Some(data_dir) = android_data_dir {
+        // The launcher's canonical Android location is Documents/RA2Harbor/Config.
+        // A config beside the data root is a read-only migration fallback.
+        candidates.push(data_dir.join("Config").join(CONFIG_FILE_NAME));
+        candidates.push(data_dir.join(CONFIG_FILE_NAME));
+    }
+    let working_config = working_dir.join(CONFIG_FILE_NAME);
+    if !candidates.contains(&working_config) {
+        candidates.push(working_config);
+    }
     if let Some(data_dir) = android_data_dir {
         let android_config = data_dir.join("Config").join(CONFIG_FILE_NAME);
         if !candidates.contains(&android_config) {
@@ -935,7 +1069,7 @@ mod tests {
     }
 
     #[test]
-    fn android_data_config_is_searched_after_working_directory_and_before_executable() {
+    fn android_config_folder_is_canonical_and_root_config_is_a_migration_fallback() {
         let fixture = ConfigFixture::new();
         let android_data = fixture.0.join("Documents/Ra2Harbor");
         let candidates = config_candidates_with_android_data_dir(
@@ -948,8 +1082,9 @@ mod tests {
         assert_eq!(
             candidates,
             vec![
-                fixture.0.join("launch/config.toml"),
                 android_data.join("Config/config.toml"),
+                android_data.join("config.toml"),
+                fixture.0.join("launch/config.toml"),
                 fixture.0.join("app/config.toml"),
             ]
         );
@@ -1075,6 +1210,27 @@ mod tests {
         let config = GameConfig::parse(&text).unwrap();
         assert_eq!(config.paths.ra2_dir, Path::new("/Games/RA2\u{1}"));
         assert_eq!(config.profile.player_name(), Some("p"));
+    }
+
+    #[test]
+    fn set_ini_profile_preserves_other_values_and_uses_only_engine_profiles() {
+        use crate::util::ini_roots::IniProfile;
+
+        let input = "[paths]\nra2_dir = 'game'\n[ini]\nprofile = 'yr'\n[graphics]\nextra_animations = true\n";
+        let updated = set_ini_profile(input, IniProfile::Ra2);
+        assert!(updated.contains("profile = \"ra2\""));
+        assert!(updated.contains("ra2_dir = 'game'"));
+        assert!(updated.contains("extra_animations = true"));
+        let auto = set_ini_profile(&updated, IniProfile::Auto);
+        assert!(auto.contains("profile = \"auto\""));
+
+        let custom = "[ini]\nprofile = 'custom'\nrules = 'myrules.ini'\nart = 'myart.ini'\nai = 'myai.ini'\n";
+        let switched = set_ini_profile(custom, IniProfile::Yr);
+        assert!(switched.contains("# rules = 'myrules.ini'"));
+        let restored = set_ini_profile(&switched, IniProfile::Custom);
+        assert!(restored.contains("rules = 'myrules.ini'"));
+        assert!(restored.contains("art = 'myart.ini'"));
+        assert!(restored.contains("ai = 'myai.ini'"));
     }
 
     #[test]

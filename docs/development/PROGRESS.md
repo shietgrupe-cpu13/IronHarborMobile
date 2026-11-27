@@ -5,11 +5,11 @@ Updated 2026-11-27. Current authoritative plan: [IRON_HARBOR_MASTER_PLAN.md](IRO
 ## Repository state
 
 - Branch: `android-new`, tracking `vera20k-fork/android-new`.
-- Current HEAD: `ea2bc99959c47eda1bbc297851e8d1c2b2a33c9e` (`docs(android): add autonomous Iron Harbor master plan`).
+- Current HEAD: `913e69cbfdd69d72f0abe9c3a8463ee188b95c4c` (`ci(android): fix focused config test filter`).
 - Fetched `origin/main`: `d1e28004aa17dc445cbfee450cfe6fa55c5fe949`; current branch is 11 commits ahead and 0 behind at this fetch.
 - Legacy source reference: `android-development` at `1293fb441727e2522f6a284d88faf4f108a1ee3e`; its backup refs remain preserved. Do not merge the branch wholesale.
 - `out/` is untracked user/project data and has not been read, changed or deleted.
-- Current storage work is **uncommitted** in `android/` and `src/util/config.rs`. Preserve it; do not call it CI-verified yet.
+- Current launcher/storage/engine integration is **uncommitted** across `android/`, `src/`, `.github/workflows/`, and `docs/`. Preserve it; do not call it CI-verified yet. The untracked `out/` directory remains untouched.
 
 ## Completed and verified previously
 
@@ -21,19 +21,22 @@ Updated 2026-11-27. Current authoritative plan: [IRON_HARBOR_MASTER_PLAN.md](IRO
 
 ## Current implementation in progress (not yet built or tested)
 
-- `AndroidSharedStoragePath.kt`: safely resolves primary-volume SAF document IDs to real directories, selects `Documents/Ra2Harbor`, and reuses existing `RA2Harbor`, `IronHarborRA2YR`, or `RA2IRONHARBOR` roots.
-- `VeraActivity.kt` and `AndroidManifest.xml`: informed opt-in to `MANAGE_EXTERNAL_STORAGE`, direct folder selection/validation and settings recovery; SAF copy remains available; direct data-root/config selection is persisted.
-- `AssetImportJob.kt`: atomic config publication under the engine's Android `Config` directory (while preserving a pre-existing root config) and atomic data-root pointer helpers.
-- `android/src/lib.rs` and `src/util/config.rs`: game install validation through the engine resolver; Android startup reads the selected data-root pointer; Android config search includes `Documents/<root>/Config/config.toml`; config updates retain prior config where available.
-- JVM tests cover primary path safety, existing root reuse, required archive names, direct no-copy selection, config placement, pointer lifecycle and atomic publication. A focused Rust config-path test is added, and the Actions workflow runs it after JVM checks but before NDK/native compilation. These have **not** run locally or in Actions yet.
+- `AndroidSharedStoragePath.kt` restores `sharedDataRoot`, reuses established roots, and resolves supported primary-volume SAF IDs to paths. Direct game selection remains read-in-place.
+- Game validation is profile-aware: RA2 requires `ra2.mix`; YR requires `ra2.mix` and `ra2md.mix`. Explicit base-RA2 detection is used when importing a new installation, and Rust updates the engine profile through its config writer.
+- Launcher and engine configuration lookup now prefers `Config/config.toml`, then the data-root legacy `config.toml`; publication writes the canonical file without replacing the legacy file. Private-data migration no longer shadows an existing root-level config or `VERA.INI` by creating a canonical copy.
+- Legacy JNI/storage integration was inspected on both Kotlin and Rust sides. Launcher JNI calls have matching Rust exports; the folder-picker/import JNI methods are registered against `VeraActivity` and its signatures match. The current game HUD routes keys through GameActivity's normal key callbacks rather than separate JNI.
+- The old Ares support path was traced in `android-development`. Current Android startup, launcher preflight and asset-manager reconstruction now pass `Mods/AresSupport`; only `ares.mix` is considered, only for a selected mod, beneath that mod's own copy. Vanilla does not see the shared archive. A focused test covers vanilla isolation and mod precedence.
+- The existing NativeActivity SAF copy importer remains in place. The new launcher direct-picker flow still cannot import a cloud/provider tree as a fallback; it reports that a local folder is required. Do not describe launcher SAF fallback as working until wired to the importer.
+- The regression workflow now targets the actual config test name and includes focused nested-mod and Ares tests, after Kotlin/JVM validation and before NDK build. No local compiler/test was run; the Actions workflow has not yet validated this candidate.
 
 ## Known gaps and gates
 
-- The original Iron Harbor launcher GUI, launcher-based mod/profile/map management, diagnostics and renderer setting UI have not yet been restored on `android-new`.
-- Private app data migration is not implemented; current changes preserve existing files and config text where the resolver can read it but do not yet migrate old private saves/maps/mods or `VERA.INI` into the shared root.
-- Copy fallback without All files access must use private app storage for engine-writable state; this limitation needs clear UI and a SAF-backed shared-data design before claiming the master plan's shared-data requirement is complete.
+- The restored launcher UI and storage flows are still uncommitted and have not passed Kotlin/JVM or APK CI. Physical-device behavior is not verified.
+- Launcher SAF copy fallback for cloud/non-path providers is not connected. The legacy GameActivity importer remains, but the main launcher cannot yet route a new user into it without starting gameplay.
+- A stale `CameraZoomSettingsService.nativeApplyCameraZoomLimits` declaration has no Rust export in the current branch, is not referenced by the launcher and is not registered in the manifest. It remains dormant; do not expose this as a working setting until its engine integration is migrated and validated.
+- Private app data migration is non-destructive and copies only missing entries, but its behavior needs JVM coverage; no old source is removed. Config and VERA.INI migration now skips copying whenever either canonical or root-level shared files already exist.
 - Current Android engine/docs do not support GLES; the legacy renderer selector is not safe to expose as working.
 - Persistent release signing, full APK metadata/ABI/alignment checks, nightly release flow and the internal sync PR review remain open.
 - Physical gameplay validation is incomplete. User report says game archives failed with `EACCES` and no game installation configured; exact device/API/artifact and failing path were not captured.
 
-Next: complete source review of the uncommitted storage/config integration, run `git diff --check` and formatting-only checks; update docs; commit/push the focused slice; use GitHub Actions, inspect logs and artifact, then continue restoring the original launcher GUI. No local compilation.
+Next: finish source review of the integrated Kotlin/Rust storage changes and JNI inventory; run only `git diff --check`/static inspection locally; commit and push the coherent source slice; monitor Actions and inspect its logs/artifact. Continue with the launcher SAF fallback and remaining master-plan work after CI. No local Rust, Cargo, Gradle, or APK build/test.

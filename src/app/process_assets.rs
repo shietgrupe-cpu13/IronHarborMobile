@@ -39,6 +39,8 @@ pub(crate) struct ProcessAssets {
     /// The launch's Ares setting (`util::ares_launch::AresSetting`), kept as
     /// the mod folder is.
     ares_setting: crate::util::ares_launch::AresSetting,
+    /// Optional Android shared Ares archive root; used only with a selected mod.
+    ares_support_dir: Option<std::path::PathBuf>,
     /// The launch's Kratos setting (`util::kratos_launch::KratosSetting`),
     /// kept so a rebuilt manager selects the same games.
     kratos_setting: crate::util::kratos_launch::KratosSetting,
@@ -207,6 +209,7 @@ impl ProcessAssets {
         Self {
             media_archive_mode,
             ares_setting: Default::default(),
+            ares_support_dir: None,
             kratos_setting: Default::default(),
             auto_mounts_ares: false,
             startup_kratos: false,
@@ -265,6 +268,14 @@ impl ProcessAssets {
         setting: crate::util::ares_launch::AresSetting,
     ) -> Self {
         self.ares_setting = setting;
+        self
+    }
+
+    pub(crate) fn with_ares_support_dir(
+        mut self,
+        directory: Option<std::path::PathBuf>,
+    ) -> Self {
+        self.ares_support_dir = directory;
         self
     }
 
@@ -434,9 +445,10 @@ impl ProcessAssets {
         &self,
         root: &std::path::Path,
     ) -> anyhow::Result<AssetManager> {
-        let mut assets = AssetManager::with_mod_and_ares(
+        let mut assets = AssetManager::with_mod_and_ares_support(
             root,
             self.resources.mod_folder.as_deref(),
+            self.ares_support_dir.as_deref(),
             self.media_archive_mode,
             self.ares_setting,
             &self.resources.archives,

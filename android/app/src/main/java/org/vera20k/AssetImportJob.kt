@@ -104,7 +104,7 @@ internal class AssetImportJob private constructor() : AutoCloseable {
             if (rootConfig.exists() && !rootConfig.isFile) {
                 throw IOException("${rootConfig.absolutePath} is not a regular file")
             }
-            val destination = if (rootConfig.isFile) rootConfig else File(filesDirectory, "Config/config.toml")
+            val destination = File(filesDirectory, "Config/config.toml")
             val parent = destination.parentFile ?: throw IOException("Config path has no parent")
             if (!parent.isDirectory && !parent.mkdirs()) {
                 throw IOException("Cannot create ${parent.absolutePath}")

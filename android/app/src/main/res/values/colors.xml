@@ -3,4 +3,14 @@
     <!-- The hero image's own edge colour, so the launch window, the system
          splash and the art itself never flash three different shades. -->
     <color name="splash_background">#FF201E3F</color>
+    <color name="launcher_background">#080F14</color>
+    <color name="launcher_surface">#101B23</color>
+    <color name="launcher_surface_alt">#182831</color>
+    <color name="launcher_border">#2C4148</color>
+    <color name="launcher_accent">#7CDB93</color>
+    <color name="launcher_accent_dark">#39865B</color>
+    <color name="launcher_text">#F3F5EF</color>
+    <color name="launcher_muted">#A7B3B5</color>
+    <color name="launcher_warning">#E8C779</color>
+    <color name="launcher_error">#E28D7D</color>
 </resources>

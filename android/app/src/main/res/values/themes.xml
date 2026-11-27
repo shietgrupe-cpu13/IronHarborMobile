@@ -15,4 +15,18 @@
          same for both; from 12 the system splash can carry the chosen icon. -->
     <style name="Theme.Vera20k.RetailSplash" parent="Theme.Vera20k" />
     <style name="Theme.Vera20k.VeraSplash" parent="Theme.Vera20k" />
+
+    <style name="Theme.IronHarbor.Launcher" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowBackground">@color/launcher_background</item>
+        <item name="android:statusBarColor">@color/launcher_background</item>
+        <item name="android:navigationBarColor">@color/launcher_background</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:colorAccent">@color/launcher_accent</item>
+        <item name="android:fontFamily">sans</item>
+        <item name="android:defaultFocusHighlightEnabled">false</item>
+    </style>
+
+    <style name="Theme.IronHarbor.PrimarySplash" parent="Theme.IronHarbor.Launcher" />
+    <style name="Theme.IronHarbor.SecondarySplash" parent="Theme.IronHarbor.Launcher" />
 </resources>

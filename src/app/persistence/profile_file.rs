@@ -12,6 +12,17 @@ use crate::util::ini_writer::replace_ini_section;
 
 pub(crate) const FILENAME: &str = "VERA.INI";
 
+#[cfg(target_os = "android")]
+pub(crate) fn path(directory: &Path) -> PathBuf {
+    let config = directory.join("Config");
+    find(&config, FILENAME)
+        // Existing installs keep using their already-selected profile until
+        // they opt into the Documents/RA2Harbor/Config layout. Never split it.
+        .or_else(|| find(directory, FILENAME))
+        .unwrap_or_else(|| config.join(FILENAME))
+}
+
+#[cfg(not(target_os = "android"))]
 pub(crate) fn path(directory: &Path) -> PathBuf {
     find(directory, FILENAME).unwrap_or_else(|| directory.join(FILENAME))
 }

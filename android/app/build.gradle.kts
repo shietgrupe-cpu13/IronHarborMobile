@@ -32,6 +32,29 @@ val veraVersionName: String = rootProject.file("../Cargo.toml")
     .substringAfter('"')
     .substringBefore('"')
 val veraVersionCode = 207
+val releaseStoreFile = System.getenv("ANDROID_RELEASE_STORE_FILE")
+val releaseStorePassword = System.getenv("ANDROID_RELEASE_STORE_PASSWORD")
+val releaseKeyAlias = System.getenv("ANDROID_RELEASE_KEY_ALIAS")
+val releaseKeyPassword = System.getenv("ANDROID_RELEASE_KEY_PASSWORD")
+val releaseSigningConfigured = listOf(
+    releaseStoreFile,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+).all { !it.isNullOrBlank() }
+
+gradle.taskGraph.whenReady {
+    val releaseRequested = allTasks.any { task ->
+        task.project == project && task.name.contains("Release")
+    }
+    if (releaseRequested && !releaseSigningConfigured) {
+        throw GradleException(
+            "Release signing requires ANDROID_RELEASE_STORE_FILE, " +
+                "ANDROID_RELEASE_STORE_PASSWORD, ANDROID_RELEASE_KEY_ALIAS, " +
+                "and ANDROID_RELEASE_KEY_PASSWORD."
+        )
+    }
+}
 
 android {
     namespace = "org.vera20k"
@@ -68,6 +91,12 @@ android {
         getByName("debug") {
             storeFile = rootProject.file(".android/debug.keystore")
         }
+        create("release") {
+            storeFile = releaseStoreFile?.let(rootProject::file)
+            storePassword = releaseStorePassword
+            keyAlias = releaseKeyAlias
+            keyPassword = releaseKeyPassword
+        }
     }
 
     buildTypes {
@@ -78,6 +107,7 @@ android {
             // Keep JVM entry points named for the native JNI callbacks.
             // The shipping Cargo command strips native symbols separately.
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 
