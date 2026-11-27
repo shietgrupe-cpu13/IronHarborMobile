@@ -623,6 +623,7 @@ pub fn set_ini_profile(contents: &str, profile: crate::util::ini_roots::IniProfi
         crate::util::ini_roots::IniProfile::Yr => "yr",
         crate::util::ini_roots::IniProfile::Auto => "auto",
         crate::util::ini_roots::IniProfile::Ra2 => "ra2",
+        crate::util::ini_roots::IniProfile::Mo => "mo",
         crate::util::ini_roots::IniProfile::Custom => "custom",
     };
     let contents = set_config_string_key(contents, "ini", "profile", name);
@@ -1241,6 +1242,9 @@ mod tests {
         assert!(updated.contains("extra_animations = true"));
         let auto = set_ini_profile(&updated, IniProfile::Auto);
         assert!(auto.contains("profile = \"auto\""));
+        let mo = set_ini_profile(&auto, IniProfile::Mo);
+        assert!(mo.contains("profile = \"mo\""));
+        assert_eq!("mo".parse::<IniProfile>().unwrap(), IniProfile::Mo);
 
         let custom = "[ini]\nprofile = 'custom'\nrules = 'myrules.ini'\nart = 'myart.ini'\nai = 'myai.ini'\n";
         let switched = set_ini_profile(custom, IniProfile::Yr);

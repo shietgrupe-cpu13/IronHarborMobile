@@ -2,6 +2,14 @@
 
 Updated 2026-11-27. Read [IRON_HARBOR_MASTER_PLAN.md](IRON_HARBOR_MASTER_PLAN.md) as the authoritative specification.
 
+## 2026-11-27 renderer/MO checkpoint
+
+- Latest user feedback: deleting an old `config.toml` corrected the game folder. Exact path/content was not supplied. Android config search currently prefers shared `Config/config.toml`, then shared root `config.toml`, then prior app-private entries. Preserve this non-destructive fallback until a test captures both competing files and their selected paths.
+- WIP in this checkout restores Automatic/Vulkan/OpenGL ES in launcher Settings. JNI reads/writes the engine's `GraphicsAPI` in VERA.INI. Startup fallback gets one alternate backend attempt (Vulkan/primary to GLES, GLES to primary) and then stops. Both Vulkan and GLES are optional manifest features. wgpu 30.0.1 default features include both (`https://docs.rs/crate/wgpu/30.0.1/features`). Physical-device rendering remains unverified.
+- WIP restores `mo` as an actual `IniProfile`: MO Rules/Art/AI and presentation roots, `expandmo`/`mapsmo`/`multimo`/`thememo`/`movmo` archive defaults, and per-slot overrides from the selected folder's `mod.ini`. MO profile enables Ares for that launch; the engine resolver retains per-mod Ares precedence. Tests are authored but have not run.
+- Android workflow now has targeted renderer and MO test filters, an asset-manager fixture proving actual resource reads/mounts, and an ancestry-safe push after a concurrent-advance failure in run `45995480713`.
+- Do not run local Cargo, Rust, Gradle or APK tests. Next: verify source diff and exact test filters; update status docs; commit/push this focused fix; inspect Actions logs/artifact; then request device checks. No release is authorized by this task.
+
 ## Latest checkpoint
 
 - `android-new` is at pushed commit `6afcd6798`, including upstream merge `ac39fc2db` (upstream commit `814b6c3c0`), icon fix `4933e78d0`, campaign-navigation removal, `Configs/Maps` migration and mod-preflight diagnostics. Untracked `out/` belongs to the user; preserve it.

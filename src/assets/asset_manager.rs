@@ -3146,6 +3146,57 @@ mod tests {
         assert_eq!(original.get_ref("new.vxl"), None);
     }
 
+    #[test]
+    fn mo_profile_resolves_and_loads_mo_roots_expansion_archive_and_mod_ares() {
+        use crate::util::mod_package::ModFolder;
+
+        let install = audio_test_install("mo-profile-base");
+        std::fs::write(install.path().join("rulesmd.ini"), b"[General]\nBase=YR\n").unwrap();
+        let mod_dir = TestDirectory::new("mo-profile-mod");
+        for (name, contents) in [
+            ("rulesmo.ini", b"[General]\nProfile=MO\n".as_slice()),
+            ("artmo.ini", b"[Unit]\nMO=yes\n".as_slice()),
+            ("aimo.ini", b"[AI]\nMO=yes\n".as_slice()),
+        ] {
+            std::fs::write(mod_dir.path().join(name), contents).unwrap();
+        }
+        mod_dir.write_mix("expandmo99.mix", "mo-only.dat", b"MO expansion data");
+        mod_dir.write_mix("ares.mix", "mo-ares.dat", b"MO Ares data");
+        let folder = ModFolder::loose(mod_dir.path().to_owned());
+        let definition = crate::util::mod_definition::ModDefinition::parse(
+            "[Mod]\nName=Mental Omega\n",
+        )
+        .unwrap();
+        let base = IniRootConfig {
+            profile: crate::util::ini_roots::IniProfile::Mo,
+            ..IniRootConfig::default()
+        };
+        let resources = mod_resources(&folder, &definition, &base).unwrap();
+        assert_eq!(resources.archives, ArchiveNames::mo());
+        let ares = resources
+            .effective_ares(crate::util::ares_launch::AresSetting::Auto)
+            .unwrap();
+        assert_eq!(ares, crate::util::ares_launch::AresSetting::On);
+        let assets = AssetManager::with_mod_and_ares_support(
+            install.path(),
+            Some(mod_dir.path()),
+            None,
+            MediaArchiveMode::STOCK_DIGITAL,
+            ares,
+            &resources.archives,
+        )
+        .unwrap()
+        .with_resource_config(&resources)
+        .unwrap();
+
+        assert_eq!(assets.ini_roots().names(), ["rulesmo.ini", "artmo.ini", "aimo.ini"]);
+        assert_eq!(assets.get_ref("rulesmo.ini"), Some(&b"[General]\nProfile=MO\n"[..]));
+        assert_eq!(assets.get_ref("mo-only.dat"), Some(&b"MO expansion data"[..]));
+        assert_eq!(assets.get_ref("mo-ares.dat"), Some(&b"MO Ares data"[..]));
+        assert!(assets.registered_archive_names().iter().any(|name| name == "expandmo99.mix"));
+        assert!(assets.ares_mix_mounted());
+    }
+
     /// A client folder loads with stock names even beside a complete renamed
     /// family: other names are declared in `mod.ini`, never guessed.
     #[test]

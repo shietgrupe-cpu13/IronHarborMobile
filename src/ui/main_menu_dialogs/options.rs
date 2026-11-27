@@ -154,7 +154,11 @@ impl GraphicsApi {
     pub(crate) fn from_ini_value(value: &str) -> Self {
         match value.trim().to_ascii_lowercase().as_str() {
             "vulkan" | "vk" => Self::Vulkan,
-            "dx12" | "directx12" | "directx 12" | "d3d12" => Self::DirectX12,
+            "dx12" | "directx12" | "directx 12" | "d3d12"
+                if !cfg!(target_os = "android") =>
+            {
+                Self::DirectX12
+            }
             "opengl" => Self::OpenGl,
             _ => Self::Auto,
         }

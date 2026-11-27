@@ -10,17 +10,14 @@ import java.util.Locale
 internal enum class LauncherIniProfile(val configValue: String, val title: String) {
     RA2("ra2", "Red Alert 2"),
     YR("yr", "Yuri's Revenge"),
+    MO("mo", "Mental Omega"),
     AUTO("auto", "Auto-detect INI roots"),
     CUSTOM("custom", "Custom");
 
     companion object {
-        fun fromConfig(value: String?): LauncherIniProfile = when (value) {
-            // Current VERA20K resolves mod-authored MO roots through Auto and
-            // mod.ini; it no longer has a separate `mo` IniProfile.
-            "mo" -> AUTO
-            else -> entries.firstOrNull { it.configValue == value }
+        fun fromConfig(value: String?): LauncherIniProfile =
+            entries.firstOrNull { it.configValue == value }
                 ?: throw IOException("Unknown INI profile '$value'")
-        }
     }
 }
 

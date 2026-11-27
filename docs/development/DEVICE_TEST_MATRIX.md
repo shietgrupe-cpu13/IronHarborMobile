@@ -2,6 +2,25 @@
 
 Updated 2026-11-27. User-reported results are identified separately from CI. Device model/API and artifact hashes were not supplied for the prior test.
 
+## Latest launcher feedback (2026-11-27)
+
+The user reports that deleting an old `config.toml` corrected the selected game
+directory. This confirms a stale/competing config was involved in that device
+case, but the deleted file's exact path and contents were not captured. Current
+Android resolution prefers `Documents/RA2Harbor/Config/config.toml`, then the
+root-level migration fallback, and only then prior app-private config. Keep the
+fallback non-destructive; on the next device update verify the selected config
+source and both paths before changing migration precedence.
+
+The user also reports that the launcher has no usable renderer switch and no
+dedicated Mental Omega profile. The current working tree adds both; no APK with
+these changes has yet been built or device-tested. Required next device checks:
+select Automatic, Vulkan and OpenGL ES one at a time; confirm the persisted
+`VERA.INI` value and startup log's actual adapter/fallback. Then select MO and
+check the Play preflight's effective `rulesmo.ini` / `artmo.ini` / `aimo.ini`,
+MO archive family and Ares source against the actual selected MO folder before
+starting a match. CI resource-fixture coverage is not a substitute for this.
+
 ## Latest supplied diagnostic (2026-11-27)
 
 | Device / API | ABI | Status | Observed checks |

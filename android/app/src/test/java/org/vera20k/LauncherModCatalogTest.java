@@ -23,7 +23,7 @@ public class LauncherModCatalogTest {
     }
 
     @Test
-    public void mapsUnsupportedLegacyMoProfileToEngineAuto() throws Exception {
+    public void restoresDedicatedMentalOmegaProfileSelection() throws Exception {
         Path files = tempDirectory("ih-mod-catalog-");
         Files.createDirectories(files.resolve("Config"));
         Files.createDirectories(files.resolve("Mods/Mental Omega"));
@@ -34,7 +34,7 @@ public class LauncherModCatalogTest {
         LauncherModCatalog catalog = LauncherModCatalog.read(files.toFile());
         assertNull(catalog.getConfigError());
         assertEquals("Mental Omega", catalog.getSelectedMod());
-        assertEquals(LauncherIniProfile.AUTO, catalog.getProfile());
+        assertEquals(LauncherIniProfile.MO, catalog.getProfile());
         assertEquals(2, catalog.getInstalledMods().size());
         assertTrue(catalog.containsSelectedMod());
     }
@@ -64,7 +64,7 @@ public class LauncherModCatalogTest {
         LauncherModCatalog catalog = LauncherModCatalog.read(files.toFile());
         assertNull(catalog.getConfigError());
         assertEquals("New Mod", catalog.getSelectedMod());
-        assertEquals(LauncherIniProfile.AUTO, catalog.getProfile());
+        assertEquals(LauncherIniProfile.MO, catalog.getProfile());
         assertTrue(catalog.containsSelectedMod());
     }
 

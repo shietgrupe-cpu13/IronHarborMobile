@@ -2,6 +2,14 @@
 
 Updated 2026-11-27. Current authoritative plan: [IRON_HARBOR_MASTER_PLAN.md](IRON_HARBOR_MASTER_PLAN.md).
 
+## Current renderer and Mental Omega regression work
+
+- Device feedback says removing an old `config.toml` fixed the game-directory selection. Config-source precedence is now recorded in `DEVICE_TEST_MATRIX.md`; the exact deleted path/content was unavailable, so migration fallback precedence remains unchanged to avoid silently redirecting user data.
+- The current uncommitted change restores a launcher renderer selector backed by JNI and the engine-owned VERA.INI writer: Automatic, Vulkan and OpenGL ES. wgpu 30.0.1's pinned default feature set includes Vulkan and GLES; Android startup now gets one alternate-backend attempt after failure. Manifest backend features are optional so installation is not filtered solely by one backend.
+- The current uncommitted change restores explicit `mo` profile parsing and launcher selection, MO INI roots and archive defaults, `mod.ini` per-resource overrides, and the existing Ares resource behavior for MO. A native asset-manager regression fixture asserts MO roots, `expandmo99.mix` contents and mod Ares mounting. No source change is CI- or device-verified yet.
+- Workflow validation now includes focused renderer/MO tests and the final upstream push step checks remote ancestry to avoid failing when the validated candidate is already included.
+- No APK containing these changes exists yet. Next: source review, commit/push to `android-new`, inspect the Actions run and APK artifact, then ask the user to test the three renderer settings and MO preflight/gameplay on device.
+
 ## Latest device regression and current change
 
 - Upstream commit `814b6c3c0` is merged at `ac39fc2db` and included in pushed commit `6afcd6798`. Commit `ebc52b3fd` removes launcher campaign navigation and migrates Android maps; run [45992723660](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45992723660) completed successfully. Its ARM64 debug artifact is [available here](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45992723660/artifacts/15194923757). The newer mod-diagnostics commit is under validation in run [45995480713](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45995480713).

@@ -24,6 +24,8 @@ pub enum IniProfile {
     /// Original Red Alert 2 (non-md) control files. Every root is a fixed
     /// retail name from `ra2.mix -> local.mix`; no per-file override is needed.
     Ra2,
+    /// Mental Omega's dedicated rules/art/AI and presentation INI family.
+    Mo,
     Custom,
 }
 
@@ -35,9 +37,10 @@ impl std::str::FromStr for IniProfile {
             "yr" => Ok(Self::Yr),
             "auto" => Ok(Self::Auto),
             "ra2" => Ok(Self::Ra2),
+            "mo" => Ok(Self::Mo),
             "custom" => Ok(Self::Custom),
             _ => Err(format!(
-                "unknown INI profile '{value}'; use yr, auto, ra2 or custom with explicit file names"
+                "unknown INI profile '{value}'; use yr, auto, ra2, mo or custom with explicit file names"
             )),
         }
     }
@@ -123,6 +126,26 @@ impl IniRoots {
             mapsel: "MAPSEL.INI".into(),
             modes: "MPModes.ini".into(),
             map_catalog: "missions.pkt".into(),
+        }
+    }
+
+    /// Mental Omega's named INI roots. The YR mode/map catalogs remain the
+    /// upstream defaults; MO overrides only the roots its installation ships.
+    pub fn mo() -> Self {
+        Self {
+            profile: IniProfile::Mo,
+            rules: "rulesmo.ini".into(),
+            art: "artmo.ini".into(),
+            ai: "aimo.ini".into(),
+            sound: "soundmo.ini".into(),
+            eva: "evamo.ini".into(),
+            theater_suffix: "mo".into(),
+            theme: "thememo.ini".into(),
+            battle: "BATTLEMO.INI".into(),
+            mission: "MISSIONMO.INI".into(),
+            mapsel: "MAPSELMO.INI".into(),
+            modes: "MPModesMD.ini".into(),
+            map_catalog: "missionsmd.pkt".into(),
         }
     }
 
@@ -303,6 +326,7 @@ impl IniRootConfig {
         // override any name without disturbing the empty theater suffix.
         let mut selected = match self.profile {
             IniProfile::Ra2 => IniRoots::ra2(),
+            IniProfile::Mo => IniRoots::mo(),
             _ => IniRoots::default(),
         };
         if self.profile == IniProfile::Custom {
@@ -403,6 +427,27 @@ mod tests {
         );
         assert_eq!(roots.modes(), "MPModesMD.ini");
         assert_eq!(roots.map_catalog(), "missionsmd.pkt");
+    }
+
+    #[test]
+    fn explicit_mo_profile_resolves_its_roots_and_requires_the_complete_triplet() {
+        let request = IniRootConfig {
+            profile: IniProfile::Mo,
+            ..IniRootConfig::default()
+        };
+        let roots = request.resolve(|name| {
+            matches!(
+                name,
+                "rulesmo.ini" | "artmo.ini" | "aimo.ini"
+            )
+        }).unwrap();
+        assert_eq!(roots.profile(), IniProfile::Mo);
+        assert_eq!(roots.names(), ["rulesmo.ini", "artmo.ini", "aimo.ini"]);
+        assert_eq!((roots.sound(), roots.eva()), ("soundmo.ini", "evamo.ini"));
+        assert_eq!(roots.theater_suffix(), "mo");
+        assert_eq!(roots.theme(), "thememo.ini");
+        assert_eq!(roots.mission(), "MISSIONMO.INI");
+        assert!(request.resolve(|name| name != "aimo.ini").is_err());
     }
 
     #[test]

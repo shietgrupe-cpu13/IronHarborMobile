@@ -2,6 +2,10 @@
 
 Updated 2026-11-27. Authoritative specification: [IRON_HARBOR_MASTER_PLAN.md](IRON_HARBOR_MASTER_PLAN.md). Integration branch: `android-new`.
 
+## Immediate regression milestone — renderer and MO profile
+
+Current working-tree work restores launcher selection for Automatic/Vulkan/OpenGL ES through the existing engine config owner, adds one-shot startup fallback between wgpu primary/Vulkan and GLES, and restores the dedicated MO INI/archive profile with `mod.ini` overrides. The CI workflow includes focused settings, profile, mounted-archive and Ares tests. This milestone is pending review and a GitHub Actions ARM64 APK; neither CI nor device verification has completed. The reported stale-config fix is documented in the device matrix without changing fallback precedence until its competing files are captured.
+
 ## Phase 2 — Build and distribution
 
 **Debug artifact gate passes through commit `ebc52b3fd`.** Run [45992723660](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45992723660) passed Kotlin/JVM, focused Rust regressions, ARM64 native compilation, APK assembly, package identity, debug signing, ZIP alignment, 16 KB ARM64 ELF alignment, and artifact upload. It produced [IronHarborMobile-android-new-arm64-ebc52b3fdbc2dba99b60a19ff661d91bcbe8f44a](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45992723660/artifacts/15194923757), 74,441,887 bytes, retained until 2026-12-11. It contains `org.ironharbor.mobile.debug`, version `0.4.3` / code `207`, ARM64 native library and a v2 debug signature. Upstream `814b6c3c0` is merged at `ac39fc2db`; current commit `6afcd6798` adds mod-selection diagnostics and awaits validation in run [45995480713](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45995480713). Stable signing and public releases remain gated on credentials and approval.

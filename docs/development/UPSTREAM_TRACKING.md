@@ -2,6 +2,16 @@
 
 Updated 2026-11-27.
 
+## Current Android regression work (unverified)
+
+The current working tree adds Android launcher renderer persistence on top of
+upstream's `GraphicsApi`/wgpu initialization path, and explicit MO resource
+selection through existing `IniRootConfig`, `ModDefinition` and
+`AssetManager` owners. These are Android integration/compatibility changes;
+they are not yet validated against an actual MO installation or device. The
+new workflow runs focused tests before ARM64 APK assembly. No upstream PR is
+prepared or submitted.
+
 ## Revision relationship
 
 - Upstream `YuriPlanet/vera20k` `main` fetched at `814b6c3c043fc18c0952576e4f4bca9745981fe0` (`Add a driver policy for externally controlled computer houses`, PR #4576).

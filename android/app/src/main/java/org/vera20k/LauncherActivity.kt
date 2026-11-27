@@ -117,6 +117,8 @@ class LauncherActivity : Activity() {
     private external fun nativeMapsDirectory(filesDirectory: String): String
     private external fun nativeGetAresSetting(filesDirectory: String): String
     private external fun nativeSetAresSetting(value: String, filesDirectory: String): String
+    private external fun nativeGetRenderer(filesDirectory: String): String
+    private external fun nativeSetRenderer(renderer: String, filesDirectory: String): String
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -628,6 +630,49 @@ class LauncherActivity : Activity() {
 
         val display = card()
         display.addView(kicker("DISPLAY & RENDERER"))
+        val rendererValues = listOf("auto", "vulkan", "opengl")
+        val rendererLabels = listOf("Automatic", "Vulkan", "OpenGL ES")
+        val dataDirectory = engineDataDirectory()
+        val requestedRenderer = runCatching {
+            nativeGetRenderer(dataDirectory.absolutePath)
+        }.getOrDefault("auto")
+        val visibleRenderer = requestedRenderer.takeIf { it in rendererValues } ?: "auto"
+        display.addView(text("Game renderer (next launch)", 16, R.color.launcher_text, bold = true), margin(top = 7))
+        val renderer = Spinner(this).apply {
+            adapter = ArrayAdapter(
+                this@LauncherActivity,
+                android.R.layout.simple_spinner_dropdown_item,
+                rendererLabels,
+            )
+            setSelection(rendererValues.indexOf(visibleRenderer).coerceAtLeast(0))
+        }
+        renderer.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                val selected = rendererValues[position.coerceIn(rendererValues.indices)]
+                if (selected == visibleRenderer) return
+                try {
+                    nativeSetRenderer(selected, dataDirectory.absolutePath)
+                    Toast.makeText(
+                        this@LauncherActivity,
+                        "Renderer saved. It applies on the next game launch; startup diagnostics report any fallback.",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                } catch (error: Exception) {
+                    Toast.makeText(
+                        this@LauncherActivity,
+                        "Renderer was not changed: ${error.message ?: error.javaClass.simpleName}",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            }
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+        }
+        display.addView(renderer, margin(top = 3))
+        display.addView(text(
+            "Automatic uses the engine's Android default. Vulkan and OpenGL ES are explicit wgpu backends; the selected value is persisted in the engine-owned VERA.INI and applies after restarting gameplay.",
+            12,
+            R.color.launcher_muted,
+        ), margin(top = 4, bottom = 8))
         val displayPreferences = getSharedPreferences(
             ImmersiveFullscreenSettings.PREFERENCES,
             MODE_PRIVATE,
@@ -659,7 +704,7 @@ class LauncherActivity : Activity() {
             ).show()
         }
         infoRow(display, "Orientation", "Landscape-first Android window")
-        infoRow(display, "Renderer", "Engine auto-selection; no Android launcher override")
+        infoRow(display, "Backend status", "The actual adapter and fallback are recorded by engine startup diagnostics")
         infoRow(display, "Physical resolution", "Unchanged")
         display.addView(text(
             "Internal render scale, FPS limit, adaptive resolution, and camera zoom limits are not exposed because this engine revision does not read those settings. No performance gain is claimed.",
@@ -1067,9 +1112,16 @@ class LauncherActivity : Activity() {
         }
         if (modCatalog.profile == LauncherIniProfile.AUTO) {
             current.addView(text(
-                "Auto resolves roots declared by a mod's mod.ini. Current VERA20K has no separate Mental Omega profile; MO-specific files are selected through the mod manifest.",
+                "Auto uses the mod.ini resource declarations when present, then the engine's automatic INI-root rules.",
                 13,
-                R.color.launcher_warning,
+                R.color.launcher_muted,
+            ), margin(top = 8))
+        }
+        if (modCatalog.profile == LauncherIniProfile.MO) {
+            current.addView(text(
+                "Mental Omega selects the engine's RulesMO/ArtMO/AIMO roots and MO archive family. Explicit [Files] and [Archives] entries in mod.ini override the corresponding defaults. Press Play to run archive-backed preflight and see the exact roots and mounted archive sources before launch.",
+                13,
+                R.color.launcher_muted,
             ), margin(top = 8))
         }
         if (modCatalog.configError != null) {
@@ -1090,7 +1142,13 @@ class LauncherActivity : Activity() {
 
         val profiles = card()
         profiles.addView(kicker("SUPPORTED INI ROOT PROFILES"))
-        listOf(LauncherIniProfile.RA2, LauncherIniProfile.YR, LauncherIniProfile.AUTO).forEach { profile ->
+        val availableProfiles = buildList {
+            add(LauncherIniProfile.RA2)
+            add(LauncherIniProfile.YR)
+            if (modCatalog.selectedMod != null) add(LauncherIniProfile.MO)
+            add(LauncherIniProfile.AUTO)
+        }
+        availableProfiles.forEach { profile ->
             profiles.addView(actionButton(
                 if (modCatalog.profile == profile) "  ${profile.title.uppercase()}   /   SELECTED" else profile.title.uppercase(),
                 primary = modCatalog.profile == profile,
@@ -1419,7 +1477,10 @@ class LauncherActivity : Activity() {
         infoRow(device, "Device", "${Build.MANUFACTURER} ${Build.MODEL}")
         infoRow(device, "Android", "${Build.VERSION.RELEASE}  /  API ${Build.VERSION.SDK_INT}")
         infoRow(device, "ABI", Build.SUPPORTED_ABIS.joinToString())
-        infoRow(device, "Vulkan", "Required by package; live adapter not queried here")
+        infoRow(device, "Requested renderer", rendererTitle(runCatching {
+            nativeGetRenderer(engineDataDirectory().absolutePath)
+        }.getOrDefault("auto")))
+        infoRow(device, "Actual adapter", "See the engine startup log for adapter and fallback")
         infoRow(device, "Memory", "${memory.availMem / (1024 * 1024)} MB available  /  native heap ${Debug.getNativeHeapAllocatedSize() / (1024 * 1024)} MB")
         infoRow(device, "Performance profile", "In-game Options > Performance Stats shows frame/tick rate, CPU phases, core load and GPU timing")
         val preflight = File(engineDataDirectory(), "Logs/launcher-preflight-latest.txt")
@@ -1447,7 +1508,8 @@ class LauncherActivity : Activity() {
             appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL}")
             appendLine("Android: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
             appendLine("ABI: ${Build.SUPPORTED_ABIS.joinToString()}")
-            appendLine("Vulkan: required by package; live adapter not queried by launcher")
+            appendLine("Requested renderer: ${rendererTitle(runCatching { nativeGetRenderer(engineDataDirectory().absolutePath) }.getOrDefault("auto"))}")
+            appendLine("Actual renderer: inspect the engine startup log for adapter and fallback")
             appendLine("Available memory: ${memory.availMem / (1024 * 1024)} MB")
             appendLine("Native heap: ${Debug.getNativeHeapAllocatedSize() / (1024 * 1024)} MB")
             appendLine("Installation configured: ${installation.configuredDirectory?.absolutePath ?: "no"}")
@@ -2159,6 +2221,13 @@ class LauncherActivity : Activity() {
                     else word.replaceFirstChar { it.titlecase(Locale.ROOT) }
             }
         }
+
+    private fun rendererTitle(value: String): String = when (value.lowercase(Locale.ROOT)) {
+        "vulkan" -> "Vulkan"
+        "opengl", "opengles", "gles" -> "OpenGL ES"
+        "dx12", "directx12" -> "Unsupported stored DirectX 12 value"
+        else -> "Automatic"
+    }
 
     private fun actionButton(label: String, primary: Boolean, action: () -> Unit): TextView = TextView(this).apply {
         text = presentActionLabel(label)

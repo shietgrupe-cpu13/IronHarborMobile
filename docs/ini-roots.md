@@ -3,7 +3,9 @@
 A mod can name its Rules, Art, AI and catalogs in `mod.ini`. The game reads
 those names through the existing loose-file and MIX loaders. Archive names
 are separate: changing an INI name does not change which archives mount.
-There are no built-in named-mod profiles or guesses based on a folder's name.
+There are no automatic profile guesses based on a folder's name. The launcher
+can select the explicit `ra2`, `yr`, or `mo` profile; otherwise a mod's
+`mod.ini` declarations or the selected host profile determine its resources.
 
 ## A mod's files
 
@@ -82,6 +84,23 @@ In that family, `rules.ini`, `art.ini` and `ai.ini` resolve through the normal
 mod and installation lookup. `mpmodes.ini` names the actual mode INIs, and
 Skirmish uses `missions.pkt` and `multi.mix` for the classic map catalog.
 Selecting **No mod** returns to the configured installation defaults.
+
+## Mental Omega profile
+
+The explicit `mo` profile selects Mental Omega's resource family without
+depending on a directory name or a fixed set of copied template files. Its
+default Rules/Art/AI roots are `rulesmo.ini`, `artmo.ini`, and `aimo.ini`;
+presentation roots use the MO sound, EVA, theater, theme, and campaign names.
+The default archive slots use `expandmo`, `mapsmo`, `multimo.mix`,
+`thememo.mix`, and `movmo`. As with other profiles, a mod's `[Files]` and
+`[Archives]` entries override only the names it declares. Missing required
+Rules/Art/AI roots are reported instead of silently falling back to vanilla.
+
+Selecting `mo` also enables the engine's Ares resource behavior for that
+launch. The selected mod's own `ares.mix` takes precedence over the optional
+shared support archive, while the vanilla profile remains isolated from both.
+The profile does not add DLL execution or claim compatibility with mod features
+the engine does not implement.
 
 ## Archive names
 

@@ -46,8 +46,14 @@ pub struct ResourceConfig {
 
 impl ResourceConfig {
     pub fn from_ini(ini: IniRootConfig) -> Self {
+        let archives = if ini.profile == IniProfile::Mo {
+            ArchiveNames::mo()
+        } else {
+            ArchiveNames::default()
+        };
         Self {
             ini,
+            archives,
             ..Self::default()
         }
     }
@@ -92,10 +98,47 @@ pub struct ModDefinition {
     pub terms: Option<String>,
     pub needs: Option<String>,
     files: Option<IniRootConfig>,
-    archives: ArchiveNames,
+    archive_overrides: ArchiveNameOverrides,
     requires_ares: bool,
     requires_kratos: bool,
     explicit_loading: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ArchiveNameOverrides {
+    expansion_prefix: Option<String>,
+    map_prefix: Option<String>,
+    multiplayer: Option<String>,
+    theme: Option<String>,
+    movie_prefix: Option<String>,
+}
+
+impl ArchiveNameOverrides {
+    fn apply(&self, names: &mut ArchiveNames) {
+        if let Some(value) = &self.expansion_prefix {
+            names.expansion_prefix.clone_from(value);
+        }
+        if let Some(value) = &self.map_prefix {
+            names.map_prefix.clone_from(value);
+        }
+        if let Some(value) = &self.multiplayer {
+            names.multiplayer.clone_from(value);
+        }
+        if let Some(value) = &self.theme {
+            names.theme.clone_from(value);
+        }
+        if let Some(value) = &self.movie_prefix {
+            names.movie_prefix.clone_from(value);
+        }
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        for mut names in [ArchiveNames::default(), ArchiveNames::mo()] {
+            self.apply(&mut names);
+            names.validate()?;
+        }
+        Ok(())
+    }
 }
 
 impl ModDefinition {
@@ -173,14 +216,14 @@ impl ModDefinition {
                 }
                 "archives" => {
                     let slot = match key.as_str() {
-                        "expansionprefix" => &mut definition.archives.expansion_prefix,
-                        "mapprefix" => &mut definition.archives.map_prefix,
-                        "multiplayer" => &mut definition.archives.multiplayer,
-                        "theme" => &mut definition.archives.theme,
-                        "movieprefix" => &mut definition.archives.movie_prefix,
+                        "expansionprefix" => &mut definition.archive_overrides.expansion_prefix,
+                        "mapprefix" => &mut definition.archive_overrides.map_prefix,
+                        "multiplayer" => &mut definition.archive_overrides.multiplayer,
+                        "theme" => &mut definition.archive_overrides.theme,
+                        "movieprefix" => &mut definition.archive_overrides.movie_prefix,
                         _ => continue,
                     };
-                    *slot = value.to_owned();
+                    *slot = Some(value.to_owned());
                 }
                 "extensions" => {
                     let required = match value.to_ascii_lowercase().as_str() {
@@ -207,7 +250,7 @@ impl ModDefinition {
                 .map_err(|error| format!("[Files]: {error}"))?;
         }
         definition
-            .archives
+            .archive_overrides
             .validate()
             .map_err(|error| format!("[Archives]: {error}"))?;
         Ok(definition)
@@ -238,10 +281,19 @@ impl ModDefinition {
     /// A metadata-only manifest inherits the host's existing INI choice.
     /// Declaring [Files] selects its own complete stock-based set instead.
     pub fn resources(&self, base: &IniRootConfig) -> ResourceConfig {
+        let mut archives = if base.profile == IniProfile::Mo {
+            ArchiveNames::mo()
+        } else {
+            ArchiveNames::default()
+        };
+        self.archive_overrides.apply(&mut archives);
         ResourceConfig {
             ini: self.files.clone().unwrap_or_else(|| base.clone()),
-            archives: self.archives.clone(),
-            requires_ares: self.requires_ares,
+            archives,
+            // Mental Omega's profile selects the upstream Ares behavior in
+            // every build; Ares archive lookup still follows the selected mod
+            // and shared-support precedence in AssetManager.
+            requires_ares: self.requires_ares || base.profile == IniProfile::Mo,
             requires_kratos: self.requires_kratos,
             client_install: None,
             mod_folder: None,
@@ -281,5 +333,31 @@ mod tests {
                 .resources(&IniRootConfig::default())
                 .requires_ares
         );
+    }
+
+    #[test]
+    fn mo_profile_defaults_to_mo_resources_and_manifest_overrides_only_named_slots() {
+        let mo = IniRootConfig {
+            profile: IniProfile::Mo,
+            ..IniRootConfig::default()
+        };
+        let defaults = ModDefinition::parse("[Mod]\nName=Mental Omega\n").unwrap();
+        let default_resources = defaults.resources(&mo);
+        assert_eq!(default_resources.ini.profile, IniProfile::Mo);
+        assert_eq!(default_resources.archives, ArchiveNames::mo());
+        assert!(default_resources.requires_ares);
+
+        let manifest = ModDefinition::parse(
+            "[Mod]\nName=MO Compatible Profile\n[Files]\nRules=rulescustom.ini\nArt=artcustom.ini\nAI=aicustom.ini\n[Archives]\nExpansionPrefix=expandcustom\n",
+        )
+        .unwrap();
+        let resources = manifest.resources(&mo);
+        assert_eq!(
+            (resources.ini.rules.as_deref(), resources.ini.art.as_deref(), resources.ini.ai.as_deref()),
+            (Some("rulescustom.ini"), Some("artcustom.ini"), Some("aicustom.ini")),
+        );
+        assert_eq!(resources.archives.expansion_prefix, "expandcustom");
+        assert_eq!(resources.archives.map_prefix, "mapsmo");
+        assert_eq!(resources.archives.multiplayer, "multimo.mix");
     }
 }

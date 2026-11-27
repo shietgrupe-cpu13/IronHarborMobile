@@ -59,6 +59,9 @@ const WINDOWS_APIS: [wgpu::Backend; 2] = [wgpu::Backend::Vulkan, wgpu::Backend::
 static SETTINGS_DIR: OnceLock<PathBuf> = OnceLock::new();
 /// Startup has finished ([`start_finished`]): a loss from now on is play's.
 static STARTED: AtomicBool = AtomicBool::new(false);
+/// Android gets one alternate renderer attempt after a backend refuses to
+/// start. This is reset when each game process initializes its backend set.
+static ANDROID_FALLBACK_ATTEMPTED: AtomicBool = AtomicBool::new(false);
 /// The API `[VERA] GraphicsAPI=` names, when [`backends`] heard of one, for
 /// [`after_failure`] and [`record_loss`].
 static FORCED: OnceLock<wgpu::Backend> = OnceLock::new();
@@ -70,6 +73,9 @@ pub(crate) fn backends(
     settings_dir: Option<&Path>,
     forced: Option<wgpu::Backend>,
 ) -> wgpu::Backends {
+    if cfg!(target_os = "android") {
+        ANDROID_FALLBACK_ATTEMPTED.store(false, Ordering::Release);
+    }
     if let Some(api) = forced {
         let _ = FORCED.set(api);
     }
@@ -100,10 +106,30 @@ pub(crate) fn backends(
 pub(crate) fn after_failure(asked: wgpu::Backends) -> Option<wgpu::Backends> {
     // The attempt returned, so it did not hang: its marker blames no API.
     forget_start();
+    if cfg!(target_os = "android") {
+        let already_attempted = ANDROID_FALLBACK_ATTEMPTED.swap(true, Ordering::AcqRel);
+        return android_fallback_after_failure(asked, already_attempted);
+    }
     after_failure_of(asked, FORCED.get().copied(), || match SETTINGS_DIR.get() {
         Some(dir) if cfg!(target_os = "windows") => recorded_in(dir),
         _ => wgpu::Backends::PRIMARY,
     })
+}
+
+/// Android's automatic backend set is Vulkan; GLES is secondary. Explicit
+/// Vulkan and GLES choices get one alternate attempt too, without cycling.
+fn android_fallback_after_failure(
+    asked: wgpu::Backends,
+    already_attempted: bool,
+) -> Option<wgpu::Backends> {
+    if already_attempted {
+        return None;
+    }
+    if asked == wgpu::Backends::GL {
+        Some(wgpu::Backends::PRIMARY)
+    } else {
+        Some(wgpu::Backends::GL)
+    }
 }
 
 fn after_failure_of(
@@ -357,6 +383,29 @@ fn api_of(line: &str) -> Option<wgpu::Backend> {
 mod tests {
     use super::*;
     use wgpu::Backend::{Dx12, Gl, Vulkan};
+
+    #[test]
+    fn android_renderer_fallback_tries_one_alternate_backend_without_a_cycle() {
+        use wgpu::Backends;
+
+        // Automatic and explicit Vulkan can try GLES once; explicit GLES can
+        // try wgpu's primary set (Vulkan on Android). Any failed fallback ends.
+        assert_eq!(
+            android_fallback_after_failure(Backends::PRIMARY, false),
+            Some(Backends::GL)
+        );
+        assert_eq!(
+            android_fallback_after_failure(Backends::VULKAN, false),
+            Some(Backends::GL)
+        );
+        assert_eq!(
+            android_fallback_after_failure(Backends::GL, false),
+            Some(Backends::PRIMARY)
+        );
+        for asked in [Backends::PRIMARY, Backends::VULKAN, Backends::GL] {
+            assert_eq!(android_fallback_after_failure(asked, true), None);
+        }
+    }
 
     fn record_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("vera-{name}-{}", std::process::id()));

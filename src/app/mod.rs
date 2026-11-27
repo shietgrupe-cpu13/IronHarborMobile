@@ -64,6 +64,10 @@ pub(crate) mod diagnostics;
 pub(crate) mod display_target;
 mod frame;
 pub mod frontend;
+/// Narrow launcher preferences that must use the engine's existing VERA.INI
+/// reader/writer rather than a second Android settings store.
+#[cfg(target_os = "android")]
+pub mod android_launcher_settings;
 mod game_data_check;
 #[cfg(not(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown")))]
 mod graphics_lost;

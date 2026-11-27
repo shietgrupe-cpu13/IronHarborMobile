@@ -245,9 +245,15 @@ A guest also needs the host's map in its own map library.
   `VeraActivity` extends it and loads `libvera20k_android.so` itself, since
   GameActivity has no `android.app.lib_name` metadata. Its build-time glue must
   match the `androidx.games:games-activity` AAR version (2.0.2 here).
-- **Vulkan only.** The manifest requires `android.hardware.vulkan.level 0`;
-  GLES-only devices cannot install. Whether to port the existing `webgl`
-  fallback to a runtime capability check is P4's call.
+- **Vulkan and OpenGL ES.** Android builds include wgpu's native Vulkan and
+  GLES backends. The launcher stores `auto`, `vulkan` or `opengl` in the
+  engine-owned `VERA.INI`; explicit choices take effect on the next game
+  start. `opengl` selects wgpu's OpenGL ES implementation on Android. The
+  manifest treats both Vulkan and GLES 3.0 as optional so a device that offers
+  only one backend is not filtered out at install time. Startup makes one
+  alternate-backend attempt after initialization fails. The actual backend
+  choice and rendering still require physical-device validation for each
+  vendor driver.
 - **`configChanges` covers everything winit handles** so rotation and
   split-screen arrive as a resize, not an activity rebuild. A second activity in
   the same process cannot work — winit builds one event loop per process — so

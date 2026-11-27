@@ -1082,6 +1082,22 @@ impl RetailOptionsProfile {
         profile_file::update(ra2_dir, |input| self.transform_settings(input))
     }
 
+    /// Update only the Android launcher's renderer preference. Keeping this
+    /// narrow prevents a launcher write from replacing other VERA.INI fields
+    /// with a stale or default profile snapshot.
+    pub(crate) fn commit_graphics_api(
+        settings_dir: &Path,
+        graphics_api: GraphicsApi,
+    ) -> io::Result<()> {
+        profile_file::update(settings_dir, |input| {
+            set_ini_values(
+                input,
+                VERA_SECTION,
+                &[("GraphicsAPI", graphics_api.ini_value())],
+            )
+        })
+    }
+
     /// WOL Options' writer `0x0077DFD0`: the nine `[WOnline]` keys in the
     /// reader's order, `WriteInt` decimal then `WriteBool` yes/no, and then
     /// `INIClass::Save`. Every other section and key is left as it is.
@@ -1194,6 +1210,33 @@ impl RetailOptionsProfile {
     {
         profile_file::update_with(ra2_dir, read, write, |input| self.transform_settings(input))
     }
+}
+
+/// Read the same GraphicsAPI field used at engine startup.
+pub(crate) fn launcher_graphics_api(settings_dir: &Path) -> GraphicsApi {
+    RetailOptionsLoad::from_settings(
+        settings_dir,
+        &RetailStartupOptions::default(),
+    )
+    .retained_profile
+    .graphics_api
+}
+
+/// Parse and persist one renderer preference through VERA.INI's profile-file
+/// owner. Android calls this before the game process is launched.
+pub(crate) fn set_launcher_graphics_api(
+    settings_dir: &Path,
+    value: &str,
+) -> Result<GraphicsApi, String> {
+    let graphics_api = match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => GraphicsApi::Auto,
+        "vulkan" => GraphicsApi::Vulkan,
+        "opengl" | "opengles" | "gles" => GraphicsApi::OpenGl,
+        unsupported => return Err(format!("Unsupported Android renderer '{unsupported}'")),
+    };
+    RetailOptionsProfile::commit_graphics_api(settings_dir, graphics_api)
+        .map_err(|error| format!("Could not write VERA.INI: {error}"))?;
+    Ok(graphics_api)
 }
 
 /// `0x0077DED0`: ReadInt `0x5276D0` for seven keys and ReadBool `0x5295F0`
@@ -1989,6 +2032,26 @@ ScoreVolume=0.3\nIsScoreShuffle=yes\nSoundLatency=4\nInGameMusic=no\n[VERA]\nZoo
         let saved = profile.transform_settings(b"");
         let reloaded = load_snapshot(&startup, &saved).retained_profile;
         assert_eq!(reloaded.graphics_api.backend(), Some(wgpu::Backend::Gl));
+    }
+
+    #[test]
+    fn launcher_renderer_write_is_narrow_persistent_and_rejects_desktop_only_apis() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("VERA.INI");
+        std::fs::write(&path, b"[VERA]\nZoom=125\nGraphicsAPI=auto\n[AUDIO]\nKeep=yes\n")
+            .unwrap();
+
+        set_launcher_graphics_api(directory.path(), "opengles").unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let text = String::from_utf8(bytes.clone()).unwrap();
+        assert!(text.contains("GraphicsAPI=opengl"), "{text}");
+        assert!(text.contains("Zoom=125") && text.contains("Keep=yes"), "{text}");
+        assert_eq!(
+            launcher_graphics_api(directory.path()).backend(),
+            Some(wgpu::Backend::Gl)
+        );
+        assert!(set_launcher_graphics_api(directory.path(), "dx12").is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
     }
 
     #[test]

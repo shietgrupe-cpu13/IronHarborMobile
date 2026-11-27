@@ -658,6 +658,54 @@ pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeConfigForMod(
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeGetRenderer(
+    mut env: jni::JNIEnv,
+    _activity: JObject,
+    files_directory: JString,
+) -> jstring {
+    let result = (|| -> anyhow::Result<jstring> {
+        let files_directory: String = env.get_string(&files_directory)?.into();
+        let settings = launcher_settings_directory(std::path::Path::new(&files_directory))?;
+        let value = vera20k::app::android_launcher_settings::renderer_preference(&settings);
+        Ok(env.new_string(value)?.into_raw())
+    })();
+    match result {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = env.throw_new("java/io/IOException", error.to_string());
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeSetRenderer(
+    mut env: jni::JNIEnv,
+    _activity: JObject,
+    renderer: JString,
+    files_directory: JString,
+) -> jstring {
+    let result = (|| -> anyhow::Result<jstring> {
+        let renderer: String = env.get_string(&renderer)?.into();
+        let files_directory: String = env.get_string(&files_directory)?.into();
+        let settings = launcher_settings_directory(std::path::Path::new(&files_directory))?;
+        let saved = vera20k::app::android_launcher_settings::set_renderer_preference(
+            &settings,
+            &renderer,
+        )
+        .map_err(anyhow::Error::msg)?;
+        Ok(env.new_string(saved)?.into_raw())
+    })();
+    match result {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = env.throw_new("java/io/IOException", error.to_string());
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeValidateCurrentSelection(
     mut env: jni::JNIEnv,
     _activity: JObject,
@@ -953,6 +1001,13 @@ fn read_launcher_config(
     let legacy = data_dir.join("config.toml");
     let path = if primary.exists() || !legacy.exists() { primary } else { legacy };
     Ok((path, android_config_contents(data_dir)?))
+}
+
+fn launcher_settings_directory(data_dir: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
+    vera20k::util::platform_dir::set(data_dir.to_path_buf());
+    let (path, contents) = read_launcher_config(data_dir)?;
+    let config = vera20k::util::config::GameConfig::parse_text_at(&contents, &path)?;
+    Ok(config.paths.settings_dir().to_path_buf())
 }
 
 /// Update a game source without losing the selected RA2/YR engine profile.

@@ -40,6 +40,18 @@ impl ArchiveNames {
         }
     }
 
+    /// Mental Omega's archive family. A mod manifest can override individual
+    /// names after this profile supplies the defaults.
+    pub fn mo() -> Self {
+        Self {
+            expansion_prefix: "expandmo".into(),
+            map_prefix: "mapsmo".into(),
+            multiplayer: "multimo.mix".into(),
+            theme: "thememo.mix".into(),
+            movie_prefix: "movmo".into(),
+        }
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         for (field, prefix) in [
             ("expansion_prefix", &self.expansion_prefix),
@@ -121,5 +133,16 @@ mod tests {
         ] {
             assert!(!value.contains("md"), "RA2 name contains md: {value}");
         }
+    }
+
+    #[test]
+    fn mental_omega_archive_names_use_the_mo_family() {
+        let names = ArchiveNames::mo();
+        assert!(names.validate().is_ok());
+        assert_eq!(names.expansion_prefix, "expandmo");
+        assert_eq!(names.map_prefix, "mapsmo");
+        assert_eq!(names.multiplayer, "multimo.mix");
+        assert_eq!(names.theme, "thememo.mix");
+        assert_eq!(names.movie_prefix, "movmo");
     }
 }

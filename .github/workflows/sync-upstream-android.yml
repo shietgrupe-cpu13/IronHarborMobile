@@ -144,7 +144,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends pkg-config libasound2-dev
 
-      - name: Run focused storage, profile, mod-path, and Ares regressions
+      - name: Run focused Android storage, renderer, and Mental Omega regressions
         if: steps.upstream.outputs.validate == 'true'
         shell: bash
         run: |
@@ -153,6 +153,11 @@ jobs:
           python -m tools.cargo_run -- test -p vera20k-core --lib util::config::tests::android_maps_use_configs_subdirectory_without_changing_other_platforms
           python -m tools.cargo_run -- test -p vera20k --lib app::mods::tests::managed_mod_selection_does_not_treat_descendants_as_profiles
           python -m tools.cargo_run -- test -p vera20k-core --lib assets::asset_manager::install_inspection_tests::shared_ares_support_is_mod_only_and_a_mod_archive_takes_precedence
+          python -m tools.cargo_run -- test -p vera20k-core --lib util::ini_roots::tests::explicit_mo_profile_resolves_its_roots_and_requires_the_complete_triplet
+          python -m tools.cargo_run -- test -p vera20k-core --lib util::mod_definition::tests::mo_profile_defaults_to_mo_resources_and_manifest_overrides_only_named_slots
+          python -m tools.cargo_run -- test -p vera20k --lib app::persistence::options_profile::tests::launcher_renderer_write_is_narrow_persistent_and_rejects_desktop_only_apis
+          python -m tools.cargo_run -- test -p vera20k --lib app::persistence::startup_backend::tests::android_renderer_fallback_tries_one_alternate_backend_without_a_cycle
+          python -m tools.cargo_run -- test -p vera20k-core --lib assets::asset_manager::install_inspection_tests::mo_profile_resolves_and_loads_mo_roots_expansion_archive_and_mod_ares
 
       - name: Install pinned Android NDK
         if: steps.upstream.outputs.validate == 'true'
@@ -232,4 +237,16 @@ jobs:
       - name: Push verified upstream merge
         if: steps.upstream.outputs.changed == 'true'
         shell: bash
-        run: git push origin HEAD:refs/heads/android-new
+        run: |
+          set -euo pipefail
+          git fetch origin android-new
+          remote="$(git rev-parse FETCH_HEAD)"
+          if git merge-base --is-ancestor HEAD "$remote"; then
+            echo "The validated candidate is already included in remote android-new ($remote)."
+          elif git merge-base --is-ancestor "$remote" HEAD; then
+            git push origin HEAD:refs/heads/android-new
+          else
+            echo "Remote android-new advanced on a separate line after this candidate was validated." >&2
+            echo "Refusing to overwrite or merge unvalidated commits; rerun synchronization on the new head." >&2
+            exit 1
+          fi
