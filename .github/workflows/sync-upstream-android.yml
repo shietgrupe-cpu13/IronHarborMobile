@@ -128,7 +128,21 @@ jobs:
             -keyalg RSA -keysize 2048 -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
           chmod +x android/gradlew
-          ./android/gradlew -p android :app:testDebugUnitTest :app:assembleDebug --no-daemon
+          # Maven Central can temporarily throttle cold GitHub-hosted dependency resolution.
+          # Retry Gradle so successful downloads from earlier attempts remain cached.
+          for attempt in 1 2 3; do
+            if ./android/gradlew -p android :app:testDebugUnitTest :app:assembleDebug --no-daemon --max-workers=2; then
+              exit 0
+            else
+              status=$?
+            fi
+            if [[ "$attempt" -eq 3 ]]; then
+              exit "$status"
+            fi
+            delay=$((attempt * 30))
+            echo "Gradle attempt $attempt failed (exit $status); retrying in ${delay}s."
+            sleep "$delay"
+          done
 
       - name: Push verified upstream merge
         if: steps.upstream.outputs.changed == 'true'
