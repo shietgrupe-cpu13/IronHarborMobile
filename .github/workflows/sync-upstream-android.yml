@@ -157,6 +157,7 @@ jobs:
           python -m tools.cargo_run -- test -p vera20k-core --lib util::mod_definition::tests::mo_profile_defaults_to_mo_resources_and_manifest_overrides_only_named_slots
           python -m tools.cargo_run -- test -p vera20k-core --lib util::mod_definition::tests::mental_omega_manifest_identity_selects_mo_without_changing_unknown_mods
           python -m tools.cargo_run -- test -p vera20k-core --lib map::scenario_sources::tests::mental_omega_loose_catalog_discovers_and_loads_nested_maps
+          python -m tools.cargo_run -- test -p vera20k-core --lib assets::client_install::tests::legacy_catalog_infers_modes_from_map_memberships_without_game_modes_registry
           python -m tools.cargo_run -- test -p vera20k-core --lib map::scenario_sources::tests::catalog_map_paths_reject_parent_and_absolute_components
           python -m tools.cargo_run -- test -p vera20k --lib app::persistence::options_profile::tests::launcher_renderer_write_is_narrow_persistent_and_rejects_desktop_only_apis
           python -m tools.cargo_run -- test -p vera20k --lib app::persistence::startup_backend::tests::android_renderer_fallback_tries_one_alternate_backend_without_a_cycle

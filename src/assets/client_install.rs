@@ -73,7 +73,40 @@ impl ClientInstall {
 
         let mut modes = Vec::new();
         let mut mode_names = BTreeSet::new();
-        for (_, name) in catalog.entries("GameModes") {
+        // Older CnCNet-derived catalogs can omit [GameModes] and declare mode
+        // membership only on each [MultiMaps] row. Infer the available mode
+        // names from those memberships, but still require a corresponding
+        // mode section and pass the same validation as explicitly listed modes.
+        // This keeps legacy catalogs usable without accepting arbitrary names
+        // or weakening unsupported-mode checks.
+        let mut mode_candidates: Vec<&str> = catalog
+            .entries("GameModes")
+            .iter()
+            .map(|(_, name)| name.as_str())
+            .collect();
+        if mode_candidates.is_empty() {
+            for (_, map_name) in catalog.entries("MultiMaps") {
+                let memberships = catalog.value(map_name, "GameModes").unwrap_or("Default");
+                for membership in memberships.split(',').map(str::trim) {
+                    for name in catalog
+                        .value("GameModeAliases", membership)
+                        .unwrap_or(membership)
+                        .split(',')
+                        .map(str::trim)
+                    {
+                        if !name.is_empty()
+                            && !catalog.entries(name).is_empty()
+                            && !mode_candidates
+                                .iter()
+                                .any(|candidate| candidate.eq_ignore_ascii_case(name))
+                        {
+                            mode_candidates.push(name);
+                        }
+                    }
+                }
+            }
+        }
+        for name in mode_candidates {
             if name.is_empty()
                 || unsupported(&catalog, name, true)
                 || !mode_names.insert(name.to_ascii_lowercase())
@@ -596,6 +629,38 @@ mod tests {
                 max_players: Some(4)
             }]
         );
+    }
+
+    #[test]
+    fn legacy_catalog_infers_modes_from_map_memberships_without_game_modes_registry() {
+        let dir = TestDirectory::new("client-legacy-map-modes");
+        std::fs::create_dir_all(dir.path().join("Resources")).unwrap();
+        std::fs::create_dir_all(dir.path().join("INI/Maps")).unwrap();
+        std::fs::create_dir_all(dir.path().join("Maps/Standard")).unwrap();
+        std::fs::write(
+            dir.path().join("Resources/ClientDefinitions.ini"),
+            "[Settings]\nMPMapsPath=INI/Maps/MPMaps.ini\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("INI/Maps/MPMaps.ini"),
+            "[MultiMaps]\n0=Maps\\Standard\\Arena\n\
+             [GameModeAliases]\nClassic=Standard\n\
+             [Standard]\nDescription=Standard mode\n\
+             [Locked]\nForcedOptions=CustomRules\n\
+             [Maps\\Standard\\Arena]\nGameModes=Classic,Locked\nMinPlayers=2\nMaxPlayers=4\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("Maps/Standard/Arena.map"), []).unwrap();
+
+        let install = ClientInstall::read(dir.path()).unwrap().unwrap();
+        assert_eq!(
+            install.modes.iter().map(|mode| mode.name.as_str()).collect::<Vec<_>>(),
+            ["Standard"]
+        );
+        assert_eq!(install.maps.len(), 1);
+        assert_eq!(install.maps[0].file_name, "Maps/Standard/Arena.map");
+        assert_eq!(install.maps[0].game_modes, ["Standard"]);
     }
 
     #[test]
