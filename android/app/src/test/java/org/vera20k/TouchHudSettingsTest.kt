@@ -206,12 +206,14 @@ class TouchHudSettingsTest {
             2,
             2,
             true,
+            mapOf("STOP" to 45, "C3" to 100, "UNKNOWN" to 80),
         )
         val decoded = TouchHudSettings.decodeLayoutBackup(encoded)
         assertEquals(setOf("STOP", "C3"), decoded?.visible)
         assertEquals(125, decoded?.sizes?.get("C3"))
         assertEquals(120, decoded?.scale)
         assertEquals(70, decoded?.opacity)
+        assertEquals(mapOf("STOP" to 45, "C3" to 100), decoded?.buttonOpacities)
         assertEquals(TouchHudSettings.LAYOUT_YURI, decoded?.layout)
         assertEquals(mapOf("FIRE" to 32), decoded?.keyBindings)
         assertEquals(mapOf("FIRE" to 1, "MOVE" to 0, "PATROL" to 2), decoded?.controlSets)
@@ -221,22 +223,40 @@ class TouchHudSettingsTest {
         assertEquals(0.9f, decoded?.positions?.get(TouchHudSettings.HUD_TOGGLE)?.second ?: Float.NaN, 0.0001f)
         assertEquals(0.03f, decoded?.positions?.get(TouchHudSettings.HUD_EDIT)?.first ?: Float.NaN, 0.0001f)
         assertEquals(110, decoded?.sizes?.get(TouchHudSettings.HUD_TOGGLE))
-        assertEquals(null, TouchHudSettings.decodeLayoutBackup(encoded.replace("version=3", "version=88")))
+        assertEquals(null, TouchHudSettings.decodeLayoutBackup(encoded.replace("version=4", "version=88")))
         assertEquals(null, TouchHudSettings.decodeLayoutBackup(encoded.replace("scale=120", "scale=999")))
         assertEquals(mapOf("GUARD" to 29), TouchHudSettings.parseKeyBindings("GUARD:29;STOP:0;FIRE:nope;OTHER:41"))
         assertEquals(mapOf("MOVE" to 2), TouchHudSettings.parseControlSets("MOVE:2;STOP:9;C1:1;BAD:nope"))
-        val b14 = encoded.replace("version=3", "version=2").lineSequence()
-            .filterNot { it.startsWith("dock=") }.joinToString("\n")
+        val b3 = encoded.replace("version=4", "version=3").lineSequence()
+            .filterNot { it.startsWith("buttonOpacities=") }.joinToString("\n")
+        assertEquals(emptyMap<String, Int>(), TouchHudSettings.decodeLayoutBackup(b3)?.buttonOpacities)
+        val b14 = encoded.replace("version=4", "version=2").lineSequence()
+            .filterNot { it.startsWith("dock=") || it.startsWith("buttonOpacities=") }.joinToString("\n")
         assertEquals(mapOf("FIRE" to 1, "MOVE" to 0, "PATROL" to 2), TouchHudSettings.decodeLayoutBackup(b14)?.controlSets)
-        val legacy = encoded.replace("version=3", "version=1").lineSequence()
+        val legacy = encoded.replace("version=4", "version=1").lineSequence()
             .filterNot {
                 it.startsWith("controlsets=") || it.startsWith("dock=") ||
-                    it.startsWith("activeSet=") || it.startsWith("hidden=")
+                    it.startsWith("activeSet=") || it.startsWith("hidden=") ||
+                    it.startsWith("buttonOpacities=")
             }.joinToString("\n")
         assertEquals(emptyMap<String, Int>(), TouchHudSettings.decodeLayoutBackup(legacy)?.controlSets)
         assertEquals(1, TouchHudSettings.decodeLayoutBackup(legacy)?.activeSet)
         assertFalse(TouchHudSettings.decodeLayoutBackup(legacy)?.hidden ?: true)
         assertEquals(0, TouchHudSettings.decodeLayoutBackup(legacy)?.dock)
+    }
+
+    @Test fun buttonOpacitySettingsClampAndIgnoreUnknownOrMalformedButtons() {
+        assertEquals(
+            mapOf("STOP" to 30, "C1" to 74, TouchHudSettings.HUD_EDIT to 100),
+            TouchHudSettings.parseButtonOpacities("STOP:0;C1:74;HUD_EDIT:100;UNKNOWN:55;SCATTER:nope"),
+        )
+        assertEquals(
+            "STOP:30;C1:74",
+            TouchHudSettings.encodeButtonOpacities(mapOf("STOP" to 0, "C1" to 74, "UNKNOWN" to 88)),
+        )
+        assertEquals(45, TouchHudSettings.buttonOpacity("STOP", mapOf("STOP" to 45), 88))
+        assertEquals(88, TouchHudSettings.buttonOpacity("C1", mapOf("STOP" to 45), 88))
+        assertEquals(100, TouchHudSettings.buttonOpacity("C1", mapOf("C1" to 140), 88))
     }
 
     @Test fun hudBackupAllowsEveryCommandButtonHiddenWhileUtilityControlsRemainAvailable() {

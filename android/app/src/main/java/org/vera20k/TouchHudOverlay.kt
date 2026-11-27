@@ -147,6 +147,9 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
         )
         val activeSet = preferences.getInt(TouchHudSettings.HUD_ACTIVE_SET, 1).coerceIn(1, 2)
         val active = TouchHudSettings.visibleForSet(visible, controlSets, activeSet)
+        val buttonOpacities = TouchHudSettings.parseButtonOpacities(
+            preferences.getString(TouchHudSettings.HUD_BUTTON_OPACITIES, null),
+        )
         buttons.forEach { (id, button) ->
             button.visibility = when {
                 id == "hud" -> View.VISIBLE
@@ -155,7 +158,13 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
                 else -> View.GONE
             }
             button.alpha = TouchHudSettings.buttonAlpha(
-                preferences.getInt(TouchHudSettings.HUD_OPACITY, 88),
+                settingsId(id)?.let {
+                    TouchHudSettings.buttonOpacity(
+                        it,
+                        buttonOpacities,
+                        preferences.getInt(TouchHudSettings.HUD_OPACITY, 88),
+                    )
+                } ?: preferences.getInt(TouchHudSettings.HUD_OPACITY, 88),
             ) * if (editing && id != "edit") 0.62f else 1f
             val size = buttonPixels(id)
             button.layoutParams = (button.layoutParams ?: FrameLayout.LayoutParams(size, size)).apply {
@@ -183,6 +192,9 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
         val sizes = TouchHudSettings.parseSizes(
             preferences.getString(TouchHudSettings.HUD_SIZES, null),
         ).toMutableMap()
+        val buttonOpacities = TouchHudSettings.parseButtonOpacities(
+            preferences.getString(TouchHudSettings.HUD_BUTTON_OPACITIES, null),
+        ).toMutableMap()
         val controlSets = TouchHudSettings.parseControlSets(
             preferences.getString(TouchHudSettings.HUD_CONTROL_SETS, null),
         )
@@ -192,12 +204,13 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
         val scale = TouchHudSettings.clampScale(preferences.getInt(TouchHudSettings.HUD_SCALE, 100))
         val opacity = TouchHudSettings.clampOpacity(preferences.getInt(TouchHudSettings.HUD_OPACITY, 88))
         TouchHudLayoutEditor(activity).show(
-            visible, positions, sizes, controlSets, layout, dock, scale, opacity,
+            visible, positions, sizes, controlSets, layout, dock, scale, opacity, buttonOpacities,
         ) {
             preferences.edit()
                 .putString(TouchHudSettings.HUD_VISIBLE, TouchHudSettings.encodeVisible(visible))
                 .putString(TouchHudSettings.HUD_POSITIONS, TouchHudSettings.encodePositions(positions))
                 .putString(TouchHudSettings.HUD_SIZES, TouchHudSettings.encodeSizes(sizes))
+                .putString(TouchHudSettings.HUD_BUTTON_OPACITIES, TouchHudSettings.encodeButtonOpacities(buttonOpacities))
                 .putInt(TouchHudSettings.HUD_SCALE, scale)
                 .putInt(TouchHudSettings.HUD_OPACITY, opacity)
                 .putInt(TouchHudSettings.HUD_LAYOUT, layout)

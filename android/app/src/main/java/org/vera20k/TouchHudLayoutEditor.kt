@@ -20,6 +20,7 @@ import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
 import kotlin.math.max
@@ -37,6 +38,7 @@ internal class TouchHudLayoutEditor(private val activity: Activity) {
         dock: Int,
         scale: Int,
         opacity: Int,
+        buttonOpacities: MutableMap<String, Int>,
         onApply: () -> Unit,
     ) {
         val dialog = Dialog(activity)
@@ -93,11 +95,17 @@ internal class TouchHudLayoutEditor(private val activity: Activity) {
         root.addView(heading)
 
         val selectedLabel = label("Select a control", 13)
+        var opacityLabel: TextView? = null
+        var opacitySeek: SeekBar? = null
         val preview = TouchHudLayoutPreview(
-            activity, visible, positions, sizes, controlSets, layout, dock, scale, opacity,
+            activity, visible, positions, sizes, buttonOpacities, controlSets, layout, dock, scale, opacity,
         ) { selected ->
             selectedLabel.text = selected?.let { "${it.label}   /   ${sizes[it.id] ?: 100}%" }
                 ?: "No control selected"
+            selected?.let { TouchHudSettings.buttonOpacity(it.id, buttonOpacities, opacity) }?.let { selectedOpacity ->
+                opacityLabel?.text = "Selected button opacity  /  $selectedOpacity%"
+                opacitySeek?.progress = selectedOpacity - 30
+            }
         }
         previewSet.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onItemSelected(
@@ -118,6 +126,42 @@ internal class TouchHudLayoutEditor(private val activity: Activity) {
         sizeRow.addView(selectedLabel.also { it.gravity = Gravity.CENTER }, weighted())
         sizeRow.addView(controlButton("SIZE +") { preview.resizeSelected(10) }, weighted())
         root.addView(sizeRow, LinearLayout.LayoutParams(-1, dp(48)))
+
+        val selectedOpacityLabel = label(
+            preview.selectedButtonId?.let { "Selected button opacity  /  ${TouchHudSettings.buttonOpacity(it, buttonOpacities, opacity)}%" }
+                ?: "Selected button opacity",
+            13,
+        )
+        opacityLabel = selectedOpacityLabel
+        root.addView(selectedOpacityLabel, LinearLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(4)
+        })
+        val opacityRow = LinearLayout(activity).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            orientation = LinearLayout.HORIZONTAL
+        }
+        opacitySeek = SeekBar(activity).apply {
+            max = 70
+            progress = (preview.selectedButtonId?.let { TouchHudSettings.buttonOpacity(it, buttonOpacities, opacity) } ?: opacity) - 30
+            contentDescription = "Selected HUD button opacity"
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (!fromUser) return
+                    val id = preview.selectedButtonId ?: return
+                    val value = progress + 30
+                    buttonOpacities[id] = value
+                    opacityLabel?.text = "Selected button opacity  /  $value%"
+                    preview.invalidate()
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+        }.also { opacitySeekBar ->
+            opacityRow.addView(opacitySeekBar, LinearLayout.LayoutParams(0, dp(42), 1f))
+        }
+        opacityRow.addView(controlButton("USE GLOBAL") { preview.resetSelectedOpacity() },
+            LinearLayout.LayoutParams(dp(118), dp(46)))
+        root.addView(opacityRow)
 
         val actionRow = LinearLayout(activity).apply {
             gravity = Gravity.CENTER_VERTICAL
@@ -222,6 +266,7 @@ private class TouchHudLayoutPreview(
     private val visible: MutableSet<String>,
     private val positions: MutableMap<String, Pair<Float, Float>>,
     private val sizes: MutableMap<String, Int>,
+    private val buttonOpacities: MutableMap<String, Int>,
     private val controlSets: Map<String, Int>,
     private val layout: Int,
     private val dock: Int,
@@ -248,6 +293,7 @@ private class TouchHudLayoutPreview(
     private val hitBoxes = linkedMapOf<String, RectF>()
     var previewSet: Int = 0
     private var selectedId: String? = null
+    val selectedButtonId: String? get() = selectedId
     private var dragOffsetX = 0f
     private var dragOffsetY = 0f
     private var dragging = false
@@ -295,7 +341,8 @@ private class TouchHudLayoutPreview(
                 if ((button.id == TouchHudSettings.SET_ONE && previewSet == 1) ||
                     (button.id == TouchHudSettings.SET_TWO && previewSet == 2)) 1 else 0
             } else controlSets[button.id] ?: 0
-            val alpha = (opacity.coerceIn(30, 100) * 2.2f).roundToInt().coerceIn(1, 255)
+            val alpha = (TouchHudSettings.buttonOpacity(button.id, buttonOpacities, opacity) * 2.2f)
+                .roundToInt().coerceIn(1, 255)
             buttonPaint.color = Color.argb(alpha, 10, 26, 24)
             canvas.drawRoundRect(bounds, dp(7).toFloat(), dp(7).toFloat(), buttonPaint)
             outlinePaint.color = when {
@@ -360,6 +407,13 @@ private class TouchHudLayoutPreview(
     fun resizeSelected(delta: Int) {
         val id = selectedId ?: return
         sizes[id] = TouchHudSettings.clampButtonSize((sizes[id] ?: 100) + delta)
+        onSelected(TouchHudSettings.layoutButtons.firstOrNull { it.id == id })
+        invalidate()
+    }
+
+    fun resetSelectedOpacity() {
+        val id = selectedId ?: return
+        buttonOpacities.remove(id)
         onSelected(TouchHudSettings.layoutButtons.firstOrNull { it.id == id })
         invalidate()
     }

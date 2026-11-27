@@ -827,6 +827,9 @@ class LauncherActivity : Activity() {
         val checkboxes = mutableListOf<Pair<String, CheckBox>>()
         val controlSets = TouchHudSettings.parseControlSets(prefs.getString(TouchHudSettings.HUD_CONTROL_SETS, null)).toMutableMap()
         val sizes = TouchHudSettings.parseSizes(prefs.getString(TouchHudSettings.HUD_SIZES, null)).toMutableMap()
+        val buttonOpacities = TouchHudSettings.parseButtonOpacities(
+            prefs.getString(TouchHudSettings.HUD_BUTTON_OPACITIES, null),
+        ).toMutableMap()
         val positions = TouchHudSettings.parsePositions(prefs.getString(TouchHudSettings.HUD_POSITIONS, null)).toMutableMap()
         var positionedLayout = prefs.getInt(TouchHudSettings.HUD_LAYOUT, TouchHudSettings.LAYOUT_FREE)
         var positionedDock = prefs.getInt(TouchHudSettings.HUD_DOCK, 0)
@@ -912,6 +915,7 @@ class LauncherActivity : Activity() {
             val previewVisible = visible.toMutableSet()
             val previewPositions = positions.toMutableMap()
             val previewSizes = sizes.toMutableMap()
+            val previewOpacities = buttonOpacities.toMutableMap()
             val layoutChanged = positionedLayout != layout.selectedItemPosition || positionedDock != dock.selectedItemPosition
             if (layoutChanged) previewPositions.clear()
             TouchHudLayoutEditor(this).show(
@@ -923,6 +927,7 @@ class LauncherActivity : Activity() {
                 dock.selectedItemPosition,
                 scale.progress + 70,
                 opacity.progress + 30,
+                previewOpacities,
             ) {
                 visible.clear()
                 visible.addAll(previewVisible)
@@ -930,6 +935,8 @@ class LauncherActivity : Activity() {
                 positions.putAll(previewPositions)
                 sizes.clear()
                 sizes.putAll(previewSizes)
+                buttonOpacities.clear()
+                buttonOpacities.putAll(previewOpacities)
                 positionedLayout = layout.selectedItemPosition
                 positionedDock = dock.selectedItemPosition
                 checkboxes.forEach { (id, check) -> check.isChecked = id in visible }
@@ -994,6 +1001,7 @@ class LauncherActivity : Activity() {
                     .putString(TouchHudSettings.HUD_VISIBLE, TouchHudSettings.encodeVisible(selected))
                     .putString(TouchHudSettings.HUD_CONTROL_SETS, TouchHudSettings.encodeControlSets(controlSets))
                     .putString(TouchHudSettings.HUD_SIZES, TouchHudSettings.encodeSizes(sizes))
+                    .putString(TouchHudSettings.HUD_BUTTON_OPACITIES, TouchHudSettings.encodeButtonOpacities(buttonOpacities))
                     .putString(TouchHudSettings.HUD_POSITIONS, TouchHudSettings.encodePositions(positions))
                     .putInt(TouchHudSettings.HUD_SCALE, TouchHudSettings.clampScale(scale.progress + 70))
                     .putInt(TouchHudSettings.HUD_OPACITY, TouchHudSettings.clampOpacity(opacity.progress + 30))
@@ -1033,6 +1041,7 @@ class LauncherActivity : Activity() {
             prefs.getInt(TouchHudSettings.HUD_DOCK, 0),
             prefs.getInt(TouchHudSettings.HUD_ACTIVE_SET, 1),
             prefs.getBoolean(TouchHudSettings.HUD_HIDDEN, false),
+            TouchHudSettings.parseButtonOpacities(prefs.getString(TouchHudSettings.HUD_BUTTON_OPACITIES, null)),
         )
         runCatching { (contentResolver.openOutputStream(uri, "wt") ?: error("Selected document could not be opened")).bufferedWriter().use { it.write(payload) } }
             .onSuccess { Toast.makeText(this, "HUD layout exported.", Toast.LENGTH_SHORT).show() }
@@ -1067,6 +1076,7 @@ class LauncherActivity : Activity() {
             .putString(TouchHudSettings.HUD_CONTROL_SETS, TouchHudSettings.encodeControlSets(imported.controlSets))
             .putString(TouchHudSettings.HUD_POSITIONS, TouchHudSettings.encodePositions(imported.positions))
             .putString(TouchHudSettings.HUD_SIZES, TouchHudSettings.encodeSizes(imported.sizes))
+            .putString(TouchHudSettings.HUD_BUTTON_OPACITIES, TouchHudSettings.encodeButtonOpacities(imported.buttonOpacities))
             .putInt(TouchHudSettings.HUD_SCALE, imported.scale)
             .putInt(TouchHudSettings.HUD_OPACITY, imported.opacity)
             .putInt(TouchHudSettings.HUD_LAYOUT, imported.layout)
