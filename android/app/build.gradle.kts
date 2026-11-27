@@ -69,7 +69,7 @@ android {
     ndkVersion = "28.2.13676358"
 
     defaultConfig {
-        applicationId = "org.vera20k"
+        applicationId = "org.ironharbor.mobile"
         // cpal 0.17's Android backend is AAudio, which needs API 26.
         minSdk = 26
         targetSdk = 36
@@ -104,6 +104,7 @@ android {
     buildTypes {
         debug {
             isMinifyEnabled = false
+            applicationIdSuffix = ".debug"
         }
         release {
             // Keep JVM entry points named for the native JNI callbacks.
