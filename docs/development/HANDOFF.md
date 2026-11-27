@@ -4,7 +4,7 @@ Updated 2026-11-28. The authoritative specification is [IRON_HARBOR_MASTER_PLAN.
 
 ## Repository and latest validation
 
-- Repository: `shietgrupe-cpu13/IronHarborMobile`; branch: `android-new`; local `HEAD` and `vera20k-fork/android-new`: `8e02d79b80eedca143c1c900bd5a7eb45fb83675`.
+- Repository: `shietgrupe-cpu13/IronHarborMobile`; branch: `android-new`; local `HEAD` and `vera20k-fork/android-new`: `5dd542c200e9b919e64bfd1122ce97b95818b715`. Latest source commit: `57c066a9b119629bcdfcba71ff3c88eb7aa14829`.
 - Preserve backup and `android-development` refs. The only untracked path is `out/`; do not inspect, stage, delete, or alter it.
 - Actions [46053869832](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46053869832) succeeded: Kotlin/JVM tests, focused Rust regressions, optimized ARM64 `fast` library, Gradle debug APK, persistent signing, identity/signature, ZIP/ELF alignment and artifact upload all passed. No device test occurred.
 - Latest debug APK artifact: [download from Actions](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46053869832/artifacts/15226298591). Name `IronHarborMobile-android-new-arm64-57c066a9b119629bcdfcba71ff3c88eb7aa14829`; 54,084,031 bytes; artifact digest `d8c6b01a1aacb573eea7aae617804edf8e27fbd915afabdd6e09da73a089a896`; expires 2026-12-11. Package/signature/alignment checks passed.
