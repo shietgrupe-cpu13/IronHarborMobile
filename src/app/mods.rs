@@ -973,16 +973,18 @@ mod tests {
     }
 
     #[test]
-    fn a_nested_managed_mod_folder_is_resolved_without_accepting_escape_paths() {
+    fn managed_mod_selection_does_not_treat_descendants_as_profiles() {
         let root = std::env::temp_dir().join(format!("vera-nested-mod-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let mods = root.join("Mods");
         let nested = mods.join("Example").join("Variant");
         std::fs::create_dir_all(&nested).unwrap();
 
-        let selected = find_folder(&mods, "example/variant").unwrap();
-        assert_eq!(selected.0, "Variant");
-        assert_eq!(selected.1, nested.canonicalize().unwrap());
+        let selected = find_folder(&mods, "example").unwrap();
+        assert_eq!(selected.0, "Example");
+        assert_eq!(selected.1, mods.join("Example").canonicalize().unwrap());
+        assert!(find_folder(&mods, "example/variant").is_none());
+        assert!(find_folder(&mods, "variant").is_none());
         assert!(find_folder(&mods, "../outside").is_none());
         assert!(find_folder(&mods, "Example\\Variant").is_none());
         let _ = std::fs::remove_dir_all(&root);
