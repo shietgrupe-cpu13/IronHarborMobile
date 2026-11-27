@@ -137,6 +137,13 @@ jobs:
           shared-key: android-new-arm64
           key: fast
 
+      - name: Install Linux audio headers for host-side Rust tests
+        if: steps.upstream.outputs.validate == 'true'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends pkg-config libasound2-dev
+
       - name: Run focused storage, profile, mod-path, and Ares regressions
         if: steps.upstream.outputs.validate == 'true'
         shell: bash
