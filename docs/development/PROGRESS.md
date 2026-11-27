@@ -5,7 +5,7 @@ Updated 2026-11-27.
 ## Current Git state
 
 - Working branch: `android-new` (remote `vera20k-fork/android-new`).
-- Current branch HEAD: `529cbe103361ee75b4862ebc0226ad143ebc4572` (`ci(android): upload debug APK artifact`).
+- Last recorded source-and-plan snapshot: `c533ca3ebec18d245cd8215af92026074f5ba8bd` (`docs(android): track autonomous mobile roadmap`); later documentation commits are non-build changes.
 - Latest fetched upstream `origin/main`: `d1e28004aa17dc445cbfee450cfe6fa55c5fe949`.
 - Relationship: `android-new` contains upstream `main`, with seven fork commits on top and zero upstream commits missing at the last audit.
 - Old mobile reference: `android-development` remote HEAD `1293fb441727e2522f6a284d88faf4f108a1ee3e`; backup branch `backup/android-development-2026-11-27` is preserved.
@@ -17,24 +17,33 @@ Updated 2026-11-27.
 - `d3f9e61be` replaces Java 11 `Files.readString/writeString` calls in `AssetImportJobTest` with Android compile-stub-compatible helpers.
 - GitHub Actions run [45946514319](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45946514319) succeeded: Kotlin/JVM validation, ARM64 Rust build (`fast`, 8m32s), and debug APK assembly (26s). It also saved Rust and Gradle cache entries.
 - `529cbe103` adds pinned `actions/upload-artifact` upload for `android/app/build/outputs/apk/debug/*.apk`, named by branch and workflow SHA, with 14-day retention.
+- GitHub Actions run [45948571106](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45948571106) succeeded end to end: Kotlin/JVM checks, ARM64 Rust build, debug APK assembly, and artifact upload. Artifact `IronHarborMobile-android-new-arm64-529cbe103361ee75b4862ebc0226ad143ebc4572` is available, 53,330,817 bytes, with 14-day retention. Rust build took 5m12s on the cache-backed run; packaging took 11s.
+- `c533ca3eb` adds the five persistent development and handoff documents. It was pushed without triggering a build.
 
-## In progress
+## Latest successful build
 
-- GitHub Actions run [45948571106](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45948571106) is building the artifact-upload revision. At the last status check, Kotlin/JVM validation and environment setup passed; ARM64 Rust compilation was running. Confirm the APK upload and artifact metadata once it finishes.
+- All workflow stages passed. `Push verified upstream merge` was skipped because no newer upstream commit was available.
 
 ## Known gaps
 
 - No persistent signing credential is configured; generated debug keys differ between clean runners, so APK update/install-over-install is not yet guaranteed.
 - No post-assembly APK identity, ABI, native-library, signature, ZIP alignment, or ELF alignment audit is in the workflow yet.
 - No Android device test has been performed on this branch.
-- The automatic upstream sync schedule only activates when the workflow is present on the default branch. Internal PR #1 is still draft/open; inspect and merge it after the artifact-upload workflow passes.
-- No APK release is published.
+- The automatic upstream sync schedule only activates when the workflow is present on the default branch. Internal PR #1 is still draft/open; its content has now run successfully on `android-new` and can be reviewed for internal merge.
+- No APK release is published; the APK is a downloadable workflow artifact, not a release.
 
 ## Controls audit (source-level only)
 
-- Current `android-new` HUD: movable positions, show/hide, edit drag, `T`, C1–C10 key behavior; JVM tests cover position parsing/serialization and bounds. Current runtime path is GameActivity key down/up forwarded through `VeraActivity` to the existing native input route.
+- Current `android-new` HUD: movable positions, show/hide, edit drag, `T`, and C1-C10 key behavior; JVM tests cover position parsing/serialization and bounds. Current runtime path is GameActivity key down/up forwarded through `VeraActivity` to the existing native input route.
 - Legacy branch adds settings/remapping/layout controls and a separate Rust-owned queued Android input/control-group path. Its source/tests were inspected but not executed; no legacy behavior should be called verified on `android-new`.
 - Preserve user control groups in the engine owner. In the old implementation, tap/hold group behavior is delegated to Rust; do not duplicate this decision in Kotlin.
 - Read-only audit agent report completed against exact SHAs in `UPSTREAM_TRACKING.md`; it made no source changes or builds.
+
+## Launcher and storage audit (source-level only)
+
+- Legacy `LauncherActivity` validates the requested profile through Rust JNI `launcher_selection_config` / `validate_launcher_selection`; keep this shared resolver rather than adding a Kotlin INI parser.
+- Legacy direct-path storage maps SAF trees to physical shared-storage paths and requires `MANAGE_EXTERNAL_STORAGE`. Current upstream instead uses SAF and copies into app-private staging. This is an unresolved design tradeoff against the prior read-in-place requirement; do not migrate broad storage permission blindly.
+- Current upstream has no launcher screen/profile catalog. The old branch includes mod/map catalogs, import jobs, campaigns, startup diagnostics, and bounded log archives. Source existence alone is not runtime validation.
+- Migration order: launcher/activity shell -> Rust-owned profile/config validation -> decide storage access model -> mod/map management -> diagnostics; defer campaign UI until current campaign progress writer and UX are confirmed.
 
 See `HANDOFF.md` for exact next actions.
