@@ -5,11 +5,11 @@ Updated 2026-11-27. Current authoritative plan: [IRON_HARBOR_MASTER_PLAN.md](IRO
 ## Repository state
 
 - Branch: `android-new`, tracking `vera20k-fork/android-new`.
-- Current HEAD: `64cd10c9b` (`Record Android storage validation checkpoint`); validated source tree: `02a593282da7dadf1033a5dda1e46766ae609ae7`.
+- Current HEAD: `ace04413e` (successful CI merge of upstream `cf0b6613e516940b55262b91970045f7fe398b3f` into Iron Harbor commit `67f6bc1da`).
 - Upstream base in the successful validation run: `d1e28004aa17dc445cbfee450cfe6fa55c5fe949`.
 - Legacy source reference: `android-development` at `1293fb441727e2522f6a284d88faf4f108a1ee3e`; its backup refs remain preserved. Do not merge the branch wholesale.
 - `out/` is untracked user/project data and has not been read, changed or deleted.
-- Launcher/storage/engine integration is committed and pushed through `02a5932`; `out/` remains untracked and untouched.
+- Launcher/storage/engine integration and package verification are committed and pushed. The workflow's tested upstream merge is now fast-forwarded locally; `out/` remains untracked and untouched.
 
 ## Completed and verified previously
 
@@ -27,7 +27,7 @@ Updated 2026-11-27. Current authoritative plan: [IRON_HARBOR_MASTER_PLAN.md](IRO
 - Legacy JNI/storage integration was inspected on both Kotlin and Rust sides. Launcher JNI calls have matching Rust exports; the folder-picker/import JNI methods are registered against `VeraActivity` and its signatures match. The current game HUD routes keys through GameActivity's normal key callbacks rather than separate JNI.
 - The old Ares support path was traced in `android-development`. Current Android startup, launcher preflight and asset-manager reconstruction now pass `Mods/AresSupport`; only `ares.mix` is considered, only for a selected mod, beneath that mod's own copy. Vanilla does not see the shared archive. A focused test covers vanilla isolation and mod precedence.
 - The existing NativeActivity SAF copy importer remains in place. The new launcher direct-picker flow still cannot import a cloud/provider tree as a fallback; it reports that a local folder is required. Do not describe launcher SAF fallback as working until wired to the importer.
-- Actions run [45977380464](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45977380464) passed Kotlin compilation/JVM tests, focused Rust config/mod/Ares regressions, ARM64 native compilation, debug APK assembly, and artifact upload. Artifact `IronHarborMobile-android-new-arm64-02a593282da7dadf1033a5dda1e46766ae609ae7` is 53,940,651 bytes, SHA-256 `d94b5feda35b569b09844fc6aa6db57df1075cecbd6c32ffd5e324958bf1ae1e`, retained until 2026-12-11. No local build or device test was performed.
+- Actions run [45981409504](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45981409504) passed Kotlin compilation/JVM tests, focused Rust config/mod/Ares regressions, ARM64 native compilation, Gradle APK assembly, package identity, debug signature, ZIP alignment, ARM64 library presence, ELF 16 KB LOAD alignment, and artifact upload. The APK package is `org.ironharbor.mobile.debug`. Artifact [download](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45981409504/artifacts/15189579979), named `IronHarborMobile-android-new-arm64-67f6bc1daf329113e4a01d4ae06267f179b57b6f`, is 55,151,674 bytes and retained through 2026-12-11. The built tree contains fork commit `67f6bc1da` plus upstream commit `cf0b6613e`; CI then pushed merge commit `ace04413e`. No device test was performed.
 
 ## Known gaps and gates
 
@@ -39,4 +39,4 @@ Updated 2026-11-27. Current authoritative plan: [IRON_HARBOR_MASTER_PLAN.md](IRO
 - Persistent release signing, full APK metadata/ABI/alignment checks, nightly release flow and the internal sync PR review remain open.
 - Physical gameplay validation is incomplete. User report says game archives failed with `EACCES` and no game installation configured; exact device/API/artifact and failing path were not captured.
 
-Next: finish source review of the integrated Kotlin/Rust storage changes and JNI inventory; run only `git diff --check`/static inspection locally; commit and push the coherent source slice; monitor Actions and inspect its logs/artifact. Continue with the launcher SAF fallback and remaining master-plan work after CI. No local Rust, Cargo, Gradle, or APK build/test.
+Next: connect the main launcher's explicit SAF copy fallback to the existing tested `VeraActivity` importer without changing normal read-in-place selection; add launcher route tests; then continue Phase 3–5. Preserve the upstream commit now merged by CI. No local Rust, Cargo, Gradle, or APK build/test.
