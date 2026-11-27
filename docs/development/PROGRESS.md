@@ -28,7 +28,7 @@ Updated 2026-11-27.
 
 - No persistent signing credential is configured; generated debug keys differ between clean runners, so APK update/install-over-install is not yet guaranteed.
 - No post-assembly APK identity, ABI, native-library, signature, ZIP alignment, or ELF alignment audit is in the workflow yet.
-- No Android device test has been performed on this branch.
+- One partial Android device test has been reported (installation/native startup/UI/HUD passed; game-file access failed). Full gameplay, device model/API, and artifact hash remain unverified; see `DEVICE_TEST_MATRIX.md`.
 - The automatic upstream sync schedule only activates when the workflow is present on the default branch. Internal PR #1 is still draft/open; its content has now run successfully on `android-new` and can be reviewed for internal merge.
 - No APK release is published; the APK is a downloadable workflow artifact, not a release.
 
@@ -45,5 +45,13 @@ Updated 2026-11-27.
 - Legacy direct-path storage maps SAF trees to physical shared-storage paths and requires `MANAGE_EXTERNAL_STORAGE`. Current upstream instead uses SAF and copies into app-private staging. This is an unresolved design tradeoff against the prior read-in-place requirement; do not migrate broad storage permission blindly.
 - Current upstream has no launcher screen/profile catalog. The old branch includes mod/map catalogs, import jobs, campaigns, startup diagnostics, and bounded log archives. Source existence alone is not runtime validation.
 - Migration order: launcher/activity shell -> Rust-owned profile/config validation -> decide storage access model -> mod/map management -> diagnostics; defer campaign UI until current campaign progress writer and UX are confirmed.
+
+## Physical-device storage result and follow-up
+
+- User-reported physical-device check of the latest `android-new` APK: installation succeeded, native engine started, UI rendered, and HUD was visible. Gameplay startup failed with `Could not load the game archives: access was denied (os error 13)`; the screen also reported no game installation configured. Device model/API, artifact SHA, selected folder, import completion, active config path, and failing archive path were not included, so neither message's root cause is confirmed. This is a partial runtime result, not gameplay readiness.
+- Current upstream SAF path is a copy importer: `VeraActivity.startFolderPicker` -> JNI `nativeOnFolderPicked` -> `startImport`/`ContentResolver` traversal -> `AssetImportJob` staging under app-private `filesDir` -> JNI configuration editor writes `[paths].ra2_dir` to the staged copy only after successful completion. The selected URI is not the runtime asset path.
+- The old Iron Harbor path stored a physical shared-storage path and read in place, but `SharedDataStorage.directPathForTree` requires Android's `Environment.isExternalStorageManager()` and therefore `MANAGE_EXTERNAL_STORAGE`. That is broad access and only works for local primary-volume folders. It is not safe to transplant as the default.
+- Engine file access currently requires filesystem paths: `AssetManager` enumerates the install directory and `MixArchive::load` opens/maps archive files. A SAF `content://` URI cannot be substituted directly. A persisted tree grant does not make raw native path reads valid.
+- Next: obtain diagnostic details for the reported open failure; show the active configured path and validate it through the engine-owned asset/config resolver before enabling Play; present a direct recovery instruction for no configured installation; then compare a SAF-backed archive source against optional explicitly granted direct-path access and current copy import. Keep game-file read-in-place as the goal, avoid duplicating the installation, and do not request all-files access by default. No source fix is considered verified yet.
 
 See `HANDOFF.md` for exact next actions.

@@ -13,7 +13,14 @@ No local Rust, Cargo, or Gradle compilation. `out/` is untracked user data and m
 - Run [45948571106](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45948571106) passed Kotlin/JVM tests, ARM64 native build, debug APK assembly, and upload.
 - Downloadable artifact: `IronHarborMobile-android-new-arm64-529cbe103361ee75b4862ebc0226ad143ebc4572` (53,330,817 bytes; 14-day retention).
 - Artifact source commit: `529cbe103361ee75b4862ebc0226ad143ebc4572`; the initial development-doc checkpoint was `c533ca3ebec18d245cd8215af92026074f5ba8bd`.
-- No device testing was performed. Do not report this as an installed/tested-on-phone build.
+- At the time of the Actions run, no device testing had been reported. A subsequent user-reported device check is recorded below; do not attribute it to CI.
+
+## Latest physical-device report
+
+- User confirmed latest `android-new` APK installation, native engine startup, UI rendering, and visible HUD. Game startup fails with archive access denied (`os error 13`); screen says no game installation is configured. Device/API/artifact hash and active config/source path were not supplied. This is partial runtime validation only; do not claim gameplay readiness.
+- Current SAF import copies the selected tree through `ContentResolver` to app-private staging and configures `ra2_dir` to that copy only after completion. It does not provide native runtime access to the chosen SAF URI.
+- Legacy in-place access maps a primary-volume SAF ID to a raw path and depends on `MANAGE_EXTERNAL_STORAGE`; do not port that permission by default. Native asset loading currently enumerates directories and memory-maps path-opened archives, so a tree URI cannot be used as-is.
+- Next Phase 4 action: use device diagnostics/config/path details to establish whether import was skipped/incomplete or an archive open is denied at the configured path; improve engine-owned launcher validation and recovery messaging; then evaluate a SAF-aware read source against optional user-granted broad access and the existing copy flow. Maintain the no-game-copy goal. No fix has been implemented or validated for this device report yet.
 
 ## Next actions
 
