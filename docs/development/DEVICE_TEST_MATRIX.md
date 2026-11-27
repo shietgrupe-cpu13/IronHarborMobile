@@ -6,7 +6,7 @@ Updated 2026-11-27. User-reported results are identified separately from CI. Dev
 
 | Device / API | ABI | Status | Observed checks |
 |---|---|---|---|
-| Xiaomi 2412DPC0AG / Android 16 (API 36) | ARM64 | User diagnostic, build `0.4.3` code `207`; artifact SHA not present | `org.ironharbor.mobile.debug`; startup preflight succeeded (66 ms), selected game folder and shared config were visible, and vanilla YR INI roots loaded. First game process was explicitly killed by `VeraActivity.applyAppIconOnUi` while switching aliases. Source removal is included in `4933e78d0`; hosted validation [45990321118](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45990321118) is in progress. Later shutdown abort remains unresolved: CheckJNI wrong-thread `JNIEnv*` during `DeleteGlobalRef`, with a captured HWUI destroyed-mutex tombstone. No fixed APK has been device-tested. |
+| Xiaomi 2412DPC0AG / Android 16 (API 36) | ARM64 | User diagnostic, build `0.4.3` code `207`; artifact SHA not present | `org.ironharbor.mobile.debug`; startup preflight succeeded (66 ms), selected game folder and shared config were visible, and vanilla YR INI roots loaded. First game process was explicitly killed by `VeraActivity.applyAppIconOnUi` while switching aliases. Source removal is included in `4933e78d0`; run [45992723660](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45992723660) is validating it with current changes. Later shutdown abort remains unresolved: CheckJNI wrong-thread `JNIEnv*` during `DeleteGlobalRef`, with a captured HWUI destroyed-mutex tombstone. No fixed APK has been device-tested. |
 
 | Device / API | ABI | Status | Observed checks |
 |---|---|---|---|
@@ -26,4 +26,4 @@ Updated 2026-11-27. User-reported results are identified separately from CI. Dev
 6. Revoke permission and verify a useful recovery message; restore permission and retry.
 7. Launch vanilla, one mod, load a map, select/move a unit, and check audio. Record failures and logs verbatim.
 
-No current uncommitted fix is device-verified. The prior EACCES report remains unresolved until an exact artifact and path/permission details are tested.
+The current campaign/maps changes are committed at `ebc52b3fd` and await run [45992723660](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45992723660); they have not been device-verified. The prior EACCES report remains unresolved until an exact artifact and path/permission details are tested.

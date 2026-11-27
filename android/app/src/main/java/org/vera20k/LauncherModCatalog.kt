@@ -54,35 +54,6 @@ internal data class LauncherModCatalog(
         selectedMod == null || installedMods.any { it.equals(selectedMod, ignoreCase = true) }
 
     companion object {
-        /** Files the Rust engine resolved for the just-validated selection. */
-        @JvmStatic
-        fun resourceSummary(configContents: String): String {
-            var section = ""
-            val resources = linkedMapOf<String, String>()
-            var profile: String? = null
-            configContents.lineSequence().forEach { raw ->
-                val line = raw.trim()
-                if (line.startsWith('[') && line.endsWith(']')) {
-                    section = line.substring(1, line.length - 1).trim()
-                } else if (section == "ini") {
-                    val separator = line.indexOf('=')
-                    if (separator > 0) {
-                        val key = line.substring(0, separator).trim()
-                        val value = line.substring(separator + 1).trim().removeSurrounding("\"")
-                        if (key == "profile") profile = value
-                        if (key in setOf("rules", "art", "ai", "sound", "eva", "modes", "map_catalog")) {
-                            if (value.isNotEmpty() && !line.startsWith('#')) resources[key] = value
-                        }
-                    }
-                }
-            }
-            val files = resources.entries.joinToString(", ") { (key, value) -> "$key=$value" }
-            return buildString {
-                append("Profile ${profile ?: "unchanged"}")
-                if (files.isNotEmpty()) append("; active files: $files")
-            }
-        }
-
         @JvmStatic
         fun read(filesDirectory: File): LauncherModCatalog {
             val installed = discoverModFolders(File(filesDirectory, "Mods"))

@@ -4,7 +4,7 @@ Updated 2026-11-27. Current authoritative plan: [IRON_HARBOR_MASTER_PLAN.md](IRO
 
 ## Latest device regression and current change
 
-- Latest upstream tip `4fba96a54` is merged into `android-new` at `09405db21` and pushed. Validation run [45990321118](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45990321118) has passed Kotlin/JVM and is running focused Rust tests; native ARM64/APK validation is pending.
+- Latest upstream tip `4fba96a54` is merged into `android-new` at `09405db21` and pushed. Commit `ebc52b3fd` adds the campaign-navigation removal and canonical Android map migration. Run [45992723660](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45992723660) passed Kotlin/JVM and focused Rust tests; ARM64 native compilation is active and APK validation is pending.
 - The supplied Android 16 Xiaomi diagnostic identifies two separate events. First, pid 6505 received an explicit `SIGKILL` at `VeraActivity.applyAppIconOnUi(VeraActivity.kt:900)` during game startup. The cause is confirmed: startup icon selection flips launcher aliases and deliberately kills the process. The secondary alias and Android VERA-icon controls/callback were removed in `4933e78d0`; the merged build is being validated, and device retest remains pending.
 - A later game process (pid 8754) has a distinct shutdown abort: AAudio streams close, then CheckJNI reports `Thread-5` calling `DeleteGlobalRef` with the main thread's `JNIEnv*`; Android also reports destroyed-mutex waits in HWUI's `CommonPool`. The supplied tombstone backtrace is only the HWUI worker, not the offending Thread-5 stack, so the exact owner is not established. Do not mark this crash fixed; trace the CPAL/JNI ownership and Android shutdown path before changing it.
 - The same diagnostic shows the launcher preflight succeeded in 66 ms and the engine loaded configured vanilla YR roots from `/storage/emulated/0/Documents/RA2Harbor/Config/config.toml`. This does not verify the listed mod/profile/map/renderer requirements.
@@ -12,7 +12,7 @@ Updated 2026-11-27. Current authoritative plan: [IRON_HARBOR_MASTER_PLAN.md](IRO
 ## Repository state
 
 - Branch: `android-new`, tracking `vera20k-fork/android-new`.
-- Current HEAD: `09405db21`, merging upstream `4fba96a54` with the Iron Harbor icon fix `4933e78d0`; latest Actions validation has not completed.
+- Current HEAD: `ebc52b3fd`, pushed to `vera20k-fork/android-new`; latest Actions validation has not completed.
 - Legacy source reference: `android-development` at `1293fb441727e2522f6a284d88faf4f108a1ee3e`; its backup refs remain preserved. Do not merge the branch wholesale.
 - `out/` is untracked user/project data and has not been read, changed or deleted.
 - Launcher/storage/engine integration and package verification are committed and pushed. The workflow's tested upstream merge is now fast-forwarded locally; `out/` remains untracked and untouched.
@@ -45,6 +45,12 @@ Updated 2026-11-27. Current authoritative plan: [IRON_HARBOR_MASTER_PLAN.md](IRO
 - Persistent release signing, full APK metadata/ABI/alignment checks, nightly release flow and the internal sync PR review remain open.
 - Physical gameplay validation is incomplete. User report says game archives failed with `EACCES` and no game installation configured; exact device/API/artifact and failing path were not captured.
 
-Current uncommitted milestone: removed the launcher Campaigns page/Home shortcut and dead campaign-selection intent; Android map paths now target `Configs/Maps`, while non-Android keeps `Maps`. Added non-destructive migration of legacy root Maps into one canonical folder, Rust path coverage, Kotlin migration coverage, and a focused Actions Rust test. `git diff --check` passes; no local compilation or tests were run. These changes still need review, commit/push, and hosted validation.
+Committed milestone `ebc52b3fd`: removed the launcher Campaigns page/Home shortcut and dead campaign-selection intent; Android map paths now target `Configs/Maps`, while non-Android keeps `Maps`. Added non-destructive migration of legacy root Maps into one canonical folder, Rust path coverage, Kotlin migration coverage, and a focused Actions Rust test. Static review and `git diff --check` passed; no local compilation or tests were run. Hosted validation is active in run [45992723660](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45992723660). No device verification yet.
+
+The selection trace confirms Android startup adopts the persisted data root, `GameConfig::load` reads the same published config, and `Mods::select_resources` calls the same `ModDefinition` / `asset_manager::mod_resources` resolver used by launcher validation. This source-level parity is not physical-device proof; the next device test should compare the preflight's effective resource report against the mod actually shown in game.
+
+## Current diagnostics change (not yet committed)
+
+The source trace confirmed launcher selection and engine startup both resolve a selected folder through the same `ModDefinition` / `asset_manager::mod_resources` path; Android startup then loads the selected shared config root before `App::initialize` uses `Mods::select_resources`. A concrete diagnostics gap remains: `nativeValidateCurrentSelection` constructed and validated the actual startup `AssetManager`, but returned only three INI names, and `launchGame` discarded that return value in the preflight log. The current change captures the result and reports the actual config file, canonical mod path, effective profile and INI names, registered startup archive names, and mounted `ares.mix` source. It also removes a second mod-manifest validation/config publication after folder selection and removes the launcher's misleading TOML-only “resolved resources” summary. This improves evidence for mod-switch reports; it does not prove on-device MO compatibility or campaign gameplay. Static diff review only; remote Kotlin/Rust/APK validation is pending.
 
 Next: finish static review of map migration and launcher cleanup, commit/push this batch, inspect Actions, then resume mod/profile correctness, storage fallback, renderer support and the unresolved shutdown crash. Preserve upstream sync. No local Rust, Cargo, Gradle, or APK build/test.

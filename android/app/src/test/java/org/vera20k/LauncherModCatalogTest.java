@@ -23,16 +23,6 @@ public class LauncherModCatalogTest {
     }
 
     @Test
-    public void displaysResolvedResourceFilenamesFromEngineConfig() {
-        String summary = LauncherModCatalog.resourceSummary(
-                "[ini]\nprofile = \"custom\"\nrules = \"rules-mo-custom.ini\"\nart = \"art-mo.ini\"\nai = \"ai-mo.ini\"\nmodes = \"my-modes.ini\"\nmap_catalog = \"my-maps.pkt\"\n");
-        assertTrue(summary.contains("Profile custom"));
-        assertTrue(summary.contains("rules=rules-mo-custom.ini"));
-        assertTrue(summary.contains("modes=my-modes.ini"));
-        assertTrue(summary.contains("map_catalog=my-maps.pkt"));
-    }
-
-    @Test
     public void mapsUnsupportedLegacyMoProfileToEngineAuto() throws Exception {
         Path files = tempDirectory("ih-mod-catalog-");
         Files.createDirectories(files.resolve("Config"));

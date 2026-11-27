@@ -669,13 +669,40 @@ pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeValidateCurrentSe
         vera20k::util::platform_dir::set(data_dir.to_path_buf());
         let (config_path, contents) = read_launcher_config(data_dir)?;
         let config = vera20k::util::config::GameConfig::parse_text_at(&contents, &config_path)?;
-        let roots = selected_launcher_resources(&config)?;
+        let selection = selected_launcher_resources(&config)?;
+        let roots = &selection.roots;
+        let archives = selection.archives.join(", ");
+        let mod_directory = selection
+            .mod_directory
+            .as_deref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "(vanilla)".to_owned());
+        let ares_source = selection.ares_source.as_deref().unwrap_or("not mounted");
         let message = format!(
-            "Validated {:?} profile; Rules={}, Art={}, AI={}",
-            config.ini.profile,
+            concat!(
+                "Validated engine selection: config={}; mod={}; effective profile={:?}; ",
+                "INI roots: Rules={}, Art={}, AI={}, Sound={}, EVA={}, Theme={}, Battle={}, ",
+                "Mission={}, MapSelect={}, Modes={}, MapCatalog={}, TheaterSuffix={:?}; ",
+                "registered startup archives ({}): {}; ares.mix source={}"
+            ),
+            config_path.display(),
+            mod_directory,
+            roots.profile(),
             roots.rules(),
             roots.art(),
             roots.ai(),
+            roots.sound(),
+            roots.eva(),
+            roots.theme(),
+            roots.battle(),
+            roots.mission(),
+            roots.mapsel(),
+            roots.modes(),
+            roots.map_catalog(),
+            roots.theater_suffix(),
+            selection.archives.len(),
+            archives,
+            ares_source,
         );
         Ok(env.new_string(message)?.into_raw())
     })();
@@ -1037,7 +1064,7 @@ fn validate_launcher_paths(config: &vera20k::util::config::GameConfig) -> anyhow
 
 fn selected_launcher_resources(
     config: &vera20k::util::config::GameConfig,
-) -> anyhow::Result<vera20k::util::ini_roots::IniRoots> {
+) -> anyhow::Result<LauncherSelectionDiagnostics> {
     validate_launcher_paths(config)?;
     let mod_dir = launcher_mod_directory(config)?;
     let folder = mod_dir
@@ -1066,7 +1093,21 @@ fn selected_launcher_resources(
         &resources.archives,
     )?
     .with_resource_config(&resources)?;
-    Ok(manager.ini_roots().clone())
+    Ok(LauncherSelectionDiagnostics {
+        roots: manager.ini_roots().clone(),
+        archives: manager.registered_archive_names(),
+        mod_directory: mod_dir,
+        ares_source: manager
+            .archive_with_source("ares.mix")
+            .map(|(source, _)| source.to_owned()),
+    })
+}
+
+struct LauncherSelectionDiagnostics {
+    roots: vera20k::util::ini_roots::IniRoots,
+    archives: Vec<String>,
+    mod_directory: Option<std::path::PathBuf>,
+    ares_source: Option<String>,
 }
 
 fn launcher_ares_path(settings_dir: &std::path::Path) -> std::path::PathBuf {

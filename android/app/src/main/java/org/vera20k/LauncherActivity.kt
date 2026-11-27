@@ -1748,7 +1748,7 @@ class LauncherActivity : Activity() {
                 File(it).isAbsolute && AndroidSharedStoragePath.relativeFolderName(File(dataDirectory, "Mods"), File(it)) == null
             }
             SharedDataStorage(this).setExternalModPath(externalPath)
-            modSelectionNote = "Saved. The engine validated the selected resources in place; they take effect on the next launch. ${LauncherModCatalog.resourceSummary(contents)}."
+            modSelectionNote = "Saved. Rust validated the selected mod manifest and profile; archive-backed resolution is checked again before Play. The selection takes effect on the next launch."
             refreshInstallation()
         } catch (error: Exception) {
             modSelectionNote = "Selection was not applied: ${error.message ?: error.javaClass.simpleName}"
@@ -1845,15 +1845,15 @@ class LauncherActivity : Activity() {
                 val config = nativeConfigForMod(selectedName, dataDirectory.absolutePath)
                 LauncherConfigPublisher.publish(dataDirectory, config)
                 storage.setExternalModPath(if (relativeName == null) selectedName else null)
-                selectedName to config
+                selectedName
             }
             result.onFailure { Log.e("IronHarborImport", "Mod selection failed for ${modDirectory.name}", it) }
             runOnUiThread {
                 modImporting = false
-                result.onSuccess { (name, config) ->
+                result.onSuccess { name ->
+                    modSelectionNote = "Saved. The engine accepted this mod configuration; archive-backed selection is checked again before Play."
+                    modImportNote = "$name was validated and selected in place. Its source files were not copied."
                     refreshInstallation()
-                    applyModSelection(name, null)
-                    modImportNote = "$name was validated and selected in place. Its source files were not copied. ${LauncherModCatalog.resourceSummary(config)}."
                 }.onFailure { error ->
                     modImportNote = "Could not use the selected mod in place: ${error.message ?: error.javaClass.simpleName}"
                     renderPage()
@@ -1938,6 +1938,7 @@ class LauncherActivity : Activity() {
         Thread({
             val started = SystemClock.elapsedRealtime()
             val stages = mutableListOf<String>()
+            var engineSelection = "not available"
             val measure: (String, () -> Unit) -> Unit = { name, action ->
                 val stageStarted = SystemClock.elapsedRealtime()
                 try {
@@ -1951,7 +1952,9 @@ class LauncherActivity : Activity() {
             val validation = runCatching {
                 syncUserManagedData(measure)
                 measure("engine_selection_validation") {
-                    nativeValidateCurrentSelection(engineDataDirectory().absolutePath)
+                    engineSelection = nativeValidateCurrentSelection(
+                        engineDataDirectory().absolutePath,
+                    )
                 }
             }
             val status = validation.exceptionOrNull()?.let { "failed: ${it.message ?: it.javaClass.simpleName}" } ?: "passed"
@@ -1961,6 +1964,12 @@ class LauncherActivity : Activity() {
                 appendLine("Result: $status")
                 appendLine("Total: ${SystemClock.elapsedRealtime() - started} ms")
                 appendLine("Selected mod: ${modCatalog.selectedMod ?: "Vanilla"}")
+                val selectionLabel = if (validation.isSuccess) {
+                    "Effective engine selection"
+                } else {
+                    "Engine selection details unavailable"
+                }
+                appendLine("$selectionLabel: $engineSelection")
                 appendLine("Game source: ${SharedDataStorage(this@LauncherActivity).gameSourceName() ?: "configured filesystem path"}")
                 stages.forEach(::appendLine)
             }
