@@ -140,7 +140,7 @@ jobs:
       - name: Run focused Android data-root config regression
         if: steps.upstream.outputs.validate == 'true'
         shell: bash
-        run: python -m tools.cargo_run -- test -p vera20k-core --lib util::config::android_data_config_is_searched_after_working_directory_and_before_executable
+        run: python -m tools.cargo_run -- test -p vera20k-core --lib util::config::tests::android_data_config_is_searched_after_working_directory_and_before_executable
 
       - name: Install pinned Android NDK
         if: steps.upstream.outputs.validate == 'true'
