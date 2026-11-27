@@ -2,6 +2,13 @@
 
 Updated 2026-11-27.
 
+## Latest source/CI checkpoint (2026-11-27)
+
+- `origin/main` fetched at `068e965efcf27bfccc59fab3663fe7bded3788be`; the new upstream history is `ec197f8a9` and merge PR #5323, a documentation/contract change relaxing a performance-hash requirement. No engine or Android implementation change was present in this update.
+- Fork `android-new` is at `e1af36488dc270b73578fdc9166e63f97a52dc43`, with the upstream merge pushed by workflow [46042175052](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46042175052). The run passed focused tests and ARM64 APK validation; artifact [15222025462](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46042175052/artifacts/15222025462) is build-only evidence.
+- Latest fork-specific commits: `9556681c0` adds the guarded legacy client-map mode inference; `f4d94a34c` unifies in-game overlay positions with portable launcher HUD settings; `aa6b0949d` and `44f5ce7a1` correct JVM test imports/legacy fixtures. No external upstream PR is prepared or submitted.
+- These changes pass source tests only. Android-specific behavior stays fork-only pending POCO test. The full HUD editor, true mod resource selection on device, AAudio/JNI shutdown ownership, SAF fallback and renderer runtime remain open. Do not claim startup or FPS gains from these tests.
+
 ## Current Android regression work (unverified)
 
 The current working tree adds Android launcher renderer persistence on top of

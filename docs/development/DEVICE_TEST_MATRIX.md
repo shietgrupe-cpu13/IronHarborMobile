@@ -2,6 +2,14 @@
 
 Updated 2026-11-28. User-reported results are identified separately from CI. Device model/API and artifact hashes are recorded only when supplied.
 
+## Latest CI artifact — awaiting physical-device test
+
+| Device / API | ABI | Status | Observed checks |
+|---|---|---|---|
+| GitHub Actions run [46042175052](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46042175052) | ARM64 | Build-only, fork source `44f5ce7a1`, final branch after upstream merge `e1af36488` | Kotlin/JVM and 13 focused Rust tests passed; ARM64 optimized `fast` library and debug APK assembled; package `org.ironharbor.mobile.debug`, version `0.4.3` code `208`; v2/v3 signature verified; ZIP alignment and ELF LOAD alignments `[16384, 16384, 16384, 16384]`; artifact [15222025462](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46042175052/artifacts/15222025462), uploaded ZIP SHA-256 `d3ceb9070b4283d0897a8e815e5fa0b1aac0c70cfb39d6bcc7775b4aa873cb1d`. Not installed or played on a device. |
+
+Required manual checks for this APK: update/install without uninstalling, verify prior HUD positions survive and portable import/export remains stable, select Red Resurrection and confirm actual mode/map catalog rows appear (including nested map paths), launch a match, inspect requested vs effective mod/profile/archive source, switch back to vanilla, and test clean exit/relaunch. Also verify MO resources, renderer selection and long-session stability. No new device measurements exist for total startup time, mod/profile switching, FPS, frame pacing or memory.
+
 ## Red Resurrection map catalog report (2026-11-28)
 
 | Device / API | ABI | Status | Observed checks |

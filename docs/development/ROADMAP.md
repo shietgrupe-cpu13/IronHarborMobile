@@ -2,6 +2,23 @@
 
 Updated 2026-11-27. Authoritative specification: [IRON_HARBOR_MASTER_PLAN.md](IRON_HARBOR_MASTER_PLAN.md). Integration branch: `android-new`.
 
+## Latest checkpoint — workflow 46042175052 passed
+
+`android-new` is now at `e1af36488dc270b73578fdc9166e63f97a52dc43`, including upstream merge `068e965efcf27bfccc59fab3663fe7bded3788be`. Run [46042175052](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46042175052) passed Kotlin/JVM, all 13 focused Rust regressions, ARM64 optimized `fast` library build, APK assembly, persistent signature, package identity and ZIP/ELF alignment verification, artifact upload and upstream merge push. Debug artifact [15222025462](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46042175052/artifacts/15222025462) is available until 2026-12-11. No device/gameplay validation was performed.
+
+The Red Resurrection catalog registry fallback and HUD layout migration/backup tests are CI-verified. This does not verify actual RR gameplay, MO gameplay, or the expanded HUD on hardware. The full in-game HUD editor remains incomplete; the current overlay is compact and the settings preview still runs in the launcher.
+
+### Next order
+
+1. Integrate existing layout editing into the GameActivity HUD path and make the overlay consume its persisted layout settings; add focused JVM tests, then validate via Actions.
+2. Keep startup/mod/profile latency claims evidence-based. Source confirms launcher selection and Play preflight defer archive indexing to game startup; equivalent device startup and switching measurements are still required before claiming the 26,312 ms stall was fixed.
+3. Continue Red Resurrection/MO resource and map compatibility with actual resolved-resource diagnostics and POCO validation. The latest passing Rust tests validate parser/resolver paths only.
+4. Trace and fix the shutdown `DeleteGlobalRef`/destroyed-mutex report at its actual owner. Do not treat the 1.2 s delayed process kill as proof of clean teardown.
+5. Finish the launcher SAF fallback, config migration, supported renderer behavior and remaining launcher cleanup. Preserve direct access, existing data and the working renderer.
+6. Continue full HUD work (buttons, bindings, profiles, import/export and lifecycle) and then upstream contribution preparation.
+
+Old run `46023643484`/`46027519203`/`46007825583` notes below are historical; their failures are fixed or superseded by `46042175052`. Do not treat them as current blockers.
+
 ## Immediate regression milestone — renderer and MO profile
 
 Commit `db2917dd5` removes duplicate archive indexing from JNI validation, moves launcher scans and mod/profile configuration off the UI thread, recognizes Mental Omega from `mod.ini`, discovers its loose nested-map catalog generically, and corrects native-thread Activity UI calls and JNI/lifecycle ownership. Kotlin/JVM checks passed, but run [46023643484](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46023643484) failed its production nested-map loader test before ARM64 packaging. A shared case-insensitive nested-path fix is in the worktree awaiting CI. Device retest is still required. Prior renderer/MO selector changes also remain device-unverified.

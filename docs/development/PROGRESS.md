@@ -2,6 +2,15 @@
 
 Updated 2026-11-28. Current authoritative plan: [IRON_HARBOR_MASTER_PLAN.md](IRON_HARBOR_MASTER_PLAN.md).
 
+## Latest verified checkpoint — 2026-11-27 / 2026-11-28
+
+- Current branch `android-new` is at `e1af36488dc270b73578fdc9166e63f97a52dc43` and tracks `vera20k-fork/android-new`. The Actions workflow fast-forwarded to this SHA after successfully validating and merging upstream `068e965efcf27bfccc59fab3663fe7bded3788be` (PR #5323); local `HEAD` was fast-forwarded to the same remote. The preserved backup branch still exists. Untracked `out/` remains untouched.
+- Run [46042175052](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46042175052) completed successfully. Kotlin/JVM compilation and tests passed; all 13 focused Android storage, renderer, MO and map Rust test filters ran and passed; ARM64 `fast` native compilation completed; Gradle assembled the debug APK; persistent signing, package/signature, ZIP alignment, ARM64 library and 16 KB ELF LOAD alignment verification passed; artifact upload and upstream merge push succeeded.
+- APK artifact: [download from Actions](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46042175052/artifacts/15222025462), artifact name `IronHarborMobile-android-new-arm64-44f5ce7a1babb08f44b74c09e511e7a7dfa6e269`, 54,076,891 bytes, ZIP SHA-256 `d3ceb9070b4283d0897a8e815e5fa0b1aac0c70cfb39d6bcc7775b4aa873cb1d`, available through 2026-12-11. APK metadata is `org.ironharbor.mobile.debug`, version `0.4.3` / code `208`, compile SDK 36. v2 and v3 signatures verified with the persistent fork certificate (SHA-256 `7440ad6a732f410f570b55b8d7e0138b0a9ab318ce5553afc02e8e0527ce1711`). ARM64 ELF LOAD alignments were `[16384, 16384, 16384, 16384]`. Build-only validation; no device retest or gameplay result is implied.
+- The Red Resurrection legacy client-catalog regression now passes its focused Rust test: a catalog without `[GameModes]` can infer modes only from map memberships/aliases with a corresponding mode section, while existing unsupported-option filtering remains active. This verifies the loader's parser path, not a complete Red Resurrection match on device.
+- HUD position migration, launcher/game preference-store unification and v1-v3 layout backup compatibility pass the hosted JVM tests. This does not complete the requested dynamic in-game editor: adding/duplicating/remapping controls, named profiles and physical touch reliability remain open.
+- Upstream update `ec197f8a9` / merge `068e965ef` only relaxes the upstream performance-hash documentation rule; no Android source was displaced. No performance measurement was collected, so no FPS or startup improvement is claimed.
+
 ## 2026-11-28 — Red Resurrection catalog and HUD layout persistence
 
 - Fast-forwarded `android-new` from `c73a8606f` to remote `ae1ce7c09`, preserving untracked `out/`. The six incoming commits are upstream engine changes; no local build was run.

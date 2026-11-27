@@ -2,6 +2,16 @@
 
 Updated 2026-11-28. Read [IRON_HARBOR_MASTER_PLAN.md](IRON_HARBOR_MASTER_PLAN.md) as the authoritative specification.
 
+## Current checkpoint — CI green at `e1af36488`
+
+- Repository `shietgrupe-cpu13/IronHarborMobile`, branch `android-new`, current `HEAD` and remote tracking ref are `e1af36488dc270b73578fdc9166e63f97a52dc43`. It contains upstream merge `068e965efcf27bfccc59fab3663fe7bded3788be` (PR #5323). The branch is clean except untracked `out/`; preserve it. `android-development` and `backup/android-development-2026-11-27` remain present.
+- Workflow [46042175052](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46042175052) passed Kotlin/JVM tests, the 13 focused Rust tests, ARM64 `fast` library build, APK assembly, persistent signing, package and alignment checks, upload and upstream merge push. Artifact [15222025462](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46042175052/artifacts/15222025462) is the 54,076,891-byte `0.4.3` / code `208` ARM64 debug APK; SHA-256 of uploaded artifact ZIP: `d3ceb9070b4283d0897a8e815e5fa0b1aac0c70cfb39d6bcc7775b4aa873cb1d`. Package `org.ironharbor.mobile.debug`, v2/v3 signature, persistent cert SHA-256 `7440ad6a732f410f570b55b8d7e0138b0a9ab318ce5553afc02e8e0527ce1711`, ARM64 ELF LOAD alignment 16 KB. It is not device-tested.
+- Completed in this checkpoint: Red Resurrection-style catalog mode inference regression passes hosted Rust tests; HUD position preference migration and old-backup compatibility pass hosted JVM tests. These changes are in commits `9556681c0`, `f4d94a34c`, `aa6b0949d`, `44f5ce7a1`; Actions then merged upstream as `e1af36488`.
+- Do not rely on the old “Active checkpoint — map catalog and HUD preference integration” below as current; its claims that current source is uncommitted and validation is pending are superseded by this checkpoint. Earlier checkpoints are retained only as history.
+- Next code milestone: continue the in-game HUD from the current compact overlay and launcher-only preview toward the master plan's actual in-game editor. Source review found the overlay creates only HUD/Edit/T/C1-C10, while the launcher editor's catalog/settings include more actions; global/per-button scale and opacity are not applied by the compact overlay. Implement one focused integration slice with JVM regression coverage through existing settings/layout owners, then push and validate using Actions. Keep the existing key forwarding path; do not add an event loop.
+- Also continue independent Phase 3 work after that slice: device-check the new map catalog and selections; diagnose the CheckJNI `DeleteGlobalRef` shutdown issue from the owning library/thread rather than treating the delayed process kill as proof; finish launcher SAF fallback, renderer/MO source parity and safe config migration. Record physical checks as pending until actually run.
+- No local Rust/Cargo/Gradle/APK compilation. Do not delete or stage `out/`. Do not publish a public release or external upstream PR without approval.
+
 ## Active checkpoint — map catalog and HUD preference integration
 
 - Branch `android-new` fast-forwarded to `ae1ce7c09` from the remote, preserving untracked `out/`. Current source changes are uncommitted; do not stage `out/`.
