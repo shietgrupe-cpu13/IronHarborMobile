@@ -8,7 +8,8 @@ Updated 2026-11-27. Read [IRON_HARBOR_MASTER_PLAN.md](IRON_HARBOR_MASTER_PLAN.md
 - WIP in this checkout restores Automatic/Vulkan/OpenGL ES in launcher Settings. JNI reads/writes the engine's `GraphicsAPI` in VERA.INI. Startup fallback gets one alternate backend attempt (Vulkan/primary to GLES, GLES to primary) and then stops. Both Vulkan and GLES are optional manifest features. wgpu 30.0.1 default features include both (`https://docs.rs/crate/wgpu/30.0.1/features`). Physical-device rendering remains unverified.
 - WIP restores `mo` as an actual `IniProfile`: MO Rules/Art/AI and presentation roots, `expandmo`/`mapsmo`/`multimo`/`thememo`/`movmo` archive defaults, and per-slot overrides from the selected folder's `mod.ini`. MO profile enables Ares for that launch; the engine resolver retains per-mod Ares precedence. Tests are authored but have not run.
 - Android workflow now has targeted renderer and MO test filters, an asset-manager fixture proving actual resource reads/mounts, and an ancestry-safe push after a concurrent-advance failure in run `45995480713`.
-- Do not run local Cargo, Rust, Gradle or APK tests. Next: verify source diff and exact test filters; update status docs; commit/push this focused fix; inspect Actions logs/artifact; then request device checks. No release is authorized by this task.
+- Actions run `46005997470` passed Kotlin/JVM compilation/tests but failed while compiling the renderer persistence test: `tempfile` is not a `vera20k` crate test dependency. Fix now uses a unique standard-library temp directory, matching existing test conventions. No Android Rust build/APK was reached.
+- Do not run local Cargo, Rust, Gradle or APK tests. Next: `git diff --check`, commit/push the fixture correction, inspect remote Actions logs/artifact; then request device checks. No release is authorized by this task.
 
 ## Latest checkpoint
 

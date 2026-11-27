@@ -2036,22 +2036,27 @@ ScoreVolume=0.3\nIsScoreShuffle=yes\nSoundLatency=4\nInGameMusic=no\n[VERA]\nZoo
 
     #[test]
     fn launcher_renderer_write_is_narrow_persistent_and_rejects_desktop_only_apis() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("VERA.INI");
+        let directory = std::env::temp_dir().join(format!(
+            "vera-launcher-renderer-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("VERA.INI");
         std::fs::write(&path, b"[VERA]\nZoom=125\nGraphicsAPI=auto\n[AUDIO]\nKeep=yes\n")
             .unwrap();
 
-        set_launcher_graphics_api(directory.path(), "opengles").unwrap();
+        set_launcher_graphics_api(&directory, "opengles").unwrap();
         let bytes = std::fs::read(&path).unwrap();
         let text = String::from_utf8(bytes.clone()).unwrap();
         assert!(text.contains("GraphicsAPI=opengl"), "{text}");
         assert!(text.contains("Zoom=125") && text.contains("Keep=yes"), "{text}");
         assert_eq!(
-            launcher_graphics_api(directory.path()).backend(),
+            launcher_graphics_api(&directory).backend(),
             Some(wgpu::Backend::Gl)
         );
-        assert!(set_launcher_graphics_api(directory.path(), "dx12").is_err());
+        assert!(set_launcher_graphics_api(&directory, "dx12").is_err());
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
