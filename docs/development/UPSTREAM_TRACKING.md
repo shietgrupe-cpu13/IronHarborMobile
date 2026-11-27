@@ -5,7 +5,7 @@ Updated 2026-11-27.
 ## Revision relationship
 
 - Upstream `YuriPlanet/vera20k` `main` fetched at `814b6c3c043fc18c0952576e4f4bca9745981fe0` (`Add a driver policy for externally controlled computer houses`, PR #4576).
-- Iron Harbor fork branch `android-new`: `ebc52b3fdbc2dba99b60a19ff661d91bcbe8f44a`, containing upstream `4fba96a54` plus Iron Harbor-specific commits at the last remote fetch. Upstream `814b6c3c0` is ahead by one commit. Run [45992723660](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45992723660) has completed its “Merge latest upstream main” step, but its tested merge SHA and final fork ref must be checked after the job completes.
+- Iron Harbor fork `android-new`: `6afcd67980f39497f9b6e99c6243148a7deecf08`; upstream `814b6c3c0` is integrated at merge `ac39fc2db`. Upstream sync/build validation [45992723660](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45992723660) passed and uploaded an ARM64 debug APK. Current mod diagnostics commit validation is run [45995480713](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45995480713).
 - Legacy mobile reference: `android-development` at `1293fb441727e2522f6a284d88faf4f108a1ee3e`; backup branches retained. Do not merge it wholesale.
 - Internal sync PR #1 remains to be reviewed/merged into the default branch before scheduled synchronization can be relied upon.
 
@@ -22,7 +22,7 @@ Updated 2026-11-27.
 
 ## Current integration status
 
-The latest focused Android map/campaign change is committed at `ebc52b3fd` and pending hosted validation in run [45992723660](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45992723660). It removes the launcher campaign page and uses `Configs/Maps` for Android while preserving non-Android `Maps`, with a non-destructive legacy map migration. It has not been device-tested.
+The Android map/campaign change at `ebc52b3fd` passed hosted validation in run [45992723660](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45992723660). It removes the launcher campaign page and uses `Configs/Maps` for Android while preserving non-Android `Maps`, with a non-destructive legacy map migration. It has not been device-tested.
 
 The newly fetched upstream commit adds a selectable driver policy for offline computer houses, carries it into simulation/save state, and explicitly refuses it in network rooms. It is upstream gameplay/simulation work, not Android frontend code. Do not selectively port it; let the existing sync workflow validate and merge it as a complete upstream commit, then run its focused regressions as part of that workflow.
 

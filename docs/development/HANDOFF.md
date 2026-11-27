@@ -4,16 +4,16 @@ Updated 2026-11-27. Read [IRON_HARBOR_MASTER_PLAN.md](IRON_HARBOR_MASTER_PLAN.md
 
 ## Latest checkpoint
 
-- `android-new` is at pushed commit `ebc52b3fd`, including upstream `4fba96a54`, icon fix `4933e78d0`, launcher campaign-navigation removal and the `Configs/Maps` migration. Untracked `out/` belongs to the user; preserve it.
+- `android-new` is at pushed commit `6afcd6798`, including upstream merge `ac39fc2db` (upstream commit `814b6c3c0`), icon fix `4933e78d0`, campaign-navigation removal, `Configs/Maps` migration and mod-preflight diagnostics. Untracked `out/` belongs to the user; preserve it.
 - Device log proves startup SIGKILL cause: Rust's app-icon preference called `VeraActivity.applyAppIconOnUi`, which flipped `LauncherRetail`/`LauncherVera`, called `finishAndRemoveTask`, then `Process.killProcess`. The app is Iron Harbor-branded, so the Android variant-switching path and Android VERA Icon controls were removed; one Iron Harbor launcher alias remains. Validate this on Actions and then on-device.
 - Separate shutdown crash is not fixed. After AAudio close, CheckJNI reports Thread-5 using main-thread `JNIEnv*` in `DeleteGlobalRef`; the captured tombstone backtrace is an HWUI `CommonPool` worker waiting on a destroyed mutex. Rust Android entry uses `android-activity 0.6.0`; audio uses `rodio 0.22.2` -> `cpal 0.17.3` and CPAL's Android AAudio/JNI path. Trace ownership at shutdown; do not apply a speculative lifecycle/audio workaround.
 - Diagnostic reports launcher preflight in 66 ms and vanilla YR config from existing `Documents/RA2Harbor/Config/config.toml`. This does not verify mod switching or renderer support.
-- Current campaign/maps changes are committed; Actions run [45992723660](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45992723660) is building focused regressions, then ARM64/APK validation. Continue with effective mod/profile/MO resolution, SAF fallback, renderer support and shutdown ownership.
+- Campaign/maps changes are committed and run [45992723660](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45992723660) passed full debug APK validation. Current run [45995480713](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45995480713) validates the pushed mod-diagnostics change. Continue with on-device mod/profile/MO validation, SAF fallback, renderer support and shutdown ownership.
 
 ## Current checkout
 
 - `E:\VERA20K-ANDROID`, branch `android-new`; fork remote `vera20k-fork` is `shietgrupe-cpu13/IronHarborMobile`, upstream remote `origin` is `YuriPlanet/vera20k`.
-- HEAD `ebc52b3fd` is pushed; Actions run [45992723660](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45992723660) is in progress. The untracked `out/` tree is user data; leave it untouched.
+- HEAD `6afcd6798` is pushed; Actions run [45995480713](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45995480713) is in progress. The untracked `out/` tree is user data; leave it untouched.
 - No local Rust/Cargo/Gradle/APK compilation. Commit and push focused changes, validate with GitHub Actions, and inspect its logs/artifacts.
 
 ## Architecture decisions
@@ -28,9 +28,9 @@ Updated 2026-11-27. Read [IRON_HARBOR_MASTER_PLAN.md](IRON_HARBOR_MASTER_PLAN.md
 
 ## Current WIP and next action
 
-The committed integration restores the legacy shared-root helper, profile-aware RA2/YR archive checks, canonical-plus-legacy config resolution and mod-only shared Ares precedence. Prior Actions run [45981409504](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45981409504) passed that storage/profile/Ares baseline and APK validation. Campaign navigation removal and `Configs/Maps` path migration are committed at `ebc52b3fd`; run [45992723660](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45992723660) is still validating them. No device validation has occurred.
+The committed integration restores the legacy shared-root helper, profile-aware RA2/YR archive checks, canonical-plus-legacy config resolution and mod-only shared Ares precedence. Run [45992723660](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45992723660) passed campaign removal, `Configs/Maps` migration, ARM64 build and APK validation. Run [45995480713](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45995480713) validates the follow-on mod-resolver diagnostics and duplicate-write removal. No device validation has occurred.
 
-Uncommitted mod/diagnostics changes: launcher preflight now retains the Rust validation result. It reports the exact config path, mod path, effective INI names, registered startup archive names, and mounted `ares.mix` source from the same `AssetManager` construction used by preflight. Selecting a mod folder also no longer validates and publishes its config a second time; the old TOML-only summary that could misstate manifest-resolved files was removed. This does not itself establish MO gameplay compatibility. Run [45992723660](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45992723660) is still active, so don't push until that run finishes or is otherwise accounted for; a push cancels superseded workflows.
+Committed in `39a49777f` and pushed in `6afcd6798`: launcher preflight now reports the exact config path, mod path, effective INI names, registered startup archives and mounted `ares.mix` source from the same `AssetManager` used for validation. Mod-folder selection no longer repeats manifest validation/config publication, and the TOML-only summary that could misstate manifest-resolved files is gone. This does not establish MO gameplay compatibility. Validate through run [45995480713](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45995480713) and a later device test.
 
 JNI inventory: all seven `LauncherActivity` external functions have corresponding Rust exports. `VeraActivity` picker/import callbacks are dynamically registered and its other importer/network functions have matching exports. The HUD uses GameActivity's standard key callbacks. `CameraZoomSettingsService.nativeApplyCameraZoomLimits` is the one orphan declaration found: no current Rust export, manifest registration or call site; keep it dormant and record it as unsupported pending an independent migration.
 
