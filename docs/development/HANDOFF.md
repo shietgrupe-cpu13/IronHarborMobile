@@ -1,77 +1,37 @@
-﻿# Iron Harbor Mobile handoff
+# Iron Harbor Mobile handoff
 
-Updated 2026-11-28. Read [IRON_HARBOR_MASTER_PLAN.md](IRON_HARBOR_MASTER_PLAN.md) as the authoritative specification.
+Updated 2026-11-28. The authoritative specification is [IRON_HARBOR_MASTER_PLAN.md](IRON_HARBOR_MASTER_PLAN.md).
 
-## Current checkpoint — CI green at `e1af36488`
+## Repository and latest validation
 
-- Repository `shietgrupe-cpu13/IronHarborMobile`, branch `android-new`, current `HEAD` and remote tracking ref are `e1af36488dc270b73578fdc9166e63f97a52dc43`. It contains upstream merge `068e965efcf27bfccc59fab3663fe7bded3788be` (PR #5323). The branch is clean except untracked `out/`; preserve it. `android-development` and `backup/android-development-2026-11-27` remain present.
-- Workflow [46042175052](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46042175052) passed Kotlin/JVM tests, the 13 focused Rust tests, ARM64 `fast` library build, APK assembly, persistent signing, package and alignment checks, upload and upstream merge push. Artifact [15222025462](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46042175052/artifacts/15222025462) is the 54,076,891-byte `0.4.3` / code `208` ARM64 debug APK; SHA-256 of uploaded artifact ZIP: `d3ceb9070b4283d0897a8e815e5fa0b1aac0c70cfb39d6bcc7775b4aa873cb1d`. Package `org.ironharbor.mobile.debug`, v2/v3 signature, persistent cert SHA-256 `7440ad6a732f410f570b55b8d7e0138b0a9ab318ce5553afc02e8e0527ce1711`, ARM64 ELF LOAD alignment 16 KB. It is not device-tested.
-- Completed in this checkpoint: Red Resurrection-style catalog mode inference regression passes hosted Rust tests; HUD position preference migration and old-backup compatibility pass hosted JVM tests. These changes are in commits `9556681c0`, `f4d94a34c`, `aa6b0949d`, `44f5ce7a1`; Actions then merged upstream as `e1af36488`.
-- Do not rely on the old “Active checkpoint — map catalog and HUD preference integration” below as current; its claims that current source is uncommitted and validation is pending are superseded by this checkpoint. Earlier checkpoints are retained only as history.
-- Next code milestone: continue the in-game HUD from the current compact overlay and launcher-only preview toward the master plan's actual in-game editor. Source review found the overlay creates only HUD/Edit/T/C1-C10, while the launcher editor's catalog/settings include more actions; global/per-button scale and opacity are not applied by the compact overlay. Implement one focused integration slice with JVM regression coverage through existing settings/layout owners, then push and validate using Actions. Keep the existing key forwarding path; do not add an event loop.
-- Also continue independent Phase 3 work after that slice: device-check the new map catalog and selections; diagnose the CheckJNI `DeleteGlobalRef` shutdown issue from the owning library/thread rather than treating the delayed process kill as proof; finish launcher SAF fallback, renderer/MO source parity and safe config migration. Record physical checks as pending until actually run.
-- No local Rust/Cargo/Gradle/APK compilation. Do not delete or stage `out/`. Do not publish a public release or external upstream PR without approval.
+- Repository: `shietgrupe-cpu13/IronHarborMobile`; branch: `android-new`; local `HEAD` and `vera20k-fork/android-new`: `8e02d79b80eedca143c1c900bd5a7eb45fb83675`.
+- Preserve backup and `android-development` refs. The only untracked path is `out/`; do not inspect, stage, delete, or alter it.
+- Actions [46050368117](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46050368117) succeeded: Kotlin/JVM tests, focused Rust regressions, optimized ARM64 `fast` library, Gradle debug APK, persistent signing, identity/signature, ZIP/ELF alignment and artifact upload all passed. No device test occurred.
+- Latest debug APK artifact: [download from Actions](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46050368117/artifacts/15225361525). Name `IronHarborMobile-android-new-arm64-8e02d79b80eedca143c1c900bd5a7eb45fb83675`; 54,083,163 bytes; artifact digest `aecb19d0f1b9c09f91973f5bd2d9ea6ec452d32a02545acd03fa5827b0bb8a0e`; expires 2026-12-11. Package/signature/alignment checks passed.
+- Upstream `origin/main` was fetched at `068e965efcf27bfccc59fab3663fe7bded3788be`; upstream `ec197f8a9` was documentation/contract only. Run 46046233771 did not merge newer upstream changes.
+- Commit `8e02d79b8` adds individual HUD button opacity through the shared layout editor and advances HUD export/import to schema v4 while retaining v1-v3 decoding. Its hosted checks passed; actual editor usability, import/update persistence and touch behavior still need device verification.
 
-## Active checkpoint — map catalog and HUD preference integration
+## Current implementation status
 
-- Branch `android-new` fast-forwarded to `ae1ce7c09` from the remote, preserving untracked `out/`. Current source changes are uncommitted; do not stage `out/`.
-- Device logs and the selected Red Resurrection files are in `E:\Temp\IHLogs-20261128`. `ClientDefinitions.ini` selects the mod's `INI\\MPMaps.ini`; it contains map-level mode memberships but no `[GameModes]` registry. `ClientInstall::read` currently yields no modes, then skirmish roster filtering drops every mode. A conservative inference fallback and focused Rust regression are now present.
-- `TouchHudSettings` already owns import/export (format `iron-harbor-hud`, versions 1–3). The in-game compact overlay previously used another SharedPreferences file and format. It now uses the launcher store, migrates legacy coordinates without deleting them, and applies launcher IDs/coordinates. Export/import now also preserves active control set and hidden state while accepting old files. Kotlin regressions were edited but not yet run.
-- The only validation run so far is `git diff --check`; no local Rust, Gradle, or APK compilation was performed. The workflow now includes the new Rust test. Next: review/fix the diff, update/checkpoint docs, commit and push `android-new`, monitor GitHub Actions logs, fix deterministic failures, then install its debug APK for map and HUD-layout device checks. Do not claim runtime verification until tested on device.
-- Update: run [46041308051](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46041308051) failed at Kotlin unit-test compilation because `TouchHudSettingsTest.kt` used `assertFalse` without importing it. Production Kotlin compiled; later Rust/ARM64/APK stages did not run. The import is fixed locally and needs a new push/run.
-- Run [46041837302](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46041837302) compiled tests and found the v1 backup fixture retained new optional `hidden=true`; decoder behavior was correct. The fixture now removes `activeSet` and `hidden` to model an actual old export.
-- Stable signing was added in the preceding workflow change. A normal update with the same package/signature preserves app preferences; a prior uninstall/reinstall can erase private preferences. Shared `Documents/RA2Harbor` data is separate and must remain untouched.
+- Commit `1703630f7` integrates the configured action list and persisted launcher HUD layout with `TouchHudOverlay`. Existing positions, size/global scale, global opacity, visibility, set selection and saved layout editor are consumed by gameplay. EDIT toggles drag mode; EDIT long-press opens the shared layout editor. Held route keys release on pause, focus loss and destruction. Focused JVM tests passed.
+- The HUD remains partial. Per-button opacity is implemented in `8e02d79b8` and CI-verified, but awaits device testing. Arbitrary add/duplicate/rename, named profiles, broader modifier/chord editing and physical multitouch testing remain.
+- Red Resurrection catalog inference, nested-map path resolution, HUD backup migration, and HUD action/layout parser changes have host-side regressions. They do not prove actual RR or MO gameplay/resource selection on device.
+- The reported 26,312 ms Play preflight was traced to duplicate archive indexing and source changes defer it, but equivalent device startup/mod/profile timings are still needed. No FPS/startup/memory improvement is measured or claimed.
+- The cross-thread CheckJNI `DeleteGlobalRef` shutdown crash remains unresolved. Trace the actual JNI/audio thread owner; the partial HWUI destroyed-mutex tombstone is not enough to identify the cause.
+- Source audit found no explicit Rust `DeleteGlobalRef`. Static `ACTIVITY` retains an `AndroidApp` clone for IME hooks and `ActivityAppGuard` clears it on `android_main` return; the pinned 0.6.0 API documents JNI attachment/context teardown at that boundary. This is a lifecycle risk, not a proven cause. The actual Thread-5 native backtrace or a reproducible CheckJNI shutdown trace is still needed.
+- Launcher SAF copy fallback, full config migration validation and physical renderer/MO validation remain open. Preserve direct read-in-place game access, `Documents/RA2Harbor`, and current user data.
 
-## Active checkpoint — launcher stalls, MO and shutdown
+## Decisions and operating constraints
 
-- Current checkout: `E:\VERA20K-ANDROID`, branch `android-new`, pushed HEAD `db2917dd578b3b3727346d5e61e8131df04ffd5c`; one follow-up source/doc change is uncommitted. Untracked `out/` is user data and must remain untouched.
-- Commit `db2917dd5` failed its nested map test because `local_map_path_in` could not resolve directory components with different casing. Follow-up `ac026b031` changed the shared resolver; run [46027519203](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46027519203) then opened the map but failed because the test fixture omitted required `[IsoMapPack5]` data. The fixture now uses an existing valid one-cell map payload; no APK has been produced.
-- Root-cause evidence: the 26,312 ms Play preflight constructed an `AssetManager`, indexing selected archives before engine startup repeated that work. Current changes defer archive indexing to engine startup, move launcher refresh/mod/profile selection off the UI thread, record operation timings, add a cancel affordance and skip identical config writes.
-- MO changes infer profile from manifest Id/Name and discover the loose map catalog by `[MultiMaps]` contents, validating nested relative paths before loading. Focused tests and workflow commands were added. MO mode/roster behavior and actual loaded resources remain unverified.
-- JNI/lifecycle changes avoid owning the loader's Activity global reference, clear the retained AndroidApp on normal native return, delay process retirement, and dispatch folder dialogs/pickers to Android's UI thread. Kotlin/JVM CI passed; Rust regression failed before ARM64/APK validation. No device validation has run; do not report the shutdown crash fixed.
-- The nested-path resolver fix passed its regression's file lookup in run #24; only the test fixture was invalid. The updated fixture is uncommitted and must pass the same production loader regression in the next Actions run before ARM64/APK validation. Then install and test on the POCO with equivalent game/mod/profile. Do not compile Rust, Gradle or APK locally.
+- Keep upstream VERA20K engine behavior authoritative; Iron Harbor is the Android frontend. Reuse the original launcher/storage implementations selectively. Do not duplicate the event loop or engine control-group semantics.
+- Use GitHub Actions for all Rust, Gradle, tests and APK builds. Never compile locally.
+- Never force-push, discard user changes, modify `android-development`, or touch untracked `out/`.
+- No public release or external upstream PR is authorized without approval. Do not claim physical-device behavior until it is observed.
 
-## 2026-11-27 renderer/MO checkpoint
+## Next actions
 
-- Latest user feedback: deleting an old `config.toml` corrected the game folder. Exact path/content was not supplied. Android config search currently prefers shared `Config/config.toml`, then shared root `config.toml`, then prior app-private entries. Preserve this non-destructive fallback until a test captures both competing files and their selected paths.
-- Commit `106c5184c` pushed to `android-new` restores Automatic/Vulkan/OpenGL ES in launcher Settings, JNI persistence through engine-owned `GraphicsAPI` in VERA.INI, one alternate Android backend attempt, and explicit MO profile/resource/archive resolution. Device renderer and MO gameplay remain unverified.
-- Actions run `46007825583` passed launcher/JVM checks and preceding focused Rust checks. It failed at the final MO asset-manager test because its filter named `assets::asset_manager::install_inspection_tests::...`, while the test is in inline module `assets::asset_manager::tests::...`; zero tests matched. No ARM64 build or APK was produced.
-- The workflow filter is corrected in the current local change. Keep the no-local-compilation rule; commit and push this workflow fix, then inspect the new run through artifact upload. No release is authorized by this task.
-
-## Latest checkpoint
-
-- `android-new` currently points to pushed commit `106c5184c`, which includes the earlier upstream merge `ac39fc2db` (upstream commit `814b6c3c0`), launcher/storage fixes and renderer/MO restoration. Untracked `out/` belongs to the user; preserve it.
-- Device log proves startup SIGKILL cause: Rust's app-icon preference called `VeraActivity.applyAppIconOnUi`, which flipped `LauncherRetail`/`LauncherVera`, called `finishAndRemoveTask`, then `Process.killProcess`. The app is Iron Harbor-branded, so the Android variant-switching path and Android VERA Icon controls were removed; one Iron Harbor launcher alias remains. Validate this on Actions and then on-device.
-- Separate shutdown crash is not fixed. After AAudio close, CheckJNI reports Thread-5 using main-thread `JNIEnv*` in `DeleteGlobalRef`; the captured tombstone backtrace is an HWUI `CommonPool` worker waiting on a destroyed mutex. Rust Android entry uses `android-activity 0.6.0`; audio uses `rodio 0.22.2` -> `cpal 0.17.3` and CPAL's Android AAudio/JNI path. Trace ownership at shutdown; do not apply a speculative lifecycle/audio workaround.
-- Diagnostic reports launcher preflight in 66 ms and vanilla YR config from existing `Documents/RA2Harbor/Config/config.toml`. This does not verify mod switching or renderer support.
-- Campaign/maps changes are committed and run [45992723660](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45992723660) passed full debug APK validation. Current run [45995480713](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45995480713) validates the pushed mod-diagnostics change. Continue with on-device mod/profile/MO validation, SAF fallback, renderer support and shutdown ownership.
-
-## Current checkout
-
-- `E:\VERA20K-ANDROID`, branch `android-new`; fork remote `vera20k-fork` is `shietgrupe-cpu13/IronHarborMobile`, upstream remote `origin` is `YuriPlanet/vera20k`.
-- HEAD `106c5184c` is pushed. The latest run [46007825583](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46007825583) failed because the final MO test filter used the wrong Rust module path; no APK was produced. A workflow-only correction is staged locally. The untracked `out/` tree is user data; leave it untouched.
-- No local Rust/Cargo/Gradle/APK compilation. Commit and push focused changes, validate with GitHub Actions, and inspect its logs/artifacts.
-
-## Architecture decisions
-
-- Preserve the legacy Iron Harbor launcher GUI and `/storage/emulated/0/Documents/Ra2Harbor/` structure; do not replace the launcher with a generic screen.
-- Reuse legacy spelling/data locations (`RA2Harbor`, `IronHarborRA2YR`, `RA2IRONHARBOR`) when present. Never create a second data root when a legacy one can be reused. Do not delete or overwrite user files.
-- Prefer direct game-folder access without copying the retail installation, but All files access is optional, informed and revocable. Keep upstream SAF copy as fallback. SAF `content://` URIs cannot be passed to Rust path-based archive reads.
-- Use the Rust engine's archive/config resolution as authority. Do not create Kotlin-side INI semantics.
-- The engine owns one GameActivity/winit event loop and simulation control-group semantics. Do not add a second loop or duplicate simulation logic.
-- Engine source has a `GraphicsAPI=opengl` option resolved to wgpu GL. Android launcher selection remains unimplemented until the Android backend is confirmed compiled and device-tested; do not call it a GLES fallback yet.
-- CI build success is separate from device/gameplay verification. No public release or external upstream PR is authorized by the master plan.
-
-## Current WIP and next action
-
-The committed integration restores the legacy shared-root helper, profile-aware RA2/YR archive checks, canonical-plus-legacy config resolution and mod-only shared Ares precedence. Run [45992723660](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45992723660) passed campaign removal, `Configs/Maps` migration, ARM64 build and APK validation. Run [45995480713](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45995480713) validates the follow-on mod-resolver diagnostics and duplicate-write removal. No device validation has occurred.
-
-Committed in `39a49777f` and pushed in `6afcd6798`: launcher preflight now reports the exact config path, mod path, effective INI names, registered startup archives and mounted `ares.mix` source from the same `AssetManager` used for validation. Mod-folder selection no longer repeats manifest validation/config publication, and the TOML-only summary that could misstate manifest-resolved files is gone. This does not establish MO gameplay compatibility. Validate through run [45995480713](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45995480713) and a later device test.
-
-JNI inventory: all seven `LauncherActivity` external functions have corresponding Rust exports. `VeraActivity` picker/import callbacks are dynamically registered and its other importer/network functions have matching exports. The HUD uses GameActivity's standard key callbacks. `CameraZoomSettingsService.nativeApplyCameraZoomLimits` is the one orphan declaration found: no current Rust export, manifest registration or call site; keep it dormant and record it as unsupported pending an independent migration.
-
-Next, connect the main launcher's explicit SAF copy fallback to the existing importer without changing the normal read-in-place path. The legacy `VeraActivity` importer exists but is not currently a launcher route. Continue Phase 3–5 afterward; use Actions only for compilation/tests.
-
-## Known manual gate
-
-User reported a prior APK installed and showed native startup/UI/HUD, then failed game startup with archive `EACCES` and no game path configured. Device/API/build SHA and failing path are unknown. Record new device tests only from actual user/device evidence. Current local source changes are not a verified fix until Actions passes and the player retests.
+1. On POCO, install/update artifact `15222634738` without uninstalling; check HUD placement persistence, EDIT long-press editor, show/hide and resizing, action forwarding, C1/C2 tap/hold, route-key release, import/export, pause/resume and relaunch.
+2. Continue the HUD editor gaps using existing settings/layout owners; make changes in coherent batches and validate on Actions.
+3. Continue source-level trace of `DeleteGlobalRef`, launcher SAF fallback/config migration, and startup/mod/profile operations; require device evidence for runtime claims.
+4. Validate MO/RR effective resources, renderer selection, game startup, map catalog, and vanilla transition on device when available.
+5. Reconcile this file and the progress/roadmap/upstream/device documents after each verified Actions result.

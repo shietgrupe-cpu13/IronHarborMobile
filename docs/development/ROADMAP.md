@@ -1,23 +1,26 @@
 ﻿# Iron Harbor Mobile development roadmap
 
-Updated 2026-11-27. Authoritative specification: [IRON_HARBOR_MASTER_PLAN.md](IRON_HARBOR_MASTER_PLAN.md). Integration branch: `android-new`.
+Updated 2026-11-28. Authoritative specification: [IRON_HARBOR_MASTER_PLAN.md](IRON_HARBOR_MASTER_PLAN.md). Integration branch: `android-new`.
 
-## Latest checkpoint — workflow 46042175052 passed
+## Latest checkpoint — workflow 46050368117 passed
 
-`android-new` is now at `e1af36488dc270b73578fdc9166e63f97a52dc43`, including upstream merge `068e965efcf27bfccc59fab3663fe7bded3788be`. Run [46042175052](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46042175052) passed Kotlin/JVM, all 13 focused Rust regressions, ARM64 optimized `fast` library build, APK assembly, persistent signature, package identity and ZIP/ELF alignment verification, artifact upload and upstream merge push. Debug artifact [15222025462](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46042175052/artifacts/15222025462) is available until 2026-12-11. No device/gameplay validation was performed.
+Commit `1703630f7fd5027eaf89dea04a1f5333e88a7e62` passed run [46046233771](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46046233771): Kotlin/JVM, focused Rust regressions, ARM64 optimized `fast` library build, APK assembly, persistent signature, package identity, ZIP/ELF alignment checks and artifact upload. Debug artifact [15222634738](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46046233771/artifacts/15222634738) (54,082,616 bytes; SHA-256 `59d3e8d5e97947dbe79ddea60eae2f9ee7cde5504bd33235922c12ed782ae77f`) is available until 2026-12-11. No device/gameplay validation was performed.
 
-The Red Resurrection catalog registry fallback and HUD layout migration/backup tests are CI-verified. This does not verify actual RR gameplay, MO gameplay, or the expanded HUD on hardware. The full in-game HUD editor remains incomplete; the current overlay is compact and the settings preview still runs in the launcher.
+Follow-up commit `8e02d79b8` passed the same hosted Kotlin/JVM, focused Rust, ARM64, APK signing and alignment gates. Artifact [15225361525](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46050368117/artifacts/15225361525) is the latest debug build, 54,083,163 bytes, available until 2026-12-11. It adds per-button opacity and HUD backup format v4; physical-device behavior is still unverified.
+
+The Red Resurrection catalog registry fallback and HUD layout migration/backup tests remain CI-verified, not device-verified. Commit `1703630f7` integrates the existing launcher layout editor and action settings into the live overlay. Commit `8e02d79b8` adds per-button opacity. The full HUD feature set remains incomplete: dynamic add/duplicate/rename, named layout profiles, extended modifier combinations and device touch reliability.
 
 ### Next order
 
-1. Integrate existing layout editing into the GameActivity HUD path and make the overlay consume its persisted layout settings; add focused JVM tests, then validate via Actions.
-2. Keep startup/mod/profile latency claims evidence-based. Source confirms launcher selection and Play preflight defer archive indexing to game startup; equivalent device startup and switching measurements are still required before claiming the 26,312 ms stall was fixed.
-3. Continue Red Resurrection/MO resource and map compatibility with actual resolved-resource diagnostics and POCO validation. The latest passing Rust tests validate parser/resolver paths only.
-4. Trace and fix the shutdown `DeleteGlobalRef`/destroyed-mutex report at its actual owner. Do not treat the 1.2 s delayed process kill as proof of clean teardown.
-5. Finish the launcher SAF fallback, config migration, supported renderer behavior and remaining launcher cleanup. Preserve direct access, existing data and the working renderer.
-6. Continue full HUD work (buttons, bindings, profiles, import/export and lifecycle) and then upstream contribution preparation.
+1. Device-test artifact `15222634738`: confirm in-game EDIT and EDIT long-press, move/resize/show/hide, layout import/export and persistence after app update; test actions, C1/C2 tap/hold, route-key release and pause/resume.
+2. Continue HUD editor gaps with the shared preference owner: named profiles, arbitrary add/duplicate/rename, modifier behavior and individual appearance settings. Do not claim completion from unit tests.
+3. Keep startup/mod/profile latency claims evidence-based. Equivalent device startup and switching timings are still required before claiming the reported 26,312 ms stall is fixed.
+4. Continue Red Resurrection/MO resource and map compatibility with actual resolved-resource diagnostics and device validation; parser tests do not prove gameplay.
+5. Trace the shutdown `DeleteGlobalRef`/destroyed-mutex report at its true JNI/audio owner. A delayed process kill is not proof of clean teardown.
+6. Continue SAF fallback, config migration, supported renderer behavior and remaining launcher cleanup while preserving direct access and user data.
+7. Prepare upstream contribution candidates after stable feature ownership/testing; no external PR without approval.
 
-Old run `46023643484`/`46027519203`/`46007825583` notes below are historical; their failures are fixed or superseded by `46042175052`. Do not treat them as current blockers.
+Old run `46023643484`/`46027519203`/`46007825583` notes below are historical; their failures are fixed or superseded by `46046233771`. Do not treat them as current blockers.
 
 ## Immediate regression milestone — renderer and MO profile
 
@@ -25,11 +28,11 @@ Commit `db2917dd5` removes duplicate archive indexing from JNI validation, moves
 
 ## Phase 2 — Build and distribution
 
-**Debug artifact gate passes through commit `ebc52b3fd`.** Run [45992723660](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45992723660) passed Kotlin/JVM, focused Rust regressions, ARM64 native compilation, APK assembly, package identity, debug signing, ZIP alignment, 16 KB ARM64 ELF alignment, and artifact upload. It produced [IronHarborMobile-android-new-arm64-ebc52b3fdbc2dba99b60a19ff661d91bcbe8f44a](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45992723660/artifacts/15194923757), 74,441,887 bytes, retained until 2026-12-11. It contains `org.ironharbor.mobile.debug`, version `0.4.3` / code `207`, ARM64 native library and a v2 debug signature. Upstream `814b6c3c0` is merged at `ac39fc2db`; current commit `6afcd6798` adds mod-selection diagnostics and awaits validation in run [45995480713](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45995480713). Stable signing and public releases remain gated on credentials and approval.
+**Latest debug artifact gate passes through `1703630f7`.** See workflow [46046233771](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46046233771) and artifact [15222634738](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46046233771/artifacts/15222634738) above. The artifact is signed with the persistent certificate and passed package/signature/alignment verification. Public release/nightly publication and source-to-release distribution remain separate approval/workflow tasks.
 
 ## Phase 3 — Original launcher, storage and configuration
 
-**Storage integration baseline passes hosted validation through `ebc52b3fd`.** The restored launcher uses the shared-root helper, direct read-in-place game selection, profile-aware RA2/YR validation, canonical and legacy config-file selection, and mod-only shared Ares precedence. Run [45992723660](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45992723660) passed JVM/Rust tests, ARM64 build, APK packaging and alignment checks. Campaign navigation removal and `Configs/Maps` migration are included. Commit `6afcd6798` captures resolved mod resources in preflight diagnostics, removes redundant mod revalidation/config writes, and removes a misleading config-only resource summary; run [45995480713](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45995480713) is validating it. Device behavior remains unverified. The existing SAF copier is not yet connected as an explicit fallback from the main launcher.
+**Storage integration passed its baseline CI checks; remaining behavior is not device-verified.** The launcher retains direct read-in-place game selection, profile-aware RA2/YR validation, canonical/legacy config selection and mod-only shared Ares precedence. Later commits add resolved-resource diagnostics and avoid redundant mod validation/config publication. The launcher SAF copier is still not connected as an explicit fallback from the main launcher. See the current handoff for active manual gates; do not infer playable mod behavior from build status.
 
 The canonical fresh data root is `Documents/RA2Harbor`. Reuse existing `Ra2Harbor`, `IronHarborRA2YR`, or `RA2IRONHARBOR` folders before creating it. Never move/delete user data. Direct access is optional and explicitly disclosed; existing game files are read in place. Shared Ares support applies only with a selected mod; the mod's own `ares.mix` takes precedence, and vanilla cannot see the shared archive.
 
@@ -37,19 +40,19 @@ Remaining work: verify actual mod/profile switching and Mental Omega resource re
 
 ## Phase 4 — Dynamic in-game HUD
 
-**Not started on `android-new`.** The branch has the upstream movable HUD, but not the legacy editor/settings feature set. Migrate a schema-backed, user-extensible in-game editor, per-button appearance and bindings, profile persistence and reliable multi-touch/lifecycle behavior through the existing GameActivity/winit input owner. Do not add a second event loop or duplicate engine-owned control-group semantics.
+**Partially integrated; device verification pending.** Commit `1703630f7` wires the existing action catalog, shared launcher layout/settings and layout editor into the GameActivity overlay. Follow-up `8e02d79b8` adds CI-verified per-button opacity with backward-compatible layout backup import. Still open: arbitrary add/duplicate/rename, named profiles, full modifier/chord remapping, and physical-device multitouch/lifecycle checks. Continue using the existing GameActivity/winit input owner; do not add another event loop or duplicate engine-owned control-group semantics.
 
 ## Phase 5 — Upstream contribution preparation
 
-**Not started.** Compare each completed mobile feature against current upstream; separate reusable behavior from Iron Harbor branding and distribution. Prepare small tested candidate descriptions/branches only after the relevant feature is stable. External PRs require approval.
+**Candidate preparation remains open.** No upstream-neutral contribution candidate or feature branch has been prepared in this checkout. Compare each stable mobile feature against current upstream, separate reusable behavior from Iron Harbor branding/distribution, and prepare small tested candidate scopes. External PRs require approval.
 
 ## Guardrails and next order
 
-1. Inspect Actions run [45995480713](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45995480713) for the mod diagnostics change and verify its artifact.
+1. Device-test artifact [15222634738](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46046233771/artifacts/15222634738), especially in-game editor entry, layout persistence, controls and input release.
 2. Trace the separate AAudio/JNI/HWUI shutdown crash from its actual owner; do not guess from the partial tombstone.
-3. Use the new preflight resource report to verify effective mod selection and supported Mental Omega resource resolution on-device.
-4. Connect the existing SAF copy fallback from the launcher, preserving the default read-in-place path.
-5. Restore a renderer selector only for backend(s) actually supported and consumed by the current engine, then finish launcher cleanup.
-6. Continue diagnostics, dynamic in-game HUD and upstream proposal work; track physical-device gates separately.
+3. Use the preflight resource report to verify effective mod selection and Mental Omega resources on-device.
+4. Connect the existing SAF copy fallback from the launcher, preserving default read-in-place behavior.
+5. Verify supported renderer selection on-device; finish safe config migration and remaining launcher cleanup.
+6. Continue HUD editor functionality and upstream proposal preparation; track physical-device gates separately.
 
 No local Rust/Cargo/Gradle/APK builds. Do not modify the legacy reference or the untracked `out/` directory. CI success is not device/gameplay validation; the partial user-reported device result remains open in `DEVICE_TEST_MATRIX.md`.
