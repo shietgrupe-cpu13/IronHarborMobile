@@ -892,7 +892,7 @@ mod tests {
         );
         selected_mod.write(
             "mapsmo/standard/arena.map",
-            b"[Basic]\nName=Arena from the selected mod\nGameMode=standard\n[Map]\nSize=0,0,16,16\n[Waypoints]\n0=100010\n1=120012\n",
+            b"[Basic]\nName=Arena from the selected mod\nGameMode=standard\n[Map]\nTheater=TEMPERATE\nSize=0,0,2,1\nLocalSize=0,0,2,1\n[Waypoints]\n0=100010\n1=120012\n[IsoMapPack5]\n1=DwALABwBAAIA/////wAAABEAAA==\n",
         );
         let mut assets = AssetManager::with_mod(
             base.path(),
