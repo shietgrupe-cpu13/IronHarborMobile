@@ -9,6 +9,7 @@ Updated 2026-11-28. Current authoritative plan: [IRON_HARBOR_MASTER_PLAN.md](IRO
 - Added a guarded legacy-catalog fallback in `src/assets/client_install.rs`: infer mode candidates only when the registry is empty, only from declared map memberships/aliases with a corresponding section, then retain existing mode/resource and unsupported-option validation. Added a synthetic regression covering aliases, nested map path, and an unsupported mode being excluded.
 - HUD launcher backup/import already used a validated versioned format (v1–v3), while the current compact in-game overlay stored positions separately under `touch_hud/button_positions_v1`. The overlay now reads/writes the launcher preference store and migrates old compact IDs/positions non-destructively. Export/import also retains active set and hidden state; older files still decode with safe defaults. JVM regressions cover migration and old/new backup round-trips.
 - Added the new Rust regression to `.github/workflows/sync-upstream-android.yml`. `git diff --check` passed. Kotlin/JVM, Rust tests, ARM64 APK build, and device behavior remain unverified until the remote Actions run and POCO retest.
+- First run [46041308051](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46041308051) failed in `:app:compileDebugUnitTestKotlin`: the new backward-compatibility assertion referenced `assertFalse` without importing it. Production Kotlin compiled; Rust/ARM64/APK steps were skipped. Fixed the missing import; rerun required.
 
 ## Current renderer and Mental Omega regression work
 

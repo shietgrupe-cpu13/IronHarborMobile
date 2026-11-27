@@ -10,6 +10,8 @@ Updated 2026-11-28. User-reported results are identified separately from CI. Dev
 
 HUD layout export/import already existed in the launcher, but gameplay used a separate compact-layout preference file. Source changes now unify preferences and migrate old coordinates without deleting the old preference data. The new artifact still needs a device check: move HUD/Edit/C1/C10, export, update the app without uninstalling, verify placement remains, import the exported file, then relaunch gameplay and check the same positions and visibility. This has not been device-verified.
 
+Actions run [46041308051](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46041308051) did not produce an APK: Kotlin unit-test compilation stopped on a missing `assertFalse` import. The source import was corrected; remote validation is pending.
+
 ## Latest launcher feedback (2026-11-27)
 
 The user reports that deleting an old `config.toml` corrected the selected game
