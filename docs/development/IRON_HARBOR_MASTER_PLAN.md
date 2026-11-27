@@ -4,7 +4,7 @@
 
 Deliver the original Iron Harbor mobile frontend on the latest compatible YuriPlanet/vera20k engine, with minimal compatibility patches. Restore the existing launcher GUI, shared storage, mod/map management and renderer selection; improve the in-game HUD into a dynamic user-extensible editor. Continue autonomously through Phases 2–5, not merely producing recommendations.
 
-**Architectural clarification:** IronHarborMobile is the Android frontend and mobile distribution of VERA20K, not a rewritten or heavily modified engine. Treat current upstream VERA20K source, directory structure, engine architecture, rendering, simulation, AI, gameplay and existing functionality as authoritative. Restore the original Iron Harbor launcher, branding/logo, GUI/navigation, file and mod management, renderer selection, and `Documents/Ra2Harbor` storage directly from `android-development`; adapt only incompatible interfaces. Do not recreate working features, duplicate implementations, refactor the engine, or port unrelated gameplay changes. Keep HUD editing inside the game and extend the existing HUD with additional customizable floating buttons. Preserve upstream attribution and licensing.
+**Architectural clarification:** IronHarborMobile is the Android frontend and mobile distribution of VERA20K, not a rewritten or heavily modified engine. Treat current upstream VERA20K source, directory structure, engine architecture, rendering, simulation, AI, gameplay and existing functionality as authoritative. Restore the original Iron Harbor launcher, branding/logo, GUI/navigation, file and mod management, renderer selection, and `Documents/RA2Harbor` storage directly from `android-development`; adapt only incompatible interfaces. Do not recreate working features, duplicate implementations, refactor the engine, or port unrelated gameplay changes. Keep HUD editing inside the game and extend the existing HUD with additional customizable floating buttons. Preserve upstream attribution and licensing.
 
 ## 2. Repository guardrails
 
@@ -28,6 +28,20 @@ Gate: successful CI, downloadable APK, source-to-artifact traceability, verified
 
 ## 4. Phase 3 — Restore original launcher, storage and configuration
 
+### Critical device regressions — November 27, 2026
+
+Diagnostic archive: https://drive.google.com/file/d/1YvJwZE1SRxTkWv4ErlRFQVqWM4cNL0VA/view?usp=drivesdk
+
+Reported device: Xiaomi 2412DPC0AG (rodin), Android 16/API 36, ARM64, org.ironharbor.mobile.debug, version 0.4.3/code 207. Reported successful direct archive access, vanilla startup, intro, audio, main and skirmish menus; preflight approximately 66 ms. Reopen the archive and independently verify evidence; actual in-match gameplay is not established.
+
+- Investigate reported SIGKILL from VeraActivity.applyAppIconOnUi (line 900), Process.killProcess(). Preserve fixed Iron Harbor branding; remove unnecessary dynamic icon switching and prevent icon updates terminating gameplay. Audit activity aliases and launcher/game process transitions.
+- Investigate reported SIGABRT during shutdown: Thread-5 using JNIEnv* from main in DeleteGlobalRef, plus destroyed pthread mutex errors. Trace actual owner through GameActivity/android-activity, JavaVM attachment, JNI reference ownership, worker joins, rendering/audio teardown and callbacks. Correct lifetime and thread ordering; never suppress CheckJNI or use forced termination as a workaround.
+- Device user reports mod switching does not change loaded gameplay. Trace launcher selection, nativeConfigForMod/nativeConfigForSelection, Rust config generation, atomic publication, persisted managed/external paths, root pointer, engine config precedence, asset manager construction, archive mounting and stale state across sessions. Verify RA2/YR/Mental Omega/other supported mods and return to vanilla, managed/external transitions and restart persistence. Do not confuse UI selection with effective engine state.
+- Mental Omega is missing from the current selector. Current LauncherModCatalog comments indicate upstream mod.ini replaces the old mo enum; audit actual metadata/resolver support and restore a meaningful Mental Omega selection using supported interfaces. Preserve rules/art/AI/sound/EVA/modes/maps and Ares precedence where compatible; never add a cosmetic button or unsupported enum. Report genuine upstream limitations.
+- Review android-development commit history, not only its final snapshot. Preserve intentional removals and streamlined branding/navigation. Remove duplicate navigation, redundant directory/mod actions, obsolete settings, nonfunctional buttons, debug placeholders, unnecessary icon controls and redundant HUD editors once equivalent in-game functionality exists. Keep essential Play, installation, mods/profiles, renderer/graphics, maps, permissions and diagnostics in their appropriate pages. Do not remove useful functionality merely to reduce button count.
+- Correct custom maps to **Documents/RA2Harbor/Configs/Maps/**, explicitly required by the owner. Audit initialization, import, discovery, nativeMapsDirectory/JNI, engine map loading, config references and tests. Reconcile root-level Maps non-destructively, without overwriting, deleting or creating duplicate active map libraries. Verify legacy Config versus Configs naming; the existing config.toml/VERA.INI location below is a compatibility reference, not authorization to create a second configuration tree. Preserve actual existing configuration files and resolve naming consistently.
+
+
 Prioritize functional game launching over advanced HUD customization. Inspect the actual legacy implementation and preserve its GUI, branding, layout, navigation and usability rather than replacing it with a generic redesign. Adapt activity lifecycle and interfaces to current upstream.
 
 ### Mandatory shared-storage compatibility
@@ -38,7 +52,8 @@ Reuse the complete existing `android-development` shared-storage architecture; d
 Documents/RA2Harbor/
   Mods/
     AresSupport/
-  Maps/
+  Configs/
+    Maps/
   Saves/
   Logs/
   Config/
@@ -69,15 +84,15 @@ Documents/RA2Harbor/
 - Restore mod discovery, import, management, profile creation/switching directly in launcher, vanilla and compatible Ares/other supported profiles, persistent profile-specific settings, dependency and directory validation. Launch selected profile without unnecessary duplication; preserve zero-copy paths and Ares archive precedence described above.
 - Use Rust-owned configuration/profile validation as authoritative; audit legacy JNI interfaces (including `launcher_selection_config` and `validate_launcher_selection`) against current upstream. Do not duplicate INI parsing in Kotlin.
 - Restore custom map discovery/import/catalog, profile-specific availability, shared storage access, duplicate detection and invalid-map handling. Preserve user maps.
-- Restore compatible campaign progress/management only after verifying current progress ownership and UX.
+- Remove Campaigns from the top navigation and remove `CAMPAIGNS / RA2 + YURI'S REVENGE` from Home. Remove the exclusive launcher campaign page and unused navigation logic; do not relocate or replace these shortcuts. Preserve engine-side campaign functionality through the in-game interface.
 
 ### Renderer and graphics
 
-Restore the original launcher renderer changer, especially OpenGL ES. Audit actual legacy keys and current engine backend support; expose OpenGL ES, Vulkan, automatic/default or other backends only where supported. Persist preferences, identify active renderer, validate compatibility, provide safe recovery/fallback if initialization fails and report fallback explicitly. Apply backend changes at engine initialization/restart as needed, not during active gameplay. Restore supported graphics/startup configuration without inventing unsupported options.
+Restore the original functional launcher renderer changer, especially OpenGL ES. Audit legacy nativeGetRenderer/nativeSetRenderer, Rust configuration, Cargo features, Android build dependencies and backend initialization. If current upstream lacks GLES, investigate selective restoration of the legacy integration without sacrificing upstream optimizations. Persist and consume the selected backend at startup; verify actual backend, not just UI labels. Restore compatible render scale/resolution, graphics quality, camera zoom limits and immersive settings; resolve missing JNI implementations before exposing controls. Audit actual legacy keys and current engine backend support; expose OpenGL ES, Vulkan, automatic/default or other backends only where supported. Persist preferences, identify active renderer, validate compatibility, provide safe recovery/fallback if initialization fails and report fallback explicitly. Apply backend changes at engine initialization/restart as needed, not during active gameplay. Restore supported graphics/startup configuration without inventing unsupported options.
 
 ### Diagnostics
 
-Restore startup error reports, active path/profile/renderer, storage permission state, engine/app versions, bounded exportable diagnostic archives and clear troubleshooting. Avoid credentials and unnecessary private information in logs.
+Restore startup error reports, requested versus effective mod/profile/renderer, resolved mod path, actual config source, mounted archives and Ares source, actual Configs/Maps path, backend initialization/fallback, lifecycle and shutdown events, active path/profile/renderer, storage permission state, engine/app versions, bounded exportable diagnostic archives and clear troubleshooting. Avoid credentials and unnecessary private information in logs.
 
 Gate: original GUI restored; existing Ra2Harbor directory reused non-destructively; game installation, profile selection, file/map management and supported renderer configuration validated; CI green; physical-device gameplay verification requested and tracked separately.
 
@@ -121,7 +136,7 @@ Maintain `docs/development/ROADMAP.md`, `PROGRESS.md`, `HANDOFF.md`, `UPSTREAM_T
 
 ## 9. Device verification matrix
 
-Track APK install/update, original launcher startup, permissions granted/denied/revoked, direct-path access, reuse of existing Documents/Ra2Harbor hierarchy without duplication or data loss, SAF fallback, persisted installation, mod discovery/switching, map imports, OpenGL ES and other supported backends, actual gameplay startup, HUD editing/add/delete/duplicate, bindings/chords, simultaneous touches, saved layouts/import/export, focus/pause/resume, long-session stability and diagnostic exports. Record device/API, artifact SHA, screenshots/error messages and observed results where available. Never fabricate physical-device testing.
+Track APK install/update, original launcher startup, permissions granted/denied/revoked, direct-path access, reuse of existing Documents/RA2Harbor hierarchy without duplication or data loss, SAF fallback, persisted installation, mod discovery/switching, map imports, OpenGL ES and other supported backends, actual gameplay startup, HUD editing/add/delete/duplicate, bindings/chords, simultaneous touches, saved layouts/import/export, focus/pause/resume, long-session stability and diagnostic exports. Record device/API, artifact SHA, screenshots/error messages and observed results where available. Never fabricate physical-device testing.
 
 ## 10. Approval boundaries
 
@@ -129,13 +144,16 @@ Ask only when needed for signing credentials/secrets, destructive operations, ma
 
 ## 11. Priority order and final deliverable
 
-1. Complete remaining build/distribution infrastructure (do not stall independent work on signing).
-2. Restore original launcher GUI and lifecycle.
-3. Restore existing Ra2Harbor read-in-place access and installation validation; resolve reported storage startup failure.
-4. Restore mod profiles, file and map management.
-5. Restore renderer selection, graphics and diagnostics.
-6. Implement dynamic in-game floating HUD, profiles and input reliability.
-7. Restore remaining compatible mobile features.
-8. Prepare independent upstream contributions.
+1. Review legacy history and latest diagnostics; reconcile current repository state.
+2. Fix icon-triggered termination and JNI shutdown/resource lifetime failures.
+3. Fix actual mod switching and restore Mental Omega-compatible selection.
+4. Remove both Campaigns buttons and exclusive launcher campaign navigation; correct Configs/Maps.
+5. Restore functional renderer switching, investigate GLES integration, and restore compatible graphics/camera settings.
+6. Protect working direct storage and Ares behavior; complete remaining launcher cleanup and SAF fallback.
+7. Maintain CI/distribution infrastructure without stalling independent work on signing.
+8. Implement dynamic in-game HUD, profiles and input reliability.
+9. Prepare independent upstream contributions.
 
-Final experience: open Iron Harbor, reuse Documents/Ra2Harbor, select existing game installation and mod, choose supported renderer, launch and customize floating controls during gameplay. Maintain green CI, minimal upstream divergence and preserved user data. Begin immediately by reconciling current repository state and existing roadmap with this master plan; continue through all automatable work in Phase 5, recording manual gates honestly.
+Batch independent fixes where practical to avoid unnecessary CI builds. Add focused tests for config precedence, mod metadata and switching, vanilla/Ares isolation, map path/migration, renderer persistence and consumption, lifecycle ownership and packaging. Device acceptance must include both Campaigns buttons absent, Configs/Maps discovery/import, actual mod and renderer changes, persistence, starting a skirmish match, clean exit and repeated relaunch. Record device evidence separately from CI; never claim device success from compilation.
+
+Final experience: open Iron Harbor, reuse Documents/RA2Harbor, select existing game installation and mod, choose supported renderer, launch and customize floating controls during gameplay. Maintain green CI, minimal upstream divergence and preserved user data. Begin immediately by reconciling current repository state and existing roadmap with this master plan; continue through all automatable work in Phase 5, recording manual gates honestly.
