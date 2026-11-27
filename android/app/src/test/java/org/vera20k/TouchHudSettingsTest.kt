@@ -7,6 +7,15 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TouchHudSettingsTest {
+    @Test
+    fun buttonSizeAndOpacityUseClampedSavedSettings() {
+        assertEquals(46, TouchHudSettings.buttonPixels(46, 100, 100))
+        assertEquals(103, TouchHudSettings.buttonPixels(46, 150, 150))
+        assertEquals(22, TouchHudSettings.buttonPixels(46, 70, 70))
+        assertEquals(0.3f, TouchHudSettings.buttonAlpha(0), 0.0001f)
+        assertEquals(1f, TouchHudSettings.buttonAlpha(150), 0.0001f)
+    }
+
     @Test fun controlModePreferencesAreValidatedWithMixedDefault() {
         assertEquals(TouchHudSettings.MODE_MIXED, TouchHudSettings.parseControlMode(null))
         assertEquals(TouchHudSettings.MODE_TOUCH, TouchHudSettings.parseControlMode(" TOUCH "))
@@ -28,6 +37,10 @@ class TouchHudSettingsTest {
         assertEquals("SET1,SET2", TouchHudSettings.encodeVisible(selectors))
         assertEquals(selectors, TouchHudSettings.visibleForSet(selectors, emptyMap(), activeSet = 1))
         assertEquals(selectors, TouchHudSettings.visibleForSet(selectors, emptyMap(), activeSet = 2))
+    }
+
+    @Test fun matchingUnitsActionRemainsVisibleInDefaultTouchHud() {
+        assertTrue(TouchHudSettings.defaultVisible.contains("TYPE"))
     }
 
     @Test fun normalizedPositionsClampAndRejectMalformedValues() {
@@ -224,5 +237,13 @@ class TouchHudSettingsTest {
         assertEquals(1, TouchHudSettings.decodeLayoutBackup(legacy)?.activeSet)
         assertFalse(TouchHudSettings.decodeLayoutBackup(legacy)?.hidden ?: true)
         assertEquals(0, TouchHudSettings.decodeLayoutBackup(legacy)?.dock)
+    }
+
+    @Test fun hudBackupAllowsEveryCommandButtonHiddenWhileUtilityControlsRemainAvailable() {
+        val encoded = TouchHudSettings.encodeLayoutBackup(
+            emptySet(), emptyMap(), emptyMap(), 100, 88, TouchHudSettings.LAYOUT_FREE,
+        )
+
+        assertEquals(emptySet<String>(), TouchHudSettings.decodeLayoutBackup(encoded)?.visible)
     }
 }

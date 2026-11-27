@@ -11,13 +11,13 @@ import android.view.MotionEvent
 import android.view.View
 import android.widget.FrameLayout
 import android.widget.TextView
+import android.widget.Toast
 import kotlin.math.abs
 
 /** A compact, optional view overlay; gameplay touch outside buttons still reaches GameActivity. */
 internal class TouchHudOverlay(private val activity: VeraActivity) {
     private val density = activity.resources.displayMetrics.density
-    private val buttonSize = (46 * density).toInt()
-    private val margin = (12 * density).toInt()
+    private val baseButtonSize = (46 * density).toInt()
     private val preferences = activity.getSharedPreferences(TouchHudSettings.PREFS, 0)
     private val positions = loadPositions()
     private val overlay = FrameLayout(activity).apply {
@@ -28,30 +28,58 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
         setBackgroundColor(Color.TRANSPARENT)
     }
     private val buttons = LinkedHashMap<String, TextView>()
+    private val heldKeyDownTimes = HashMap<Int, Long>()
+    private val heldKeys = TouchHudKeyLatch { keyCode, pressed ->
+        val now = SystemClock.uptimeMillis()
+        if (pressed) {
+            heldKeyDownTimes[keyCode] = now
+            dispatchKey(keyCode, KeyEvent.ACTION_DOWN, now, now, 0)
+        } else {
+            val downTime = heldKeyDownTimes.remove(keyCode) ?: now
+            dispatchKey(keyCode, KeyEvent.ACTION_UP, downTime, now, 0)
+        }
+    }
+    private var routeModeHeld = false
     private var controlsVisible = preferences.getBoolean(TouchHudSettings.HUD_ENABLED, true) &&
         !preferences.getBoolean(TouchHudSettings.HUD_HIDDEN, false)
     private var editing = false
 
     fun attach() {
         if (!preferences.getBoolean(TouchHudSettings.HUD_ENABLED, true)) return
-        addButton("hud", "HUD", "Show touch controls") { toggleControls() }
-        addButton("edit", "Edit", "Move touch controls") {
+        addButton("hud", "HUD", "Show or hide touch controls") { toggleControls() }
+        val editButton = addButton("edit", "EDIT", "Move controls; hold to open layout editor") {
             if (!editing) {
+                releaseHeldInputs()
                 editing = true
+                setVisibility()
+            } else {
+                editing = false
                 setVisibility()
             }
         }
-        addButton("type", "T", "Select units of the same type") {
-            if (!editing) sendKeyStroke(KeyEvent.KEYCODE_T)
-        }
-        for (group in 1..10) {
-            addButton("group-$group", "C$group", "Control group $group: tap to select, hold to assign") {
-                if (!editing) sendGroupRecall(group)
-            }
-            buttons.getValue("group-$group").setOnLongClickListener {
-                if (editing) return@setOnLongClickListener false
-                sendGroupAssign(group)
+        editButton.setOnLongClickListener {
+            if (!editing) {
+                showLayoutEditor()
                 true
+            } else false
+        }
+
+        TouchHudSettings.buttons.forEach { action ->
+            val id = overlayId(action)
+            val label = buttonLabel(id, action)
+            val description = when {
+                action.groupNumber != null -> "Control group ${action.groupNumber}: tap to select, hold to assign"
+                action.id == TouchHudSettings.SET_ONE || action.id == TouchHudSettings.SET_TWO -> "Show control set ${if (action.id == TouchHudSettings.SET_ONE) 1 else 2}"
+                else -> action.label
+            }
+            val button = addButton(id, label, description) { activate(action) }
+            if (action.groupNumber != null) {
+                val group = action.groupNumber
+                button.setOnLongClickListener {
+                    if (editing) return@setOnLongClickListener false
+                    sendGroupAssign(group)
+                    true
+                }
             }
         }
         activity.addContentView(
@@ -66,7 +94,7 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
         overlay.post { positionButtons() }
     }
 
-    private fun addButton(id: String, label: String, description: String, click: () -> Unit) {
+    private fun addButton(id: String, label: String, description: String, click: () -> Unit): TextView {
         val button = TextView(activity).apply {
             text = label
             contentDescription = description
@@ -88,14 +116,25 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
             setOnTouchListener { view, event -> dragButton(id, view, event) }
         }
         buttons[id] = button
-        overlay.addView(button, FrameLayout.LayoutParams(buttonSize, buttonSize))
+        val size = buttonPixels(id)
+        overlay.addView(button, FrameLayout.LayoutParams(size, size))
+        return button
     }
 
     private fun toggleControls() {
         controlsVisible = !controlsVisible
-        if (!controlsVisible) editing = false
+        if (!controlsVisible) {
+            releaseHeldInputs()
+            editing = false
+        }
         preferences.edit().putBoolean(TouchHudSettings.HUD_HIDDEN, !controlsVisible).apply()
         setVisibility()
+    }
+
+    fun releaseHeldInputs() {
+        heldKeys.releaseAll()
+        routeModeHeld = false
+        buttons["ROUTE"]?.text = "ROUTE"
     }
 
     private fun setVisibility() {
@@ -103,18 +142,78 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
             preferences.getString(TouchHudSettings.HUD_VISIBLE, null),
             preferences.contains(TouchHudSettings.HUD_VISIBLE),
         )
+        val controlSets = TouchHudSettings.parseControlSets(
+            preferences.getString(TouchHudSettings.HUD_CONTROL_SETS, null),
+        )
+        val activeSet = preferences.getInt(TouchHudSettings.HUD_ACTIVE_SET, 1).coerceIn(1, 2)
+        val active = TouchHudSettings.visibleForSet(visible, controlSets, activeSet)
         buttons.forEach { (id, button) ->
             button.visibility = when {
                 id == "hud" -> View.VISIBLE
                 id == "edit" -> View.VISIBLE
-                controlsVisible && compactButtonEnabled(id, visible) -> View.VISIBLE
+                controlsVisible && isEnabled(id, active) -> View.VISIBLE
                 else -> View.GONE
             }
-            button.alpha = if (editing && id != "edit") 0.62f else 1f
+            button.alpha = TouchHudSettings.buttonAlpha(
+                preferences.getInt(TouchHudSettings.HUD_OPACITY, 88),
+            ) * if (editing && id != "edit") 0.62f else 1f
+            val size = buttonPixels(id)
+            button.layoutParams = (button.layoutParams ?: FrameLayout.LayoutParams(size, size)).apply {
+                width = size
+                height = size
+            }
         }
         buttons["edit"]?.apply {
-            text = if (editing) "Done" else "Edit"
-            contentDescription = if (editing) "Finish moving touch controls" else "Move touch controls"
+            text = if (editing) "DONE" else "EDIT"
+            contentDescription = if (editing) "Finish moving touch controls" else "Move controls; hold to open layout editor"
+        }
+        buttons["ROUTE"]?.text = if (routeModeHeld) "ROUTE ON" else "ROUTE"
+        positionButtons()
+    }
+
+    private fun showLayoutEditor() {
+        releaseHeldInputs()
+        val visible = TouchHudSettings.parseVisible(
+            preferences.getString(TouchHudSettings.HUD_VISIBLE, null),
+            preferences.contains(TouchHudSettings.HUD_VISIBLE),
+        ).toMutableSet()
+        val positions = TouchHudSettings.parsePositions(
+            preferences.getString(TouchHudSettings.HUD_POSITIONS, null),
+        ).toMutableMap()
+        val sizes = TouchHudSettings.parseSizes(
+            preferences.getString(TouchHudSettings.HUD_SIZES, null),
+        ).toMutableMap()
+        val controlSets = TouchHudSettings.parseControlSets(
+            preferences.getString(TouchHudSettings.HUD_CONTROL_SETS, null),
+        )
+        val layout = preferences.getInt(TouchHudSettings.HUD_LAYOUT, TouchHudSettings.LAYOUT_FREE)
+            .coerceIn(TouchHudSettings.LAYOUT_FREE, TouchHudSettings.LAYOUT_YURI)
+        val dock = preferences.getInt(TouchHudSettings.HUD_DOCK, 0).coerceIn(0, 2)
+        val scale = TouchHudSettings.clampScale(preferences.getInt(TouchHudSettings.HUD_SCALE, 100))
+        val opacity = TouchHudSettings.clampOpacity(preferences.getInt(TouchHudSettings.HUD_OPACITY, 88))
+        TouchHudLayoutEditor(activity).show(
+            visible, positions, sizes, controlSets, layout, dock, scale, opacity,
+        ) {
+            preferences.edit()
+                .putString(TouchHudSettings.HUD_VISIBLE, TouchHudSettings.encodeVisible(visible))
+                .putString(TouchHudSettings.HUD_POSITIONS, TouchHudSettings.encodePositions(positions))
+                .putString(TouchHudSettings.HUD_SIZES, TouchHudSettings.encodeSizes(sizes))
+                .putInt(TouchHudSettings.HUD_SCALE, scale)
+                .putInt(TouchHudSettings.HUD_OPACITY, opacity)
+                .putInt(TouchHudSettings.HUD_LAYOUT, layout)
+                .putInt(TouchHudSettings.HUD_DOCK, dock)
+                .putBoolean(TouchHudSettings.HUD_ENABLED, true)
+                .putBoolean(TouchHudSettings.HUD_HIDDEN, false)
+                .apply()
+            // Reload through the shared schema after saving; do not keep stale
+            // compact-only coordinates in the live overlay after import/edit.
+            this.positions.clear()
+            this.positions.putAll(TouchHudLayout.fromSettingsPositions(
+                TouchHudSettings.parsePositions(preferences.getString(TouchHudSettings.HUD_POSITIONS, null)),
+            ))
+            controlsVisible = true
+            editing = false
+            setVisibility()
         }
     }
 
@@ -140,6 +239,7 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
                     abs(event.rawX - origin.rawX) < touchSlop &&
                     abs(event.rawY - origin.rawY) < touchSlop && id == "edit"
                 ) {
+                    releaseHeldInputs()
                     editing = false
                     setVisibility()
                 }
@@ -166,8 +266,6 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
 
     private fun positionButtons() {
         if (overlay.width <= 0 || overlay.height <= 0) return
-        val maxX = (overlay.width - buttonSize).coerceAtLeast(0)
-        val maxY = (overlay.height - buttonSize).coerceAtLeast(0)
         val layout = preferences.getInt(TouchHudSettings.HUD_LAYOUT, TouchHudSettings.LAYOUT_FREE)
             .coerceIn(TouchHudSettings.LAYOUT_FREE, TouchHudSettings.LAYOUT_YURI)
         val dock = preferences.getInt(TouchHudSettings.HUD_DOCK, 0).coerceIn(0, 2)
@@ -176,9 +274,11 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
         )
         for ((id, button) in buttons) {
             if (editing && button.tag is DragOrigin) continue
+            val maxX = (overlay.width - button.width).coerceAtLeast(0)
+            val maxY = (overlay.height - button.height).coerceAtLeast(0)
             val settingsId = settingsId(id)
             val default = settingsId?.let { TouchHudSettings.defaultPosition(it, layout, dock) }
-                ?: defaultPositions(maxX, maxY).getValue(id).let { it.x to it.y }
+                ?: (0.04f to 0.82f)
             val point = positions[id]?.let { it.x to it.y } ?: configured[id]?.let { it.x to it.y } ?: default
             button.x = (point.first * maxX).coerceIn(0f, maxX.toFloat())
             button.y = (point.second * maxY).coerceIn(0f, maxY.toFloat())
@@ -206,36 +306,78 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
         return TouchHudLayout.fromSettingsPositions(migrated).toMutableMap()
     }
 
-    private fun compactButtonEnabled(id: String, visible: Set<String>): Boolean {
-        if (!preferences.contains(TouchHudSettings.HUD_VISIBLE)) return true
-        val settingsId = settingsId(id) ?: return true
-        return settingsId in visible
+    private fun isEnabled(id: String, active: Set<String>): Boolean {
+        val settingsId = settingsId(id) ?: return false
+        if (settingsId !in active) return false
+        val action = TouchHudSettings.buttons.firstOrNull { it.id == settingsId } ?: return false
+        return action.groupNumber != null || action.id in TouchHudSettings.setSelectorButtons.map { it.id } ||
+            preferences.getInt("key_${action.id}", action.defaultKeyCode) != KeyEvent.KEYCODE_UNKNOWN
     }
 
     private fun settingsId(id: String): String? = when (id) {
         "hud" -> TouchHudSettings.HUD_TOGGLE
         "edit" -> TouchHudSettings.HUD_EDIT
         "type" -> "TYPE"
-        else -> id.removePrefix("group-").toIntOrNull()?.takeIf { id.startsWith("group-") }
-            ?.takeIf { it in 1..10 }?.let { "C$it" }
+        else -> when {
+            id.startsWith("group-") -> id.removePrefix("group-").toIntOrNull()
+                ?.takeIf { it in 1..10 }?.let { "C$it" }
+            id == "set1" -> TouchHudSettings.SET_ONE
+            id == "set2" -> TouchHudSettings.SET_TWO
+            else -> id.takeIf { candidate -> TouchHudSettings.layoutButtons.any { it.id == candidate } }
+        }
     }
 
-    private fun defaultPositions(maxX: Int, maxY: Int): Map<String, TouchHudPoint> {
-        fun point(x: Float, y: Float) = TouchHudPoint(
-            (margin + (maxX - 2 * margin).coerceAtLeast(0) * x) / maxX.coerceAtLeast(1),
-            (margin + (maxY - 2 * margin).coerceAtLeast(0) * y) / maxY.coerceAtLeast(1),
-        ).bounded()
-        val result = linkedMapOf(
-            "hud" to point(0.05f, 0.94f),
-            "edit" to point(0.25f, 0.94f),
-            "type" to point(0.45f, 0.94f),
-        )
-        for (group in 1..10) {
-            val column = (group - 1) / 5
-            val row = (group - 1) % 5
-            result["group-$group"] = point(0.74f + column * 0.22f, 0.08f + row * 0.20f)
+    private fun overlayId(action: TouchHudSettings.Button): String = when {
+        action.groupNumber != null -> "group-${action.groupNumber}"
+        action.id == "TYPE" -> "type"
+        action.id == TouchHudSettings.SET_ONE -> "set1"
+        action.id == TouchHudSettings.SET_TWO -> "set2"
+        else -> action.id
+    }
+
+    private fun buttonLabel(id: String, action: TouchHudSettings.Button): String = when {
+        id == "type" -> "T"
+        action.groupNumber != null -> "C${action.groupNumber}"
+        action.label.length <= 7 -> action.label.uppercase(java.util.Locale.ROOT)
+        else -> action.id
+    }
+
+    private fun buttonPixels(id: String): Int {
+        val settingsId = settingsId(id)
+        val perButtonScale = settingsId?.let { id ->
+            TouchHudSettings.parseSizes(preferences.getString(TouchHudSettings.HUD_SIZES, null))[id]
+        } ?: 100
+        val globalScale = preferences.getInt(TouchHudSettings.HUD_SCALE, 100)
+        return TouchHudSettings.buttonPixels(baseButtonSize, globalScale, perButtonScale)
+    }
+
+    private fun activate(action: TouchHudSettings.Button) {
+        if (editing) return
+        when (action.id) {
+            TouchHudSettings.SET_ONE -> {
+                preferences.edit().putInt(TouchHudSettings.HUD_ACTIVE_SET, 1).apply()
+                setVisibility()
+            }
+            TouchHudSettings.SET_TWO -> {
+                preferences.edit().putInt(TouchHudSettings.HUD_ACTIVE_SET, 2).apply()
+                setVisibility()
+            }
+            "ROUTE" -> {
+                val keyCode = preferences.getInt("key_${action.id}", action.defaultKeyCode)
+                routeModeHeld = heldKeys.toggle(action.id, keyCode)
+                buttons[action.id]?.text = if (routeModeHeld) "ROUTE ON" else "ROUTE"
+            }
+            else -> {
+                val keyCode = preferences.getInt("key_${action.id}", action.defaultKeyCode)
+                if (keyCode == KeyEvent.KEYCODE_UNKNOWN) {
+                    Toast.makeText(activity, "Assign a game key to ${action.label} in HUD settings first.", Toast.LENGTH_SHORT).show()
+                } else if (action.groupNumber != null) {
+                    sendGroupRecall(action.groupNumber)
+                } else {
+                    sendKeyStroke(keyCode)
+                }
+            }
         }
-        return result
     }
 
     private fun sendGroupRecall(group: Int) {

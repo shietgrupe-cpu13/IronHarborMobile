@@ -7,8 +7,9 @@ internal data class TouchHudPoint(val x: Float, val y: Float) {
 
 /** Small, version-tolerant persistence format for movable Android HUD buttons. */
 internal object TouchHudLayout {
-    val buttonIds: List<String> = listOf("hud", "edit", "type") +
-        (1..10).map { "group-$it" }
+    private val compactAliases = listOf("hud", "edit", "type") + (1..10).map { "group-$it" }
+    private val settingButtonIds = TouchHudSettings.layoutButtons.map { it.id }
+    val buttonIds: List<String> = compactAliases + settingButtonIds.filterNot(compactAliases::contains)
 
     fun parse(serialized: String?): Map<String, TouchHudPoint> {
         if (serialized.isNullOrBlank()) return emptyMap()
@@ -37,7 +38,7 @@ internal object TouchHudLayout {
                 "type" -> "TYPE"
                 else -> id.removePrefix("group-").toIntOrNull()?.takeIf { id.startsWith("group-") }
                     ?.takeIf { it in 1..10 }?.let { "C$it" }
-            } ?: return@mapNotNull null
+            } ?: id.takeIf(settingButtonIds::contains) ?: return@mapNotNull null
             settingsId to (point.bounded().x to point.bounded().y)
         }.toMap()
 
@@ -50,7 +51,7 @@ internal object TouchHudLayout {
                 "TYPE" -> "type"
                 else -> id.removePrefix("C").toIntOrNull()?.takeIf { id.startsWith("C") }
                     ?.takeIf { it in 1..10 }?.let { "group-$it" }
-            } ?: return@mapNotNull null
+            } ?: id.takeIf(settingButtonIds::contains) ?: return@mapNotNull null
             compactId to TouchHudPoint(point.first, point.second).bounded()
         }.toMap()
 }

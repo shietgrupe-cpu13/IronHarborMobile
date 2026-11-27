@@ -46,6 +46,8 @@ import java.io.IOException
  * `ContentResolver` can read it.
  */
 class VeraActivity : GameActivity() {
+    private var touchHudOverlay: TouchHudOverlay? = null
+
     /** How far the screen's top-left corner hides the game, in screen pixels.
      * The UI thread writes them and the game thread reads them. */
     @Volatile
@@ -115,13 +117,23 @@ class VeraActivity : GameActivity() {
         )
         pruneModShortcuts()
         clearPickedModParts()
-        TouchHudOverlay(this).attach()
+        touchHudOverlay = TouchHudOverlay(this).also { it.attach() }
         window.decorView.post { showRevokedStorageRecoveryIfNeeded() }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putBoolean(STATE_DIRECT_SELECTION_PENDING, directSelectionPending)
         super.onSaveInstanceState(outState)
+    }
+
+    override fun onPause() {
+        touchHudOverlay?.releaseHeldInputs()
+        super.onPause()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        if (!hasFocus) touchHudOverlay?.releaseHeldInputs()
+        super.onWindowFocusChanged(hasFocus)
     }
 
     /** Forward a HUD edge through GameActivity's regular native input callback. */
@@ -658,6 +670,7 @@ class VeraActivity : GameActivity() {
      * means the activity is really going away.
      */
     override fun onDestroy() {
+        touchHudOverlay?.releaseHeldInputs()
         super.onDestroy()
         if (isFinishing) {
             // GameActivity_finish is sent by android-activity before its native

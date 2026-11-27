@@ -32,7 +32,9 @@ class TouchHudLayoutTest {
         assertTrue(TouchHudLayout.buttonIds.contains("hud"))
         assertTrue(TouchHudLayout.buttonIds.contains("group-1"))
         assertTrue(TouchHudLayout.buttonIds.contains("group-10"))
+        assertTrue(TouchHudLayout.buttonIds.contains("STOP"))
         assertFalse(TouchHudLayout.buttonIds.contains("group-11"))
+        assertFalse(TouchHudLayout.buttonIds.contains("UNRECOGNIZED"))
     }
 
     @Test
@@ -50,5 +52,12 @@ class TouchHudLayoutTest {
         assertEquals(legacy["hud"]?.let { it.x to it.y }, portable[TouchHudSettings.HUD_TOGGLE])
         assertEquals(legacy["edit"]?.let { it.x to it.y }, portable[TouchHudSettings.HUD_EDIT])
         assertFalse(portable.containsKey("C11"))
+    }
+
+    @Test
+    fun configuredCommandPositionsRoundTripThroughTheSharedLayoutStore() {
+        val source = mapOf("STOP" to TouchHudPoint(0.32f, 0.74f))
+
+        assertEquals(source, TouchHudLayout.fromSettingsPositions(TouchHudLayout.toSettingsPositions(source)))
     }
 }

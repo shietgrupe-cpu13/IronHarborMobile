@@ -99,7 +99,7 @@ internal object TouchHudSettings {
     val buttons: List<Button> = commandButtons.take(4) + groupButtons + commandButtons.drop(4) + setSelectorButtons
     val layoutButtons: List<Button> = buttons + utilityButtons
     val defaultVisible: Set<String> = commandButtons.take(4).mapTo(linkedSetOf()) { it.id } +
-        groupButtons.take(5).map { it.id } + setSelectorButtons.map { it.id }
+        groupButtons.take(5).map { it.id } + listOf("TYPE") + setSelectorButtons.map { it.id }
     val remappableActions: List<Button> = commandButtons
 
     fun parseVisible(encoded: String?, isStored: Boolean): Set<String> {
@@ -117,6 +117,12 @@ internal object TouchHudSettings {
     fun clampScale(value: Int): Int = value.coerceIn(70, 150)
     fun clampOpacity(value: Int): Int = value.coerceIn(30, 100)
     fun clampButtonSize(value: Int): Int = value.coerceIn(70, 150)
+
+    fun buttonPixels(basePixels: Int, globalScale: Int, buttonScale: Int): Int =
+        (basePixels.toLong() * clampScale(globalScale) * clampButtonSize(buttonScale) / 10_000L)
+            .coerceIn(1L, Int.MAX_VALUE.toLong()).toInt()
+
+    fun buttonAlpha(opacity: Int): Float = clampOpacity(opacity) / 100f
 
     fun visibleForSet(visible: Set<String>, controlSets: Map<String, Int>, activeSet: Int): Set<String> =
         buttons.asSequence()
@@ -290,7 +296,7 @@ internal object TouchHudSettings {
             "true" -> true
             else -> return null
         }
-        if (visible.isEmpty() || scale !in 70..150 || opacity !in 30..100 || layout !in LAYOUT_FREE..LAYOUT_YURI || dock !in 0..2 || activeSet !in 1..2) return null
+        if (scale !in 70..150 || opacity !in 30..100 || layout !in LAYOUT_FREE..LAYOUT_YURI || dock !in 0..2 || activeSet !in 1..2) return null
         return LayoutBackup(
             visible,
             parsePositions(fields["positions"]),
