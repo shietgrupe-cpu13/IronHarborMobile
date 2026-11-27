@@ -216,7 +216,10 @@ class TouchHudSettingsTest {
             .filterNot { it.startsWith("dock=") }.joinToString("\n")
         assertEquals(mapOf("FIRE" to 1, "MOVE" to 0, "PATROL" to 2), TouchHudSettings.decodeLayoutBackup(b14)?.controlSets)
         val legacy = encoded.replace("version=3", "version=1").lineSequence()
-            .filterNot { it.startsWith("controlsets=") || it.startsWith("dock=") }.joinToString("\n")
+            .filterNot {
+                it.startsWith("controlsets=") || it.startsWith("dock=") ||
+                    it.startsWith("activeSet=") || it.startsWith("hidden=")
+            }.joinToString("\n")
         assertEquals(emptyMap<String, Int>(), TouchHudSettings.decodeLayoutBackup(legacy)?.controlSets)
         assertEquals(1, TouchHudSettings.decodeLayoutBackup(legacy)?.activeSet)
         assertFalse(TouchHudSettings.decodeLayoutBackup(legacy)?.hidden ?: true)

@@ -12,6 +12,8 @@ HUD layout export/import already existed in the launcher, but gameplay used a se
 
 Actions run [46041308051](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46041308051) did not produce an APK: Kotlin unit-test compilation stopped on a missing `assertFalse` import. The source import was corrected; remote validation is pending.
 
+Run [46041837302](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46041837302) compiled tests but failed one v1-compatibility fixture because it retained v3-only state. The fixture was corrected; no APK was produced.
+
 ## Latest launcher feedback (2026-11-27)
 
 The user reports that deleting an old `config.toml` corrected the selected game
