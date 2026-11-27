@@ -10,6 +10,7 @@ Updated 2026-11-28. The authoritative specification is [IRON_HARBOR_MASTER_PLAN.
 - Latest debug APK artifact: [download from Actions](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46050368117/artifacts/15225361525). Name `IronHarborMobile-android-new-arm64-8e02d79b80eedca143c1c900bd5a7eb45fb83675`; 54,083,163 bytes; artifact digest `aecb19d0f1b9c09f91973f5bd2d9ea6ec452d32a02545acd03fa5827b0bb8a0e`; expires 2026-12-11. Package/signature/alignment checks passed.
 - Upstream `origin/main` was fetched at `068e965efcf27bfccc59fab3663fe7bded3788be`; upstream `ec197f8a9` was documentation/contract only. Run 46046233771 did not merge newer upstream changes.
 - Commit `8e02d79b8` adds individual HUD button opacity through the shared layout editor and advances HUD export/import to schema v4 while retaining v1-v3 decoding. Its hosted checks passed; actual editor usability, import/update persistence and touch behavior still need device verification.
+- Commit `57c066a9b` adds renaming of existing controls and v5 backup support, retaining v1-v4 decoding. Run [46053869832](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46053869832) is pending. Artifact `15225361525` remains the latest verified APK until this run passes.
 
 ## Current implementation status
 

@@ -19,6 +19,7 @@ Updated 2026-11-28. Current authoritative plan: [IRON_HARBOR_MASTER_PLAN.md](IRO
 - Pushed commit `8e02d79b80eedca143c1c900bd5a7eb45fb83675` adds individual HUD control opacity to the shared layout editor and preview, persists it in the existing preferences, and exports/imports it in HUD backup schema v4. Older v1-v3 backups decode with an empty override map and continue using global opacity.
 - Focused JVM tests cover parsing, clamping, global fallback and backup round-trip/backward compatibility. `git diff --check` passed; no local compilation or tests were run.
 - Run [46050368117](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46050368117) passed the Kotlin/JVM, focused Rust, ARM64, APK signing/alignment and upload steps. This validates the source/build pipeline only; the user still needs to test opacity control and backup round-trip on device.
+- Follow-up `57c066a9b119629bcdfcba71ff3c88eb7aa14829` adds renaming for existing HUD actions, saved in launcher/game preferences and schema-v5 backup; versions 1–4 remain decodable. Regression cases cover label sanitization, unknown IDs, roundtrip and old-format fallback. Run [46053869832](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46053869832) is running; treat Kotlin/JVM, native build and artifact checks as pending. Latest artifact is still `15225361525` from `8e02d79b8` until the new run passes.
 
 ## Previous verified checkpoint — 2026-11-27 / 2026-11-28
 

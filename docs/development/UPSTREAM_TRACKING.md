@@ -11,6 +11,8 @@ Updated 2026-11-28.
 
 Follow-up `8e02d79b8` adds per-button opacity to the existing editor and schema-v4 HUD backup, while preserving v1-v3 imports. It is fork-specific and no upstream-neutral proposal/PR is prepared.
 
+Commit `57c066a9b` adds validated labels for existing HUD actions and schema-v5 export/import while keeping v1-v4 compatibility. Run [46053869832](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46053869832) is pending; no upstream-neutral proposal/PR is prepared.
+
 ## Prior source/CI checkpoint (2026-11-27; superseded)
 
 - `origin/main` fetched at `068e965efcf27bfccc59fab3663fe7bded3788be`; the new upstream history is `ec197f8a9` and merge PR #5323, a documentation/contract change relaxing a performance-hash requirement. No engine or Android implementation change was present in this update.

@@ -8,6 +8,8 @@ Commit `1703630f7fd5027eaf89dea04a1f5333e88a7e62` passed run [46046233771](https
 
 Follow-up commit `8e02d79b8` passed the same hosted Kotlin/JVM, focused Rust, ARM64, APK signing and alignment gates. Artifact [15225361525](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46050368117/artifacts/15225361525) is the latest debug build, 54,083,163 bytes, available until 2026-12-11. It adds per-button opacity and HUD backup format v4; physical-device behavior is still unverified.
 
+Commit `57c066a9b` continues the HUD editor with labels for existing actions and backup schema v5; run [46053869832](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46053869832) is in progress. No new APK is available yet.
+
 The Red Resurrection catalog registry fallback and HUD layout migration/backup tests remain CI-verified, not device-verified. Commit `1703630f7` integrates the existing launcher layout editor and action settings into the live overlay. Commit `8e02d79b8` adds per-button opacity. The full HUD feature set remains incomplete: dynamic add/duplicate/rename, named layout profiles, extended modifier combinations and device touch reliability.
 
 ### Next order
