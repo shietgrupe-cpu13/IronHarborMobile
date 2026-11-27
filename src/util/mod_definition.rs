@@ -91,6 +91,8 @@ impl ResourceConfig {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ModDefinition {
+    /// Stable identifier supplied by the mod author, when present.
+    pub id: Option<String>,
     pub name: Option<String>,
     pub version: Option<String>,
     pub author: Option<String>,
@@ -258,6 +260,7 @@ impl ModDefinition {
 
     fn read_metadata(&mut self, key: &str, value: &str) {
         let slot = match key {
+            "id" => &mut self.id,
             "name" => &mut self.name,
             "version" => &mut self.version,
             "author" => &mut self.author,
@@ -269,6 +272,23 @@ impl ModDefinition {
         let value: String = value.chars().take(TEXT_LIMIT).collect();
         *slot = Some(value)
             .filter(|value| !value.is_empty() && (key == "needs" || !value.contains('\u{fffd}')));
+    }
+
+    /// The launcher may use a known mod identity to choose the matching INI
+    /// family. Unknown mods remain under the engine's normal Auto semantics.
+    pub fn suggested_profile(&self) -> Option<IniProfile> {
+        let is_mental_omega = [&self.id, &self.name]
+            .into_iter()
+            .flatten()
+            .any(|value| {
+                let normalized: String = value
+                    .chars()
+                    .filter(|character| character.is_ascii_alphanumeric())
+                    .flat_map(char::to_lowercase)
+                    .collect();
+                normalized.contains("mentalomega")
+            });
+        is_mental_omega.then_some(IniProfile::Mo)
     }
 
     pub fn title(&self, folder: &str) -> String {
@@ -359,5 +379,18 @@ mod tests {
         assert_eq!(resources.archives.expansion_prefix, "expandcustom");
         assert_eq!(resources.archives.map_prefix, "mapsmo");
         assert_eq!(resources.archives.multiplayer, "multimo.mix");
+    }
+
+    #[test]
+    fn mental_omega_manifest_identity_selects_mo_without_changing_unknown_mods() {
+        let mental_omega = ModDefinition::parse(
+            "[Mod]\nId=mentalomega330mod\nName=MentalOmega330Mod\nRequires=base\n",
+        )
+        .unwrap();
+        assert_eq!(mental_omega.suggested_profile(), Some(IniProfile::Mo));
+
+        let other = ModDefinition::parse("[Mod]\nId=red-resurrection\nName=Red Resurrection\n")
+            .unwrap();
+        assert_eq!(other.suggested_profile(), None);
     }
 }

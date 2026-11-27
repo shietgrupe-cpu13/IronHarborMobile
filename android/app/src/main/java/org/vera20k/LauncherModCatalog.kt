@@ -170,6 +170,8 @@ internal object LauncherConfigPublisher {
     fun publish(filesDirectory: File, contents: String) {
         val configDirectory = File(filesDirectory, "Config")
         if (!configDirectory.isDirectory && !configDirectory.mkdirs()) throw IOException("Cannot create Config folder")
+        val target = File(configDirectory, "config.toml")
+        if (target.isFile && target.readText(Charsets.UTF_8) == contents) return
         val parent = configDirectory.toPath()
         val temporary = Files.createTempFile(parent, ".config-selection-", ".tmp")
         try {
@@ -179,7 +181,7 @@ internal object LauncherConfigPublisher {
             }
             Files.move(
                 temporary,
-                File(configDirectory, "config.toml").toPath(),
+                target.toPath(),
                 StandardCopyOption.ATOMIC_MOVE,
                 StandardCopyOption.REPLACE_EXISTING,
             )

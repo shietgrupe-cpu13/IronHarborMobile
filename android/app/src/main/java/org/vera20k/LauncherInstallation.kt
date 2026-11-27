@@ -1,7 +1,6 @@
 package org.vera20k
 
 import java.io.File
-import java.util.Locale
 
 /** Read-only view of the installation selected by the engine configuration. */
 internal data class LauncherInstallation(
@@ -55,16 +54,15 @@ internal data class LauncherInstallation(
             profile: String = "yr",
             allowBaseRa2Detection: Boolean = false,
         ): List<String> {
-            val present = directory?.takeIf(File::isDirectory)?.listFiles()
-                ?.asSequence()
-                ?.filter(File::isFile)
-                ?.map { it.name.lowercase(Locale.ROOT) }
-                ?.toSet()
-                .orEmpty()
+            fun hasArchive(name: String): Boolean {
+                val root = directory?.takeIf(File::isDirectory) ?: return false
+                if (File(root, name).isFile) return true
+                return root.listFiles()?.any { it.isFile && it.name.equals(name, ignoreCase = true) } == true
+            }
             val isBaseRa2 = profile.equals("ra2", ignoreCase = true) ||
-                (allowBaseRa2Detection && "ra2.mix" in present && "ra2md.mix" !in present)
+                (allowBaseRa2Detection && hasArchive("ra2.mix") && !hasArchive("ra2md.mix"))
             val required = if (isBaseRa2) listOf("ra2.mix") else requiredArchives
-            return required.filterNot(present::contains)
+            return required.filterNot(::hasArchive)
         }
 
         private fun unquotePath(value: String): String = value

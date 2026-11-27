@@ -14,6 +14,8 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.os.Process
 import android.provider.DocumentsContract
 import android.provider.Settings
@@ -209,24 +211,18 @@ class VeraActivity : GameActivity() {
     private var pickedModPart = ""
 
     /** Lets the player pick a mod ZIP; the copy lands in `tmp/`. */
-    fun pickModZip(failed: String): Boolean {
+    fun pickModZip(failed: String): Boolean = dispatchPicker(failed, "mod ZIP") {
         pickFailed = failed
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "application/zip"
             putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/zip", "application/x-zip-compressed"))
         }
-        return try {
-            startActivityForResult(intent, REQUEST_MOD_ZIP)
-            true
-        } catch (error: Throwable) {
-            android.util.Log.w("Vera20k", "no picker for a mod zip: $error")
-            false
-        }
+        startActivityForResult(intent, REQUEST_MOD_ZIP)
     }
 
     /** Lets the player pick a mod folder; the copy lands in `tmp/`. */
-    fun pickModFolder(failed: String): Boolean {
+    fun pickModFolder(failed: String): Boolean = dispatchPicker(failed, "mod folder") {
         pickFailed = failed
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
             addFlags(
@@ -234,13 +230,7 @@ class VeraActivity : GameActivity() {
                     Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION,
             )
         }
-        return try {
-            startActivityForResult(intent, REQUEST_MOD_FOLDER)
-            true
-        } catch (error: Throwable) {
-            android.util.Log.w("Vera20k", "no picker for a mod folder: $error")
-            false
-        }
+        startActivityForResult(intent, REQUEST_MOD_FOLDER)
     }
 
     /** The part a picker copied in, once; `app::shell_mod_import` takes it. */
@@ -265,7 +255,7 @@ class VeraActivity : GameActivity() {
     }
 
     /** Exports `folder` from the app's `Mods` into a picked folder. */
-    fun exportMod(folder: String, done: String, failed: String): Boolean {
+    fun exportMod(folder: String, done: String, failed: String): Boolean = dispatchPicker(failed, "mod export") {
         pendingExport = folder
         exportDone = done
         exportFailed = failed
@@ -276,13 +266,32 @@ class VeraActivity : GameActivity() {
                     Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION,
             )
         }
-        return try {
-            startActivityForResult(intent, REQUEST_EXPORT_MOD)
-            true
-        } catch (error: Throwable) {
-            android.util.Log.w("Vera20k", "no folder picker for export: $error")
-            false
+        startActivityForResult(intent, REQUEST_EXPORT_MOD)
+    }
+
+    /** Native game callbacks can arrive off the Android UI thread. */
+    private fun dispatchPicker(failed: String, label: String, action: () -> Unit): Boolean {
+        if (isFinishing || isDestroyed) return false
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            return try {
+                action()
+                true
+            } catch (error: Throwable) {
+                android.util.Log.w("Vera20k", "could not open $label picker", error)
+                toast(failed)
+                false
+            }
         }
+        runOnUiThread {
+            if (isFinishing || isDestroyed) return@runOnUiThread
+            try {
+                action()
+            } catch (error: Throwable) {
+                android.util.Log.w("Vera20k", "could not open $label picker", error)
+                toast(failed)
+            }
+        }
+        return true
     }
 
     /**
@@ -393,11 +402,19 @@ class VeraActivity : GameActivity() {
     }
 
     /**
-     * Opens the system folder picker. Called from Rust on the UI thread
-     * (`ui::asset_import::choose_folder`); the result arrives in
-     * [onActivityResult].
+     * Opens the system folder picker. Rust calls from the native game thread;
+     * Android dialogs and document pickers must be created on the UI thread.
+     * The result arrives in [onActivityResult].
      */
     fun startFolderPicker() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            runOnUiThread { showFolderPickerDialog() }
+            return
+        }
+        showFolderPickerDialog()
+    }
+
+    private fun showFolderPickerDialog() {
         AlertDialog.Builder(this)
             .setTitle("Choose game-file access")
             .setMessage(
@@ -643,7 +660,13 @@ class VeraActivity : GameActivity() {
     override fun onDestroy() {
         super.onDestroy()
         if (isFinishing) {
-            Process.killProcess(Process.myPid())
+            // GameActivity_finish is sent by android-activity before its native
+            // thread detaches and releases ndk-context. Killing here races that
+            // cleanup and can call DeleteGlobalRef with the main thread JNIEnv.
+            val processId = Process.myPid()
+            Handler(Looper.getMainLooper()).postDelayed({
+                Process.killProcess(processId)
+            }, 1_200L)
         }
     }
 

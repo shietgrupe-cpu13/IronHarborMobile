@@ -41,6 +41,8 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.util.Locale
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Native Android command center. The Rust engine remains in [VeraActivity],
@@ -95,6 +97,13 @@ class LauncherActivity : Activity() {
     private var modMapScanLoading = false
     private var modMapScanResult: List<LauncherModMapCatalog.MapFile> = emptyList()
     private var validatingLaunch = false
+    @Volatile private var launchCancellationRequested = false
+    private var applyingModSelection = false
+    private val installationRefreshGeneration = AtomicInteger()
+    private val modSelectionGeneration = AtomicInteger()
+    private val launcherIo = Executors.newSingleThreadExecutor { task ->
+        Thread(task, "ironharbor-launcher-io")
+    }
     private val launchGate = GameLaunchGate()
     private var importing = false
     private var copiedBytes = 0L
@@ -134,6 +143,13 @@ class LauncherActivity : Activity() {
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putString("launcher_page", page.name)
         super.onSaveInstanceState(outState)
+    }
+
+    override fun onDestroy() {
+        installationRefreshGeneration.incrementAndGet()
+        modSelectionGeneration.incrementAndGet()
+        launcherIo.shutdownNow()
+        super.onDestroy()
     }
 
     override fun onResume() {
@@ -505,6 +521,14 @@ class LauncherActivity : Activity() {
         }
         playButton.isEnabled = installation.ready && !importing && !validatingLaunch && !launchGate.isPending
         pageBody.addView(playButton, margin(bottom = 10))
+        if (validatingLaunch) {
+            pageBody.addView(ProgressBar(this).apply { isIndeterminate = true }, margin(bottom = 6))
+            pageBody.addView(text("Checking paths and launcher configuration; archive indexing is performed once by the game engine after launch.", 12, R.color.launcher_muted), margin(bottom = 6))
+            pageBody.addView(actionButton("CANCEL STARTUP CHECK", primary = false) {
+                launchCancellationRequested = true
+                renderPage()
+            }, margin(bottom = 10))
+        }
         pageBody.addView(actionButton("GAME FILES   /   IMPORT OR CHANGE", primary = false) {
             page = Page.FILES
             renderPage()
@@ -1087,6 +1111,10 @@ class LauncherActivity : Activity() {
         pageBody.addView(text("Mods", 30, R.color.launcher_text, bold = true))
         val current = card()
         current.addView(kicker("ENGINE CONFIGURATION"))
+        if (applyingModSelection) {
+            current.addView(ProgressBar(this).apply { isIndeterminate = true }, margin(top = 6))
+            current.addView(text("Applying the latest selection in the background…", 13, R.color.launcher_muted), margin(top = 4))
+        }
         current.addView(text(
             "Next launch: ${modCatalog.selectedMod ?: "Vanilla Yuri's Revenge"}",
             16,
@@ -1119,7 +1147,7 @@ class LauncherActivity : Activity() {
         }
         if (modCatalog.profile == LauncherIniProfile.MO) {
             current.addView(text(
-                "Mental Omega selects the engine's RulesMO/ArtMO/AIMO roots and MO archive family. Explicit [Files] and [Archives] entries in mod.ini override the corresponding defaults. Press Play to run archive-backed preflight and see the exact roots and mounted archive sources before launch.",
+                "Mental Omega selects the MO roots and archive family from its mod identity. Explicit [Files] and [Archives] entries in mod.ini override corresponding defaults. Engine archive indexing happens once during game startup.",
                 13,
                 R.color.launcher_muted,
             ), margin(top = 8))
@@ -1574,10 +1602,30 @@ class LauncherActivity : Activity() {
 
     private fun refreshInstallation() {
         val data = engineDataDirectory()
-        installation = LauncherInstallation.read(data)
-        modCatalog = readModCatalog(data)
-        aresSetting = runCatching { nativeGetAresSetting(data.absolutePath) }.getOrDefault("Auto")
-        renderPage()
+        val generation = installationRefreshGeneration.incrementAndGet()
+        val extraMods = sharedModNames.toList()
+        launcherIo.execute {
+            if (generation != installationRefreshGeneration.get()) return@execute
+            val result = runCatching {
+                Triple(
+                    LauncherInstallation.read(data),
+                    readModCatalog(data, extraMods),
+                    runCatching { nativeGetAresSetting(data.absolutePath) }.getOrDefault("Auto"),
+                )
+            }
+            runOnUiThread {
+                if (generation != installationRefreshGeneration.get() || isFinishing || isDestroyed) return@runOnUiThread
+                result.onSuccess { (nextInstallation, nextMods, nextAresSetting) ->
+                    installation = nextInstallation
+                    modCatalog = nextMods
+                    aresSetting = nextAresSetting
+                }.onFailure { error ->
+                    Log.e("IronHarborLauncher", "Could not refresh installation and mod selection", error)
+                    modCatalog = modCatalog.copy(configError = error.message ?: "Could not read launcher settings")
+                }
+                renderPage()
+            }
+        }
     }
 
     private fun engineDataDirectory(): File = SharedDataStorage(this).directRootPath()
@@ -1589,10 +1637,10 @@ class LauncherActivity : Activity() {
         File(path).takeIf { it.isAbsolute && path.isNotEmpty() }
     }.getOrNull()
 
-    private fun readModCatalog(directory: File): LauncherModCatalog {
+    private fun readModCatalog(directory: File, additionalMods: List<String> = sharedModNames): LauncherModCatalog {
         val externalMod = SharedDataStorage(this).externalModPath()
         return LauncherModCatalog.read(directory)
-            .withAdditionalMods(sharedModNames + listOfNotNull(externalMod))
+            .withAdditionalMods(additionalMods + listOfNotNull(externalMod))
     }
 
     private fun requireSharedDataDirectory(): File = SharedDataStorage(this).directRootPath()
@@ -1783,6 +1831,7 @@ class LauncherActivity : Activity() {
     }
 
     private fun applyModSelection(modName: String?, profile: LauncherIniProfile?) {
+        if (isFinishing || isDestroyed) return
         if (!installation.ready) {
             modSelectionNote = "Locate and verify a game installation before changing the mod or INI profile."
             renderPage()
@@ -1798,23 +1847,91 @@ class LauncherActivity : Activity() {
             refreshInstallation()
             return
         }
-        try {
-            val dataDirectory = requireSharedDataDirectory()
-            val contents = if (profile == null) {
-                nativeConfigForMod(modName.orEmpty(), dataDirectory.absolutePath)
-            } else {
-                nativeConfigForSelection(modName.orEmpty(), profile.configValue, dataDirectory.absolutePath)
-            }
-            LauncherConfigPublisher.publish(dataDirectory, contents)
-            val externalPath = modName?.takeIf {
-                File(it).isAbsolute && AndroidSharedStoragePath.relativeFolderName(File(dataDirectory, "Mods"), File(it)) == null
-            }
-            SharedDataStorage(this).setExternalModPath(externalPath)
-            modSelectionNote = "Saved. Rust validated the selected mod manifest and profile; archive-backed resolution is checked again before Play. The selection takes effect on the next launch."
-            refreshInstallation()
+        val dataDirectory = try {
+            requireSharedDataDirectory()
         } catch (error: Exception) {
             modSelectionNote = "Selection was not applied: ${error.message ?: error.javaClass.simpleName}"
             renderPage()
+            return
+        }
+        val request = modSelectionGeneration.incrementAndGet()
+        val operation = if (profile == null) "mod_switch" else "profile_switch"
+        val requestedLabel = "${modName ?: "Vanilla"} / ${profile?.title ?: "manifest profile"}"
+        applyingModSelection = true
+        modSelectionNote = "Applying $requestedLabel in the background..."
+        renderPage()
+        launcherIo.execute {
+            val started = SystemClock.elapsedRealtime()
+            val timings = mutableListOf<String>()
+            val selection = runCatching {
+                if (request != modSelectionGeneration.get()) throw java.util.concurrent.CancellationException("Superseded selection")
+                val nativeStarted = SystemClock.elapsedRealtime()
+                val contents = if (profile == null) {
+                    nativeConfigForMod(modName.orEmpty(), dataDirectory.absolutePath)
+                } else {
+                    nativeConfigForSelection(modName.orEmpty(), profile.configValue, dataDirectory.absolutePath)
+                }
+                timings += "native_config_and_validation_ms=${SystemClock.elapsedRealtime() - nativeStarted}"
+                if (request != modSelectionGeneration.get()) throw java.util.concurrent.CancellationException("Superseded selection")
+                val publishStarted = SystemClock.elapsedRealtime()
+                LauncherConfigPublisher.publish(dataDirectory, contents)
+                timings += "config_publish_ms=${SystemClock.elapsedRealtime() - publishStarted}"
+                val preferenceStarted = SystemClock.elapsedRealtime()
+                val externalPath = modName?.takeIf {
+                    File(it).isAbsolute && AndroidSharedStoragePath.relativeFolderName(File(dataDirectory, "Mods"), File(it)) == null
+                }
+                SharedDataStorage(this).setExternalModPath(externalPath)
+                timings += "launcher_preferences_ms=${SystemClock.elapsedRealtime() - preferenceStarted}"
+                contents
+            }
+            val elapsed = SystemClock.elapsedRealtime() - started
+            timings += "total_ms=$elapsed"
+            val report = buildString {
+                appendLine("Iron Harbor launcher selection")
+                appendLine("Timestamp UTC: ${java.time.Instant.now()}")
+                appendLine("Operation: $operation")
+                appendLine("Requested: $requestedLabel")
+                appendLine("Result: ${selection.fold({ "applied" }, { error -> if (error is java.util.concurrent.CancellationException) "superseded" else "failed: ${error.message ?: error.javaClass.simpleName}" })}")
+                timings.forEach(::appendLine)
+            }
+            writeLauncherTimingReport(dataDirectory, "launcher-selection-latest.txt", report)
+            runOnUiThread {
+                if (request != modSelectionGeneration.get() || isFinishing || isDestroyed) return@runOnUiThread
+                applyingModSelection = false
+                selection.fold(
+                    onSuccess = {
+                        modSelectionNote = "Saved. Profile and mod selection completed in ${elapsed} ms. Archive indexing is deferred to game startup and runs once there."
+                        refreshInstallation()
+                    },
+                    onFailure = { error ->
+                        if (error !is java.util.concurrent.CancellationException) {
+                            modSelectionNote = "Selection was not applied: ${error.message ?: error.javaClass.simpleName}"
+                            renderPage()
+                        }
+                    },
+                )
+            }
+        }
+    }
+
+    private fun writeLauncherTimingReport(dataDirectory: File, fileName: String, contents: String) {
+        runCatching {
+            val logs = File(dataDirectory, "Logs")
+            if (!logs.isDirectory && !logs.mkdirs()) throw IOException("Cannot create launcher log directory")
+            val target = File(logs, fileName)
+            val temporary = File(logs, ".$fileName.tmp")
+            FileOutputStream(temporary).use { output ->
+                output.write(contents.toByteArray(Charsets.UTF_8))
+                output.fd.sync()
+            }
+            java.nio.file.Files.move(
+                temporary.toPath(), target.toPath(),
+                java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+            )
+            Log.i("IronHarborTiming", contents)
+        }.onFailure { error ->
+            Log.w("IronHarborTiming", "Could not save launcher operation timings", error)
         }
     }
 
@@ -1995,6 +2112,7 @@ class LauncherActivity : Activity() {
 
     private fun launchGame() {
         if (validatingLaunch || !launchGate.begin()) return
+        launchCancellationRequested = false
         validatingLaunch = true
         renderPage()
         Thread({
@@ -2013,13 +2131,17 @@ class LauncherActivity : Activity() {
             }
             val validation = runCatching {
                 syncUserManagedData(measure)
+                if (launchCancellationRequested) throw java.util.concurrent.CancellationException("Cancelled by player")
                 measure("engine_selection_validation") {
                     engineSelection = nativeValidateCurrentSelection(
                         engineDataDirectory().absolutePath,
                     )
                 }
+                if (launchCancellationRequested) throw java.util.concurrent.CancellationException("Cancelled by player")
             }
-            val status = validation.exceptionOrNull()?.let { "failed: ${it.message ?: it.javaClass.simpleName}" } ?: "passed"
+            val cancelled = validation.exceptionOrNull() is java.util.concurrent.CancellationException
+            val status = if (cancelled) "cancelled" else validation.exceptionOrNull()
+                ?.let { "failed: ${it.message ?: it.javaClass.simpleName}" } ?: "passed"
             val trace = buildString {
                 appendLine("IronHarbor launcher preflight")
                 appendLine("Timestamp UTC: ${java.time.Instant.now()}")
@@ -2047,6 +2169,7 @@ class LauncherActivity : Activity() {
                     java.nio.file.StandardCopyOption.ATOMIC_MOVE,
                     java.nio.file.StandardCopyOption.REPLACE_EXISTING,
                 )
+                Log.i("IronHarborTiming", trace)
             }
             runOnUiThread {
                 validatingLaunch = false
@@ -2056,6 +2179,12 @@ class LauncherActivity : Activity() {
                 }
                 validation.fold(
                     onSuccess = {
+                        if (cancelled || launchCancellationRequested) {
+                            launchGate.completedWithoutLaunch()
+                            modSelectionNote = "Startup check cancelled. The game was not started."
+                            renderPage()
+                            return@fold
+                        }
                         try {
                             gameWasLaunched = true
                             val immersiveFullscreen = getSharedPreferences(
@@ -2077,8 +2206,12 @@ class LauncherActivity : Activity() {
                     },
                     onFailure = { error ->
                         launchGate.completedWithoutLaunch()
-                        modSelectionNote = "Cannot launch this game/mod selection: ${error.message ?: error.javaClass.simpleName}. Choose a profile whose required roots are available."
-                        modCatalog = readModCatalog(engineDataDirectory())
+                        modSelectionNote = if (error is java.util.concurrent.CancellationException) {
+                            "Startup check cancelled. The game was not started."
+                        } else {
+                            "Cannot launch this game/mod selection: ${error.message ?: error.javaClass.simpleName}. Choose a profile whose required roots are available."
+                        }
+                        refreshInstallation()
                         page = Page.MODS
                         renderPage()
                     },

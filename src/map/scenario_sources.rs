@@ -138,20 +138,13 @@ fn skirmish_scenario_records_in(
         return Ok(records);
     }
 
-    if let Some(pkt) = assets
-        .get_ref(assets.ini_roots().map_catalog())
-        .and_then(|bytes| IniFile::from_bytes(bytes).ok())
-    {
+    if let Some((pkt, source)) = selected_map_catalog(assets) {
         append_pkt_records(
             &mut records,
             &pkt,
-            SkirmishScenarioSource::MissionsMdPkt,
+            source,
             csf,
-            |file_name| {
-                assets
-                    .get_ref(file_name)
-                    .and_then(|bytes| IniFile::from_bytes(bytes).ok())
-            },
+            |file_name| installed_map_ini(assets, file_name),
         );
     }
 
@@ -242,6 +235,81 @@ fn skirmish_scenario_records_in(
     }
 
     Ok(records)
+}
+
+/// Mental Omega installs its multiplayer map catalog as a loose INI inside
+/// `ini/`, and its entries name maps by a relative `MapsMO/...` path. The
+/// normal stock catalog remains the fallback for every other installation.
+fn selected_map_catalog(
+    assets: &AssetManager,
+) -> Option<(IniFile, SkirmishScenarioSource)> {
+    if assets.ini_roots().profile() == crate::util::ini_roots::IniProfile::Mo
+        && let Some(mod_dir) = assets.mod_dir()
+        && let Some(ini_dir) = crate::util::case_insensitive_path::find(mod_dir, "ini")
+        && let Ok(paths) = native_listing(&ini_dir)
+    {
+        for path in paths {
+            if !crate::util::file_system::is_file(&path)
+                || !path
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("ini"))
+                || crate::util::file_system::metadata(&path)
+                    .is_ok_and(|metadata| metadata.len() > 1024 * 1024)
+            {
+                continue;
+            }
+            let Some(catalog) = read_ini_file(&path) else {
+                continue;
+            };
+            let has_nested_map = catalog.section("MultiMaps").is_some_and(|section| {
+                section.keys().any(|key| {
+                    section
+                        .read_name(key, 0x40)
+                        .is_some_and(|name| normalize_catalog_map_stem(&name).is_some_and(|path| path.contains('/')))
+                })
+            });
+            if has_nested_map {
+                log::info!("Selected Mental Omega map catalog from {}", path.display());
+                let source_name = path
+                    .strip_prefix(mod_dir)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                return Some((catalog, SkirmishScenarioSource::LoosePkt(source_name)));
+            }
+        }
+    }
+
+    assets
+        .get_ref(assets.ini_roots().map_catalog())
+        .and_then(|bytes| IniFile::from_bytes(bytes).ok())
+        .map(|catalog| (catalog, SkirmishScenarioSource::MissionsMdPkt))
+}
+
+fn normalize_catalog_map_stem(value: &str) -> Option<String> {
+    let normalized = value.replace('\\', "/");
+    if normalized.is_empty()
+        || normalized.starts_with('/')
+        || normalized.bytes().any(|byte| byte < 32 || byte == b':')
+        || normalized
+            .split('/')
+            .any(|component| component.is_empty() || matches!(component, "." | ".."))
+    {
+        return None;
+    }
+    Some(normalized)
+}
+
+fn installed_map_ini(assets: &AssetManager, file_name: &str) -> Option<IniFile> {
+    let stem = file_name
+        .strip_suffix(".MAP")
+        .or_else(|| file_name.strip_suffix(".map"))?;
+    let normalized = normalize_catalog_map_stem(stem)?;
+    let relative = format!("{normalized}.MAP");
+    assets
+        .read_install_file(&relative)
+        .and_then(|bytes| IniFile::from_bytes(&bytes).ok())
+        .or_else(|| assets.get_ref(file_name).and_then(|bytes| IniFile::from_bytes(bytes).ok()))
 }
 
 fn append_loose_pkt_records(
@@ -531,7 +599,11 @@ fn append_pkt_records<F>(
         let Some(map_stem) = multimaps.read_name(key, 0x40) else {
             continue;
         };
-        let file_name = format!("{map_stem}.MAP");
+        let Some(normalized_stem) = normalize_catalog_map_stem(map_stem) else {
+            log::warn!("Skipping unsafe multiplayer map path in catalog: {map_stem:?}");
+            continue;
+        };
+        let file_name = format!("{normalized_stem}.MAP");
         let Some(map_ini) = map_ini(&file_name) else {
             continue;
         };
@@ -802,6 +874,60 @@ mod tests {
         );
         assert_eq!(records[2].display_name, "Harbor");
         assert_eq!(records[2].multiplayer_start_waypoints.len(), 2);
+    }
+
+    #[test]
+    fn mental_omega_loose_catalog_discovers_and_loads_nested_maps() {
+        use crate::assets::asset_manager::MediaArchiveMode;
+        use crate::map::source::load_map_by_name_or_path_with_assets;
+        use crate::util::ini_roots::IniRoots;
+
+        let base = crate::assets::asset_manager::test_support::audio_test_install("mo-nested-maps-base");
+        let selected_mod = TestDirectory::new("mo-nested-maps-mod");
+        std::fs::create_dir_all(selected_mod.path().join("ini")).unwrap();
+        std::fs::create_dir_all(selected_mod.path().join("mapsmo/standard")).unwrap();
+        selected_mod.write(
+            "ini/mentalomegamaps.ini",
+            b"[MultiMaps]\n0=MapsMO\\Standard\\arena\n[MapsMO\\Standard\\arena]\nDescriptionText=Mental Omega Arena\nGameMode=standard\nMinPlayers=2\nMaxPlayers=4\n",
+        );
+        selected_mod.write(
+            "mapsmo/standard/arena.map",
+            b"[Basic]\nName=Arena from the selected mod\nGameMode=standard\n[Map]\nSize=0,0,16,16\n[Waypoints]\n0=100010\n1=120012\n",
+        );
+        let mut assets = AssetManager::with_mod(
+            base.path(),
+            Some(selected_mod.path()),
+            MediaArchiveMode::STOCK_DIGITAL,
+        )
+        .unwrap()
+        .with_selected_ini_roots(IniRoots::mo());
+
+        let records =
+            list_skirmish_scenario_records_with_assets(base.path(), &mut assets, None).unwrap();
+        let row = records
+            .iter()
+            .find(|record| record.file_name == "MapsMO/Standard/arena.MAP")
+            .expect("nested MO map appears in Choose Map");
+        assert_eq!(row.display_name, "Mental Omega Arena");
+        assert_eq!(row.game_modes, vec!["standard".to_owned()]);
+        assert_eq!(
+            row.source,
+            SkirmishScenarioSource::LoosePkt("ini/mentalomegamaps.ini".into())
+        );
+
+        let loaded = load_map_by_name_or_path_with_assets(base.path(), &row.file_name, &assets)
+            .unwrap();
+        assert_eq!(loaded.map.basic.name.as_deref(), Some("Arena from the selected mod"));
+    }
+
+    #[test]
+    fn catalog_map_paths_reject_parent_and_absolute_components() {
+        assert_eq!(
+            normalize_catalog_map_stem("MapsMO\\Standard\\arena"),
+            Some("MapsMO/Standard/arena".into())
+        );
+        assert_eq!(normalize_catalog_map_stem("../outside/arena"), None);
+        assert_eq!(normalize_catalog_map_stem("/outside/arena"), None);
     }
 
     #[test]

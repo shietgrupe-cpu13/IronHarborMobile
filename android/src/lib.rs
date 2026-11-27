@@ -7,20 +7,17 @@
 //! directory, logging, panic reporting — runs in this order and then hands over
 //! to `vera20k::entry`, the same start-up the desktop binary uses.
 //!
-//! One process gets one `android_main` call per activity creation; the activity
-//! is destroyed and recreated on rotation, a locale change or a configuration
-//! change the manifest does not absorb. `EventLoop` can be built only once per
-//! process (winit keeps it in a static), so a second call must not reach
-//! `EventLoop::builder()` — see the guard below. Killing the process on that
-//! path is deliberate for the first milestone: a stale surface is a black
-//! screen, while a restart is recoverable. P5 replaces it with real
-//! suspend/resume handling.
+//! `EventLoop` can be built only once per process (winit keeps it in a static),
+//! so a second call must not reach `EventLoop::builder()`; see the guard below.
+//! The game Activity runs in isolated `:game`, which can be retired when the
+//! player returns to the launcher without terminating the launcher process.
 #![cfg(target_os = "android")]
 
 use android_activity::AndroidApp;
 use jni::JavaVM;
 use jni::objects::{JObject, JString};
 use jni::sys::jstring;
+use std::mem::ManuallyDrop;
 use winit::platform::android::EventLoopBuilderExtAndroid;
 
 /// Run `f` with the activity this process belongs to.
@@ -36,8 +33,10 @@ fn with_activity<R>(f: impl FnOnce(&mut jni::JNIEnv, &JObject) -> R) -> Option<R
     // global reference the loader owns.
     let vm = unsafe { JavaVM::from_raw(context.vm().cast()) }.ok()?;
     let mut env = vm.attach_current_thread().ok()?;
-    // SAFETY: the activity handle is the loader's JNI global reference above.
-    let activity = unsafe { JObject::from_raw(context.context().cast()) };
+    // ndk-context borrows the loader-owned global reference. Wrap it without
+    // claiming ownership, then make a thread-local reference for this call.
+    let global_activity = ManuallyDrop::new(unsafe { JObject::from_raw(context.context().cast()) });
+    let activity = env.new_local_ref(&*global_activity).ok()?;
     Some(f(&mut env, &activity))
 }
 
@@ -239,28 +238,43 @@ fn handle_suffix() -> Option<String> {
     suffix.filter(|text| !text.is_empty())
 }
 
-/// The activity, kept for the soft-keyboard hooks: [`AndroidApp`] is cheap to
-/// clone, and its text-input calls work from any thread.
-static ACTIVITY: std::sync::OnceLock<AndroidApp> = std::sync::OnceLock::new();
+/// Keep the activity only while the native event loop is alive. The loader
+/// owns JNI teardown and must run after this clone is dropped on its attached
+/// native thread.
+static ACTIVITY: std::sync::Mutex<Option<AndroidApp>> = std::sync::Mutex::new(None);
+
+struct ActivityAppGuard;
+
+impl Drop for ActivityAppGuard {
+    fn drop(&mut self) {
+        if let Ok(mut activity) = ACTIVITY.lock() {
+            *activity = None;
+        }
+    }
+}
+
+fn current_activity_app() -> Option<AndroidApp> {
+    ACTIVITY.lock().ok().and_then(|activity| activity.clone())
+}
 
 /// Show the soft keyboard (`util::android_ime`).
 fn ime_show() {
-    if let Some(app) = ACTIVITY.get() {
+    if let Some(app) = current_activity_app() {
         app.show_soft_input(false);
     }
 }
 
 /// Hide the soft keyboard.
 fn ime_hide() {
-    if let Some(app) = ACTIVITY.get() {
+    if let Some(app) = current_activity_app() {
         app.hide_soft_input(false);
     }
 }
 
 /// What the input method currently holds.
 fn ime_state() -> vera20k::util::android_ime::TextState {
-    ACTIVITY
-        .get()
+    current_activity_app()
+        .as_ref()
         .map(|app| {
             let state = app.text_input_state();
             vera20k::util::android_ime::TextState {
@@ -279,7 +293,7 @@ fn ime_state() -> vera20k::util::android_ime::TextState {
 /// the platform: `abc👿` is 4 characters but 5 units.
 fn ime_set_state(text: &str, cursor: usize) {
     use android_activity::input::{TextInputState, TextSpan};
-    if let Some(app) = ACTIVITY.get() {
+    if let Some(app) = current_activity_app() {
         let state = vera20k::util::android_ime::TextState::from_edit(text, cursor);
         app.set_text_input_state(TextInputState {
             text: state.text,
@@ -522,11 +536,43 @@ fn launcher_profile(value: &str) -> anyhow::Result<vera20k::util::ini_roots::Ini
     value.parse().map_err(anyhow::Error::msg)
 }
 
+fn launcher_profile_for_mod(
+    data_dir: &std::path::Path,
+    mod_name: &str,
+) -> anyhow::Result<vera20k::util::ini_roots::IniProfile> {
+    use vera20k::util::ini_roots::IniProfile;
+
+    if mod_name.is_empty() {
+        let (config_path, previous) = read_launcher_config(data_dir)?;
+        let config = vera20k::util::config::GameConfig::parse_text_at(&previous, &config_path)?;
+        let game_dir = &config.paths.ra2_dir;
+        let has_ra2 = vera20k::util::case_insensitive_path::find(game_dir, "ra2.mix")
+            .is_some_and(|path| path.is_file());
+        let has_expansion = vera20k::util::case_insensitive_path::find(game_dir, "ra2md.mix")
+            .is_some_and(|path| path.is_file());
+        return Ok(if has_ra2 && !has_expansion {
+            IniProfile::Ra2
+        } else {
+            IniProfile::Yr
+        });
+    }
+
+    let (config_path, previous) = read_launcher_config(data_dir)?;
+    let contents = vera20k::util::config::set_paths_key(&previous, "mod", mod_name);
+    let config = vera20k::util::config::GameConfig::parse_text_at(&contents, &config_path)?;
+    let mod_dir = launcher_mod_directory(&config)?
+        .ok_or_else(|| anyhow::anyhow!("The selected mod folder was not resolved"))?;
+    let definition = vera20k::util::mod_definition::ModDefinition::read(&mod_dir)
+        .map_err(anyhow::Error::msg)?;
+    Ok(definition.suggested_profile().unwrap_or(IniProfile::Auto))
+}
+
 fn launcher_config_for_selection(
     data_dir: &std::path::Path,
     mod_name: &str,
     profile: vera20k::util::ini_roots::IniProfile,
 ) -> anyhow::Result<String> {
+    let started = std::time::Instant::now();
     vera20k::util::platform_dir::set(data_dir.to_path_buf());
     let (config_path, previous) = read_launcher_config(data_dir)?;
     let contents = vera20k::util::config::set_paths_key(&previous, "mod", mod_name);
@@ -534,25 +580,18 @@ fn launcher_config_for_selection(
     let config = vera20k::util::config::GameConfig::parse_text_at(&contents, &config_path)
         .map_err(|error| anyhow::anyhow!("The selected configuration is not valid for the engine: {error:#}"))?;
     validate_launcher_paths(&config)?;
-    // Read the exact mod manifest through the engine's resource resolver at
-    // selection time. Archive-backed root validation occurs once at Play and
-    // again in normal engine startup; this avoids parsing mod.ini in Kotlin.
-    let _ = selected_launcher_resources_without_archives(&config)?;
+    // Manifest parsing is bounded to 64 KiB. Do not construct an AssetManager
+    // here: that indexes every selected archive, then Play and engine startup
+    // repeat the same work. The game process resolves resources once at launch.
+    if let Some(mod_dir) = launcher_mod_directory(&config)? {
+        vera20k::util::mod_definition::ModDefinition::read(&mod_dir)
+            .map_err(anyhow::Error::msg)?;
+    }
+    log::info!(
+        "launcher selection: profile={profile:?}, mod={mod_name:?}, duration_ms={}",
+        started.elapsed().as_millis()
+    );
     Ok(contents)
-}
-
-fn selected_launcher_resources_without_archives(
-    config: &vera20k::util::config::GameConfig,
-) -> anyhow::Result<vera20k::util::mod_definition::ResourceConfig> {
-    let mod_dir = launcher_mod_directory(config)?;
-    let Some(mod_dir) = mod_dir else {
-        return Ok(vera20k::util::mod_definition::ResourceConfig::from_ini(config.ini.clone()));
-    };
-    let folder = vera20k::util::mod_package::ModFolder::loose(mod_dir.clone());
-    let definition = vera20k::util::mod_definition::ModDefinition::read(&mod_dir)
-        .map_err(anyhow::Error::msg)?;
-    vera20k::assets::asset_manager::mod_resources(&folder, &definition, &config.ini)
-        .map_err(anyhow::Error::msg)
 }
 
 #[unsafe(no_mangle)]
@@ -636,11 +675,10 @@ pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeConfigForMod(
     let result = (|| -> anyhow::Result<jstring> {
         let mod_name: String = env.get_string(&mod_name)?.into();
         let files_directory: String = env.get_string(&files_directory)?.into();
-        let profile = if mod_name.is_empty() {
-            vera20k::util::ini_roots::IniProfile::Yr
-        } else {
-            vera20k::util::ini_roots::IniProfile::Auto
-        };
+        let profile = launcher_profile_for_mod(
+            std::path::Path::new(&files_directory),
+            &mod_name,
+        )?;
         let contents = launcher_config_for_selection(
             std::path::Path::new(&files_directory),
             &mod_name,
@@ -713,45 +751,43 @@ pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeValidateCurrentSe
 ) -> jstring {
     let result = (|| -> anyhow::Result<jstring> {
         let files_directory: String = env.get_string(&files_directory)?.into();
+        let started = std::time::Instant::now();
         let data_dir = std::path::Path::new(&files_directory);
         vera20k::util::platform_dir::set(data_dir.to_path_buf());
+        let read_started = std::time::Instant::now();
         let (config_path, contents) = read_launcher_config(data_dir)?;
+        let read_ms = read_started.elapsed().as_millis();
+        let parse_started = std::time::Instant::now();
         let config = vera20k::util::config::GameConfig::parse_text_at(&contents, &config_path)?;
-        let selection = selected_launcher_resources(&config)?;
-        let roots = &selection.roots;
-        let archives = selection.archives.join(", ");
-        let mod_directory = selection
-            .mod_directory
+        let parse_ms = parse_started.elapsed().as_millis();
+        let validate_started = std::time::Instant::now();
+        validate_launcher_paths(&config)?;
+        let mod_directory = launcher_mod_directory(&config)?;
+        let mod_name = config.paths.mod_name().unwrap_or("(vanilla)");
+        let suggested_profile = mod_directory
             .as_deref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "(vanilla)".to_owned());
-        let ares_source = selection.ares_source.as_deref().unwrap_or("not mounted");
+            .map(vera20k::util::mod_definition::ModDefinition::read)
+            .transpose()
+            .map_err(anyhow::Error::msg)?
+            .and_then(|definition| definition.suggested_profile());
+        let validate_ms = validate_started.elapsed().as_millis();
         let message = format!(
             concat!(
-                "Validated engine selection: config={}; mod={}; effective profile={:?}; ",
-                "INI roots: Rules={}, Art={}, AI={}, Sound={}, EVA={}, Theme={}, Battle={}, ",
-                "Mission={}, MapSelect={}, Modes={}, MapCatalog={}, TheaterSuffix={:?}; ",
-                "registered startup archives ({}): {}; ares.mix source={}"
+                "Lightweight preflight passed: config={}; mod={}; requested profile={:?}; ",
+                "manifest profile suggestion={:?}; archive indexing and resource resolution are deferred ",
+                "to engine startup (one pass); read_config={} ms, parse_config={} ms, ",
+                "path_and_manifest_validation={} ms, total={} ms"
             ),
             config_path.display(),
-            mod_directory,
-            roots.profile(),
-            roots.rules(),
-            roots.art(),
-            roots.ai(),
-            roots.sound(),
-            roots.eva(),
-            roots.theme(),
-            roots.battle(),
-            roots.mission(),
-            roots.mapsel(),
-            roots.modes(),
-            roots.map_catalog(),
-            roots.theater_suffix(),
-            selection.archives.len(),
-            archives,
-            ares_source,
+            if mod_directory.is_some() { mod_name } else { "(vanilla)" },
+            config.ini.profile,
+            suggested_profile,
+            read_ms,
+            parse_ms,
+            validate_ms,
+            started.elapsed().as_millis(),
         );
+        log::info!("launcher Play preflight: {message}");
         Ok(env.new_string(message)?.into_raw())
     })();
     match result {
@@ -1117,54 +1153,6 @@ fn validate_launcher_paths(config: &vera20k::util::config::GameConfig) -> anyhow
     Ok(())
 }
 
-fn selected_launcher_resources(
-    config: &vera20k::util::config::GameConfig,
-) -> anyhow::Result<LauncherSelectionDiagnostics> {
-    validate_launcher_paths(config)?;
-    let mod_dir = launcher_mod_directory(config)?;
-    let folder = mod_dir
-        .as_ref()
-        .map(|path| vera20k::util::mod_package::ModFolder::loose(path.clone()));
-    let definition = mod_dir
-        .as_deref()
-        .map(vera20k::util::mod_definition::ModDefinition::read)
-        .transpose()
-        .map_err(anyhow::Error::msg)?;
-    let resources = match (&folder, &definition) {
-        (Some(folder), Some(definition)) => {
-            vera20k::assets::asset_manager::mod_resources(folder, definition, &config.ini)
-                .map_err(anyhow::Error::msg)?
-        }
-        _ => vera20k::util::mod_definition::ResourceConfig::from_ini(config.ini.clone()),
-    };
-    let ares = read_launcher_ares_setting(config.paths.settings_dir())?;
-    let ares = resources.effective_ares(ares).map_err(anyhow::Error::msg)?;
-    let manager = vera20k::assets::asset_manager::AssetManager::with_mod_and_ares_support(
-        &config.paths.ra2_dir,
-        mod_dir.as_deref(),
-        Some(&config.paths.ares_support_dir()),
-        vera20k::assets::asset_manager::MediaArchiveMode::STOCK_DIGITAL,
-        ares,
-        &resources.archives,
-    )?
-    .with_resource_config(&resources)?;
-    Ok(LauncherSelectionDiagnostics {
-        roots: manager.ini_roots().clone(),
-        archives: manager.registered_archive_names(),
-        mod_directory: mod_dir,
-        ares_source: manager
-            .archive_with_source("ares.mix")
-            .map(|(source, _)| source.to_owned()),
-    })
-}
-
-struct LauncherSelectionDiagnostics {
-    roots: vera20k::util::ini_roots::IniRoots,
-    archives: Vec<String>,
-    mod_directory: Option<std::path::PathBuf>,
-    ares_source: Option<String>,
-}
-
 fn launcher_ares_path(settings_dir: &std::path::Path) -> std::path::PathBuf {
     let config = settings_dir.join("Config");
     vera20k::util::case_insensitive_path::find(&config, "VERA.INI")
@@ -1263,7 +1251,10 @@ fn android_main(app: AndroidApp) {
     });
     // winit's Android backend has no IME text events (winit#4736 adds them), so
     // the engine reads the activity's GameTextInput buffer through these hooks.
-    let _ = ACTIVITY.set(app.clone());
+    if let Ok(mut activity) = ACTIVITY.lock() {
+        *activity = Some(app.clone());
+    }
+    let _activity_app_guard = ActivityAppGuard;
     vera20k::util::android_ime::install(vera20k::util::android_ime::Hooks {
         show: ime_show,
         hide: ime_hide,
@@ -1316,15 +1307,14 @@ fn android_main(app: AndroidApp) {
         register_folder_picker_native()
     );
 
-    // Android can start a second activity in this same, still-cached process
-    // after the player exits to the launcher and taps the icon again. A second
-    // winit event loop is impossible (winit keeps process-wide state) and the
-    // guard says so, but returning would leave the new activity on its splash
-    // for ever. End the process instead, so that tap is a cold start.
+    // winit owns one event loop per :game process. Return normally so the
+    // android-activity loader can finish the Activity, detach JNI and release
+    // ndk-context in order. The Activity schedules process retirement after
+    // this cleanup window.
     if !claim_event_loop() {
-        log::error!("android_main called again; ending this process for a cold relaunch");
+        log::error!("android_main called again in a process whose event loop was already consumed");
         log::logger().flush();
-        std::process::exit(0);
+        return;
     }
 
     let event_loop: winit::event_loop::EventLoop<()> = match winit::event_loop::EventLoop::builder()
@@ -1372,11 +1362,7 @@ fn android_main(app: AndroidApp) {
     }
     log::logger().flush();
 
-    // One process runs one game. Exiting here (rather than returning and letting
-    // Android cache the process) is what makes the launcher's next tap start
-    // from a clean slate: the event loop above cannot be rebuilt, so a cached
-    // process would serve the new activity nothing but its splash.
-    std::process::exit(0);
+    // Returning is required for android-activity's JNI detach and context cleanup.
 }
 
 /// Claims this process's single event loop.

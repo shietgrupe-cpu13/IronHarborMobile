@@ -2,6 +2,15 @@
 
 Updated 2026-11-27. Read [IRON_HARBOR_MASTER_PLAN.md](IRON_HARBOR_MASTER_PLAN.md) as the authoritative specification.
 
+## Active checkpoint — launcher stalls, MO and shutdown
+
+- Current checkout: `E:\VERA20K-ANDROID`, branch `android-new`, local HEAD `bdadfd1a921d2cd06fd63a9154f4d00a44464b1a`, equal to the tracked remote at last check. Tracked source/workflow files are modified; untracked `out/` is user data and must remain untouched.
+- No GitHub Action is running for these edits because they are only in the local worktree. Latest prior run [46010200544](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46010200544) succeeded on `ec5e31d`, before this change set. No new APK exists.
+- Root-cause evidence: the 26,312 ms Play preflight constructed an `AssetManager`, indexing selected archives before engine startup repeated that work. Current changes defer archive indexing to engine startup, move launcher refresh/mod/profile selection off the UI thread, record operation timings, add a cancel affordance and skip identical config writes.
+- MO changes infer profile from manifest Id/Name and discover the loose map catalog by `[MultiMaps]` contents, validating nested relative paths before loading. Focused tests and workflow commands were added. MO mode/roster behavior and actual loaded resources remain unverified.
+- JNI/lifecycle changes avoid owning the loader's Activity global reference, clear the retained AndroidApp on normal native return, delay process retirement, and dispatch folder dialogs/pickers to Android's UI thread. No compile, CI, or device validation has run yet; do not report the shutdown crash fixed.
+- Next: finish source review, run `git diff --check`, commit/push the task changes, inspect Actions tests/build/APK verification/artifact, then install and test on the POCO with equivalent game/mod/profile. Do not compile Rust, Gradle or APK locally.
+
 ## 2026-11-27 renderer/MO checkpoint
 
 - Latest user feedback: deleting an old `config.toml` corrected the game folder. Exact path/content was not supplied. Android config search currently prefers shared `Config/config.toml`, then shared root `config.toml`, then prior app-private entries. Preserve this non-destructive fallback until a test captures both competing files and their selected paths.

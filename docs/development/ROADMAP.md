@@ -4,7 +4,7 @@ Updated 2026-11-27. Authoritative specification: [IRON_HARBOR_MASTER_PLAN.md](IR
 
 ## Immediate regression milestone — renderer and MO profile
 
-Current working-tree work restores launcher selection for Automatic/Vulkan/OpenGL ES through the existing engine config owner, adds one-shot startup fallback between wgpu primary/Vulkan and GLES, and restores the dedicated MO INI/archive profile with `mod.ini` overrides. The CI workflow includes focused settings, profile, mounted-archive and Ares tests. This milestone is pending review and a GitHub Actions ARM64 APK; neither CI nor device verification has completed. The reported stale-config fix is documented in the device matrix without changing fallback precedence until its competing files are captured.
+Current unpushed work addresses the confirmed long Play preflight by removing duplicate archive indexing from JNI validation, moves launcher scans and mod/profile configuration off the UI thread, recognizes Mental Omega from `mod.ini`, discovers its loose nested-map catalog generically, and corrects native-thread Activity UI calls and JNI/lifecycle ownership. Focused tests and workflow steps are in the worktree; no Actions run has validated them. CI ARM64 packaging and physical-device retest are required before claiming a fix. Prior renderer/MO selector changes also remain device-unverified.
 
 ## Phase 2 — Build and distribution
 

@@ -4,10 +4,10 @@ Updated 2026-11-27. Current authoritative plan: [IRON_HARBOR_MASTER_PLAN.md](IRO
 
 ## Current renderer and Mental Omega regression work
 
-- Device feedback says removing an old `config.toml` fixed the game-directory selection. Config-source precedence is now recorded in `DEVICE_TEST_MATRIX.md`; the exact deleted path/content was unavailable, so migration fallback precedence remains unchanged to avoid silently redirecting user data.
-- Commit `106c5184c` on `android-new` contains the launcher renderer selector (Automatic, Vulkan, OpenGL ES), JNI bridge and engine-owned `VERA.INI` persistence; explicit MO profile selection and MO resource/archive resolution; and Android backend fallback/manifest updates. Physical-device rendering and MO gameplay remain unverified.
-- Actions run [46007825583](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46007825583) passed launcher/JVM validation and the preceding focused Rust tests, then failed because the final MO asset test filter used `assets::asset_manager::install_inspection_tests::...`; the test is actually under `assets::asset_manager::tests::...`. Cargo therefore matched zero tests and stopped before ARM64 compilation/APK packaging.
-- The workflow filter has been corrected locally. After pushing, rerun Actions and inspect the focused test, ARM64 build, APK verification and artifact upload before reporting an APK.
+- Device feedback says removing an old `config.toml` fixed game-directory selection; the exact path/content was not supplied. Preserve non-destructive configuration precedence.
+- Current unpushed changes target the confirmed 26,312 ms Play preflight (duplicate archive indexing), synchronous launcher I/O, MO identity-to-profile selection, nested MO map catalogs, native-thread Activity UI calls, JNI reference ownership and shutdown ordering. None has compiled or run in CI; no new APK exists yet.
+- Focused tests were added for MO manifest identity and nested map catalog/path safety, and added to the GitHub Actions workflow. The previous run [46010200544](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46010200544) succeeded on commit `ec5e31d` before these local changes; it does not validate them. Local HEAD is `bdadfd1a9` and changes are uncommitted.
+- The debug build version code is 208 (previous device artifact: 207) to permit an update, subject to signing-certificate compatibility. CI and physical-device validation are required; do not call these regressions fixed yet.
 
 ## Latest device regression and current change
 
