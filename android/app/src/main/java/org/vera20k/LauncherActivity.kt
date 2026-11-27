@@ -121,7 +121,7 @@ class LauncherActivity : Activity() {
     private external fun nativeGetCameraZoomLimits(filesDirectory: String): String
     private external fun nativeConfigForCameraZoomLimits(minimum: Float, maximum: Float, filesDirectory: String): String
     private external fun nativeGetRenderOptions(filesDirectory: String): String
-    private external fun nativeConfigForRenderOptions(percent: Int, fps: Int, filesDirectory: String): String
+    private external fun nativeConfigForRenderOptions(percent: Int, fps: Int, backend: String, filesDirectory: String): String
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -522,7 +522,7 @@ class LauncherActivity : Activity() {
         val engine = card()
         engine.addView(kicker("ENGINE STATUS"))
         infoRow(engine, "Engine", "VERA20K ${appVersion()}")
-        infoRow(engine, "Renderer", "Vulkan required by this build")
+        infoRow(engine, "Renderer", "Vulkan preferred; OpenGL ES compatibility available")
         infoRow(engine, "Attribution", "YuriPlanet / VERA20K  /  GPLv3")
         pageBody.addView(engine)
         pageBody.addView(text(
@@ -704,19 +704,19 @@ class LauncherActivity : Activity() {
             ).show()
         }
         infoRow(display, "Orientation", "Landscape-first Android window")
-        infoRow(display, "Renderer", "Vulkan; required by the current engine")
+        infoRow(display, "Renderer", "Selectable: Automatic, Vulkan, or OpenGL ES")
         infoRow(display, "Display", "Physical Android resolution stays unchanged")
         display.addView(text("EXPERIMENTAL BETA", 12, R.color.launcher_accent, bold = true), margin(top = 8))
         display.addView(text("World render scale", 17, R.color.launcher_text, bold = true), margin(top = 2))
         display.addView(text("Keep this at 100% for normal play. Lower scales are experimental and may offset the movement indicator or omit building textures. They apply on the next launch, and no FPS gain is established; the scale does not reduce CPU world-draw preparation.", 13, R.color.launcher_muted), margin(top = 4, bottom = 6))
         val renderOptions = try {
             nativeGetRenderOptions(engineDataDirectory().absolutePath).split(',').let { values ->
-                require(values.size == 2)
-                values[0].toInt() to values[1].toInt()
+                require(values.size == 3)
+                Triple(values[0].toInt(), values[1].toInt(), values[2])
             }
         } catch (error: Exception) {
             Toast.makeText(this, "Using default render settings: ${error.message ?: "configuration unavailable"}", Toast.LENGTH_LONG).show()
-            100 to 0
+            Triple(100, 0, "auto")
         }
         var renderPercent = renderOptions.first.coerceIn(50, 100).let { it - it % 5 }
         val renderLabel = text("${renderPercent}%", 14, R.color.launcher_text)
@@ -754,13 +754,24 @@ class LauncherActivity : Activity() {
         }
         display.addView(fpsSpinner)
         display.addView(text("Frame limiting affects presentation only; simulation/network tick pacing is unchanged. 120 FPS is subject to display refresh and engine pacing. Adaptive resolution is not available.", 12, R.color.launcher_muted), margin(top = 3))
+        display.addView(text("Rendering API", 15, R.color.launcher_text, bold = true), margin(top = 10))
+        val backendValues = listOf("auto", "vulkan", "gles")
+        val backendSpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(this@LauncherActivity, android.R.layout.simple_spinner_dropdown_item,
+                listOf("Automatic (Vulkan, then OpenGL ES)", "Vulkan only", "OpenGL ES compatibility"))
+            setSelection(backendValues.indexOf(renderOptions.third).takeIf { it >= 0 } ?: 0)
+            contentDescription = "Rendering API preference"
+        }
+        display.addView(backendSpinner)
+        display.addView(text("OpenGL ES uses the engine's compatibility renderer and may behave differently by device or mod. Automatic tries Vulkan first, then OpenGL ES if Vulkan initialization fails. This is a compatibility option, not a performance setting.", 12, R.color.launcher_muted), margin(top = 3))
         display.addView(actionButton("SAVE GRAPHICS SETTINGS", primary = true) {
             try {
                 val dataDirectory = requireSharedDataDirectory()
                 val fps = fpsValues[fpsSpinner.selectedItemPosition.coerceIn(fpsValues.indices)]
-                val contents = nativeConfigForRenderOptions(renderPercent, fps, dataDirectory.absolutePath)
+                val backend = backendValues[backendSpinner.selectedItemPosition.coerceIn(backendValues.indices)]
+                val contents = nativeConfigForRenderOptions(renderPercent, fps, backend, dataDirectory.absolutePath)
                 LauncherConfigPublisher.publish(dataDirectory, contents)
-                Toast.makeText(this, "Graphics settings saved; they apply the next time you start the game", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Graphics settings saved; renderer changes apply the next time you start the game", Toast.LENGTH_LONG).show()
             } catch (error: Exception) {
                 Toast.makeText(this, "Could not save graphics settings: ${error.message ?: error.javaClass.simpleName}", Toast.LENGTH_LONG).show()
             }
@@ -1596,7 +1607,7 @@ class LauncherActivity : Activity() {
         infoRow(device, "Device", "${Build.MANUFACTURER} ${Build.MODEL}")
         infoRow(device, "Android", "${Build.VERSION.RELEASE}  /  API ${Build.VERSION.SDK_INT}")
         infoRow(device, "ABI", Build.SUPPORTED_ABIS.joinToString())
-        infoRow(device, "Vulkan", "Required by package; live adapter not queried here")
+        infoRow(device, "Graphics APIs", "Vulkan and OpenGL ES are available; active adapter is recorded in engine logs")
         infoRow(device, "Memory", "${memory.availMem / (1024 * 1024)} MB available  /  native heap ${Debug.getNativeHeapAllocatedSize() / (1024 * 1024)} MB")
         infoRow(device, "Performance profile", "In-game Options > Performance Stats shows frame/tick rate, CPU phases, core load and GPU timing")
         val preflight = File(engineDataDirectory(), "Logs/launcher-preflight-latest.txt")
@@ -1624,7 +1635,7 @@ class LauncherActivity : Activity() {
             appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL}")
             appendLine("Android: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
             appendLine("ABI: ${Build.SUPPORTED_ABIS.joinToString()}")
-            appendLine("Vulkan: required by package; live adapter not queried by launcher")
+            appendLine("Renderer: Vulkan / OpenGL ES selected in launcher; live adapter is reported by engine logs")
             appendLine("Available memory: ${memory.availMem / (1024 * 1024)} MB")
             appendLine("Native heap: ${Debug.getNativeHeapAllocatedSize() / (1024 * 1024)} MB")
             appendLine("Installation configured: ${installation.configuredDirectory?.absolutePath ?: "no"}")

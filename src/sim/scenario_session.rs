@@ -1113,6 +1113,13 @@ impl ScenarioSession {
         self.map_height
     }
 
+    /// `map_width` is the canonical cell-array extent (`[Map] Size` width plus
+    /// height). Preserve native arithmetic through the original 512 extent and
+    /// widen only on VERA-only maps.
+    pub const fn map_exceeds_original_size(&self) -> bool {
+        self.map_width > 512
+    }
+
     pub const fn mp_start_waypoints(&self) -> &BTreeMap<u32, (u16, u16)> {
         &self.mp_start_waypoints
     }
@@ -2166,6 +2173,17 @@ impl ScenarioSession {
 mod tests {
     use super::*;
     use crate::sim::world::Simulation;
+
+    #[test]
+    fn map_exceeds_original_size_uses_canonical_extent_boundary() {
+        let mut sim = Simulation::new();
+        sim.session.set_map_width_for_test(512);
+        sim.session.set_map_height_for_test(512);
+        assert!(!sim.session.map_exceeds_original_size());
+        sim.session.set_map_width_for_test(513);
+        sim.session.set_map_height_for_test(513);
+        assert!(sim.session.map_exceeds_original_size());
+    }
 
     #[test]
     fn campaign_startup_retains_literal_rows_counter_and_identity() {

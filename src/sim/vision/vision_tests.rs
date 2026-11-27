@@ -8,6 +8,52 @@ use crate::sim::game_entity::GameEntity;
 use crate::sim::intern;
 use crate::util::save_codec;
 
+#[test]
+fn mo_neutral_and_allied_sensor_planes_are_shared_without_merging_counts() {
+    let mut interner = intern::StringInterner::new();
+    let viewer = interner.intern("Americans");
+    let ally = interner.intern("Ally");
+    let neutral = interner.intern("Neutral");
+    let enemy = interner.intern("Soviet");
+    let mut graph = HouseAllianceMap::new();
+    graph.insert(
+        "AMERICANS".to_string(),
+        std::collections::BTreeSet::from(["ALLY".to_string()]),
+    );
+    let alliances = HouseAlliances::new(graph);
+    let sharing = compute_sensor_sharing(&alliances, &interner, [viewer, ally, neutral, enemy]);
+
+    let mut fog = FogState::new(16, 16);
+    fog.increment_sensor_at(neutral, 8, 8);
+    fog.increment_sensor_at(ally, 9, 8);
+    fog.increment_sensor_at(enemy, 10, 8);
+    assert!(!fog.has_sensor_for_house(viewer, 8, 8));
+    fog.set_sensor_sharing(sharing);
+
+    assert!(
+        fog.has_sensor_for_house(viewer, 8, 8),
+        "neutral sensor is public"
+    );
+    assert!(
+        fog.has_sensor_for_house(viewer, 9, 8),
+        "one-way ally sensor is shared"
+    );
+    assert!(
+        !fog.has_sensor_for_house(viewer, 10, 8),
+        "enemy sensor stays private"
+    );
+    assert!(
+        !fog.sensors_by_house().contains_key(&viewer),
+        "counters are not merged"
+    );
+
+    let copy = fog.presentation_copy(Some(viewer), FogState::default());
+    assert!(copy.has_sensor_for_house(viewer, 8, 8));
+    assert!(copy.has_sensor_for_house(viewer, 9, 8));
+    assert!(!copy.has_sensor_for_house(viewer, 10, 8));
+    assert!(fog.fire_view(&alliances).has_sensor_for_house(viewer, 9, 8));
+}
+
 /// Persistent production Simulation for source/frame regression fixtures.
 /// Only fixture input construction lives here; all admission, Cell writes,
 /// frame projection and synchronous discovery run through their real owners.

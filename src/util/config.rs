@@ -225,6 +225,40 @@ fn resolved_directory(path: &Path) -> PathBuf {
 pub const CAMERA_ZOOM_SUPPORTED_MIN: f32 = 0.25;
 pub const CAMERA_ZOOM_SUPPORTED_MAX: f32 = 4.0;
 
+/// Graphics API preference. Automatic keeps the normal platform choice and,
+/// on Android, tries GLES if Vulkan cannot initialize. Explicit choices never
+/// silently switch APIs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum GraphicsBackend {
+    #[default]
+    Auto,
+    Vulkan,
+    OpenGlEs,
+}
+
+impl GraphicsBackend {
+    pub const fn config_value(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Vulkan => "vulkan",
+            Self::OpenGlEs => "gles",
+        }
+    }
+}
+
+impl std::str::FromStr for GraphicsBackend {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "auto" => Ok(Self::Auto),
+            "vulkan" => Ok(Self::Vulkan),
+            "gles" | "opengles" | "opengl_es" => Ok(Self::OpenGlEs),
+            other => anyhow::bail!("unsupported graphics backend `{other}`"),
+        }
+    }
+}
+
 /// Graphics settings.
 ///
 /// Every field has a sensible default so `[graphics]` can be omitted entirely.
@@ -234,6 +268,8 @@ pub const CAMERA_ZOOM_SUPPORTED_MAX: f32 = 4.0;
 /// (`[VERA] VSync=`), so an old config's `vsync` line is ignored.
 #[derive(Debug)]
 pub struct GraphicsConfig {
+    /// Preferred rendering API. Automatic is Vulkan-first on Android.
+    pub backend: GraphicsBackend,
     /// Enable cosmetic per-frame effects: water/ore sparkles. Also intended to
     /// gate future cosmetic effects (laser beam pulses, particle systems, line
     /// trails) per gamemd's "Extra Animations" option. Default ON to match
@@ -255,6 +291,7 @@ pub struct GraphicsConfig {
 impl Default for GraphicsConfig {
     fn default() -> Self {
         Self {
+            backend: GraphicsBackend::Auto,
             extra_animations: true,
             translucent_fog: false,
             camera_zoom_min: 0.75,
@@ -480,6 +517,10 @@ impl GameConfig {
                     parse_string(value).map(|path| settings_dir = Some(PathBuf::from(path)))
                 }
                 ("paths", "mod") => parse_string(value).map(|name| mod_name = Some(name)),
+                ("graphics", "backend") => parse_string(value).and_then(|name| {
+                    graphics.backend = name.parse()?;
+                    Ok(())
+                }),
                 ("graphics", "extra_animations") => {
                     parse_bool(value).map(|on| graphics.extra_animations = on)
                 }
@@ -633,7 +674,12 @@ pub fn set_camera_zoom_limits(contents: &str, minimum: f32, maximum: f32) -> Res
 }
 
 /// Set the world render scale and local presentation FPS limit.
-pub fn set_render_options(contents: &str, percent: u8, fps_limit: u16) -> Result<String> {
+pub fn set_render_options(
+    contents: &str,
+    percent: u8,
+    fps_limit: u16,
+    backend: GraphicsBackend,
+) -> Result<String> {
     ensure!(
         (50..=100).contains(&percent) && percent % 5 == 0,
         "render scale must be 50..=100 in 5% steps"
@@ -648,18 +694,20 @@ pub fn set_render_options(contents: &str, percent: u8, fps_limit: u16) -> Result
         "render_scale_percent",
         &percent.to_string(),
     );
-    Ok(set_config_value_key(
+    let contents = set_config_value_key(&contents, "graphics", "fps_limit", &fps_limit.to_string());
+    Ok(set_config_string_key(
         &contents,
         "graphics",
-        "fps_limit",
-        &fps_limit.to_string(),
+        "backend",
+        backend.config_value(),
     ))
 }
 
 /// Read launcher render options without requiring an installation path.
-pub fn render_options_from_text(contents: &str) -> Result<(u8, u16)> {
+pub fn render_options_from_text(contents: &str) -> Result<(u8, u16, GraphicsBackend)> {
     let mut percent = 100_u32;
     let mut fps_limit = 0_u32;
+    let mut backend = GraphicsBackend::default();
     let mut section = "";
     for (index, raw) in contents
         .strip_prefix('\u{feff}')
@@ -683,6 +731,7 @@ pub fn render_options_from_text(contents: &str) -> Result<(u8, u16)> {
             match key.trim() {
                 "render_scale_percent" => percent = parse_u32(value.trim())?,
                 "fps_limit" => fps_limit = parse_u32(value.trim())?,
+                "backend" => backend = parse_string(value.trim())?.parse()?,
                 _ => {}
             }
         }
@@ -695,7 +744,7 @@ pub fn render_options_from_text(contents: &str) -> Result<(u8, u16)> {
         [0, 30, 60, 120].contains(&fps_limit),
         "FPS limit must be engine default, 30, 60, or 120"
     );
-    Ok((percent as u8, fps_limit as u16))
+    Ok((percent as u8, fps_limit as u16, backend))
 }
 
 /// Read the launcher-owned camera range without requiring a game folder to be
@@ -1348,17 +1397,45 @@ mod tests {
 
     #[test]
     fn render_options_default_round_trip_and_validation() {
-        assert_eq!(render_options_from_text("").unwrap(), (100, 0));
+        assert_eq!(
+            render_options_from_text("").unwrap(),
+            (100, 0, GraphicsBackend::Auto)
+        );
         let source = "[paths]\nra2_dir = '/game'\n[graphics]\ncamera_zoom_min = 0.5\n";
-        let updated = set_render_options(source, 75, 60).unwrap();
+        let updated = set_render_options(source, 75, 60, GraphicsBackend::OpenGlEs).unwrap();
         assert!(updated.contains("camera_zoom_min = 0.5"));
-        assert_eq!(render_options_from_text(&updated).unwrap(), (75, 60));
+        assert_eq!(
+            render_options_from_text(&updated).unwrap(),
+            (75, 60, GraphicsBackend::OpenGlEs)
+        );
         let parsed = GameConfig::parse(&format!("{updated}\n")).unwrap();
         assert_eq!(parsed.graphics.render_scale_percent, 75);
         assert_eq!(parsed.graphics.fps_limit, 60);
+        assert_eq!(parsed.graphics.backend, GraphicsBackend::OpenGlEs);
         for (percent, fps) in [(49, 60), (52, 60), (100, 45), (75, 31)] {
-            assert!(set_render_options("", percent, fps).is_err());
+            assert!(set_render_options("", percent, fps, GraphicsBackend::Auto).is_err());
         }
+    }
+
+    #[test]
+    fn graphics_backend_preference_defaults_and_rejects_unknown_apis() {
+        let base = "[paths]\nra2_dir = '/game'\n";
+        assert_eq!(
+            GameConfig::parse(base).unwrap().graphics.backend,
+            GraphicsBackend::Auto
+        );
+        for (value, expected) in [
+            ("auto", GraphicsBackend::Auto),
+            ("vulkan", GraphicsBackend::Vulkan),
+            ("gles", GraphicsBackend::OpenGlEs),
+            ("OpenGLES", GraphicsBackend::OpenGlEs),
+        ] {
+            let config =
+                GameConfig::parse(&format!("{base}[graphics]\nbackend='{value}'\n")).unwrap();
+            assert_eq!(config.graphics.backend, expected, "{value}");
+        }
+        assert!(GameConfig::parse(&format!("{base}[graphics]\nbackend='metal'\n")).is_err());
+        assert!(render_options_from_text("[graphics]\nbackend='metal'\n").is_err());
     }
 
     #[test]

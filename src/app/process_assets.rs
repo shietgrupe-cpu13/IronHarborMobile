@@ -296,22 +296,13 @@ impl ProcessAssets {
         self.use_personal_rules(self.personal_rules.clone());
     }
 
-    /// The Rules, Art and AI roots and the theater INI suffix are the stock YR
-    /// ones; config.toml's `[ini]` profiles, names and `theater_suffix` can
-    /// pick others. Any other suffix counts, even one that picks a shipped
-    /// theater INI under another theater's name.
+    /// Every INI root in the multiplayer resource agreement and the theater
+    /// suffix are the stock YR ones. Any profile, catalog or suffix override
+    /// makes this a distinct resource selection.
     pub(crate) fn stock_ini_roots(&self) -> bool {
-        let stock = crate::util::ini_roots::IniRoots::default();
-        self.selected_ini_roots.as_ref().is_none_or(|roots| {
-            [
-                (roots.rules(), stock.rules()),
-                (roots.art(), stock.art()),
-                (roots.ai(), stock.ai()),
-                (roots.theater_suffix(), stock.theater_suffix()),
-            ]
-            .iter()
-            .all(|(used, stock)| used.eq_ignore_ascii_case(stock))
-        })
+        self.selected_ini_roots
+            .as_ref()
+            .is_none_or(|roots| roots.is_stock())
     }
 
     /// Loose files or archives in the game folder that change the rules the
@@ -1222,6 +1213,38 @@ mod tests {
         // file, as `nmd` picks New Urban's `urbannmd.ini` for Urban.
         assert!(changed.stock_ini_roots());
         assert!(!started(Some("nmd")).stock_ini_roots());
+    }
+
+    /// An optional presentation root changes the same resource identity the
+    /// multiplayer digest compares, so the UI must not describe the game as
+    /// stock Yuri's Revenge when only EVA differs.
+    #[test]
+    fn an_eva_root_alone_is_not_stock_yuri() {
+        use crate::util::ini_roots::IniRootConfig;
+        let dir = crate::assets::asset_manager::test_support::audio_test_install("eva-stock-root");
+        for (name, bytes) in [
+            ("rulesmd.ini", "[General]\nBuildSpeed=.7\n"),
+            ("artmd.ini", "[UNIT]\nVoxel=yes\n"),
+            ("aimd.ini", "[AI]\nValue=1\n"),
+        ] {
+            std::fs::write(dir.path().join(name), bytes).unwrap();
+        }
+        let started = |eva: Option<&str>| {
+            let roots = IniRootConfig {
+                eva: eva.map(str::to_owned),
+                ..IniRootConfig::default()
+            };
+            let mut process = ProcessAssets::new(MediaArchiveMode::STOCK_DIGITAL, false);
+            let assets = AssetManager::new(dir.path(), MediaArchiveMode::STOCK_DIGITAL)
+                .unwrap()
+                .with_ini_roots(&roots)
+                .unwrap();
+            process.initialize_sources_if_needed(&assets).unwrap();
+            process.return_from_loading(assets);
+            process
+        };
+        assert!(started(None).stock_ini_roots());
+        assert!(!started(Some("my-eva.ini")).stock_ini_roots());
     }
 
     /// VERA: a theater's tiles decide its cells' land and height, and map

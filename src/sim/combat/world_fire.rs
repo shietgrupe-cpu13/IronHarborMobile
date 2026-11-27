@@ -1017,7 +1017,11 @@ fn fireat_launch_aim(
         weapon.speed,
         speed_projectile(weapon),
         rules.general.gravity,
-        fireat_launch_distance(source, target_coord),
+        fireat_launch_distance(
+            source,
+            target_coord,
+            world.session.map_exceeds_original_size(),
+        ),
     );
     FireAtLaunchAim {
         aim: super::aim_coord::led_target_coordinate(world, rules, snap.stable_id, tarcom),

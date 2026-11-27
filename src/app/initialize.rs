@@ -576,6 +576,10 @@ impl App {
             window.clone(),
             event_loop.owned_display_handle(),
             capture || hidden_spawn_window,
+            game_config
+                .as_ref()
+                .map(|config| config.graphics.backend)
+                .unwrap_or_default(),
         )?;
         // On the processor, building the renderers and reaching the first
         // picture can take minutes, and the window stays blank until then: a

@@ -235,6 +235,20 @@ impl Simulation {
         }
     }
 
+    /// The represented player maps without allocating the collected list.
+    /// Network maps stay in House order; offline play yields its one current
+    /// viewpoint, matching [`Self::represented_player_maps`].
+    pub(crate) fn each_represented_player_map(&self) -> impl Iterator<Item = InternedId> + '_ {
+        let network = self.session.game_mode().is_network();
+        self.network_player_maps()
+            .take(if network { usize::MAX } else { 0 })
+            .chain(
+                self.offline_player_map()
+                    .into_iter()
+                    .take(usize::from(!network)),
+            )
+    }
+
     /// The represented maps of a network game, in House order, for a caller
     /// that walks them without keeping a list.
     pub(super) fn network_player_maps(&self) -> impl Iterator<Item = InternedId> + '_ {
@@ -799,13 +813,15 @@ impl Simulation {
                         coord.1.wrapping_sub(quarter_level) as u16,
                     )
                 };
+                let current_viewer;
                 let active_viewers = if network {
-                    viewers.clone()
+                    viewers.as_slice()
                 } else {
                     let Some(viewer) = self.session.current_house() else {
                         return false;
                     };
-                    vec![viewer]
+                    current_viewer = [viewer];
+                    current_viewer.as_slice()
                 };
                 let config = self.sight_reveal_config(rules);
                 // Navigation publishes a new immutable Arc when heights
@@ -821,7 +837,7 @@ impl Simulation {
                     height_grid = self.sight_height_grid(&config);
                     height_source = self.path_grid.clone();
                 }
-                for viewer in active_viewers {
+                for &viewer in active_viewers {
                     let _ = self.reveal_area(
                         &[viewer],
                         center,
@@ -2858,8 +2874,9 @@ impl Simulation {
         // Map4ADEE0/4ADCD0 walk only Map0087F7E8, PlayerPtr's: a computer
         // house is no client and has no map to walk.
         let viewers: Vec<_> = only_viewers
-            .map_or_else(|| self.houses.order().to_vec(), <[_]>::to_vec)
-            .into_iter()
+            .unwrap_or(self.houses.order())
+            .iter()
+            .copied()
             .filter(|viewer| clients.contains(viewer))
             .collect();
         let config = self.sight_reveal_config(context.rules());

@@ -1029,7 +1029,7 @@ impl ProcessedRulesLayers {
                     RulesTypeFamily::Animation => ObjectImageKind::Animation,
                     _ => ObjectImageKind::Ordinary,
                 };
-                image.load_unowned_shp(kind, theater);
+                image.load_unowned_shp(kind, theater, None);
                 if family == RulesTypeFamily::Building {
                     if let Some((turret, barrel)) =
                         super::voxel_frame_catalog::building_voxel_read_names(&member.body)
@@ -8893,6 +8893,9 @@ impl RulesPassProcessor {
                 // visual asset loading.
                 let theater = self.image_theater;
                 let member = &mut self.family_mut(family)[index];
+                if crate::rules::ares_switch::ares_way() {
+                    member.object_image.read_ares_alternate_theater_art(&raw);
+                }
                 member
                     .object_image
                     .read_ini(&raw, fixed_art, ObjectImageKind::Ordinary, theater);
@@ -10170,12 +10173,7 @@ impl RulesPassProcessor {
                 // (1005C0E0, hook 0x75DAE6) skips the later DebrisTypes read.
                 let (anim_list, ares_debris_types) = if ares_way {
                     (
-                        self.resolve_list_from(
-                            &raw,
-                            "AnimList",
-                            RulesTypeFamily::Animation,
-                            0x80,
-                        ),
+                        self.resolve_list_from(&raw, "AnimList", RulesTypeFamily::Animation, 0x80),
                         Some(self.resolve_existing_list_from(
                             &raw,
                             "DebrisTypes",

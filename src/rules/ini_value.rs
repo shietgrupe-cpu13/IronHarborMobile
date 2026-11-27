@@ -350,6 +350,18 @@ impl IniSection {
             ("personblue", 11),
             ("personpurple", 12),
         ];
+        if crate::rules::ares_switch::ares_way() {
+            // Ares INIClass_GetPipIdx (hook 0x004748A0, body 1005CC40,
+            // resumes 0x00474907) replaces the stock table-index default:
+            // a missing or empty value keeps the current frame; a named pip
+            // maps as below, otherwise Parser<int> accepts an explicit frame.
+            return self.read_string_with(key, 2048, current, |current, value| {
+                PIPS.iter()
+                    .find_map(|&(name, frame)| name.eq_ignore_ascii_case(value).then_some(frame))
+                    .or_else(|| parse_ares_int(value).and_then(|frame| u32::try_from(frame).ok()))
+                    .unwrap_or(current)
+            });
+        }
         // Constructor1/7 and every mapped frame close over indices0..=12.
         // The adjacent literal pointers are original81B9B0/81B9B8; their
         // unrelated numeric table values must not become pip return values.

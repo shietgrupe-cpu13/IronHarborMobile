@@ -1,4 +1,4 @@
-//! Ares EMP for every Foot mover but Tunnel and for every EMP-prone building.
+//! Ares EMP for every Foot mover and every EMP-prone building.
 //! The Techno+504 counter and held Anim have one private owner; the existing powered-unit owner keeps +1C8.
 //! Installed Bullet46920B ->100536E0/10062320 and AI6FAF0D ->10053DF0.
 //! Evidence/transport bounds: tools/rules_oracle/ares_emp.{py,json,meta.json};
@@ -88,9 +88,7 @@ impl GameEntity {
 mod receiver {
     use super::*;
     use crate::map::entities::EntityCategory;
-    use crate::rules::{
-        locomotor_type::LocomotorKind, ruleset::RuleSet, warhead_type::WarheadType,
-    };
+    use crate::rules::{ruleset::RuleSet, warhead_type::WarheadType};
     use crate::sim::{
         anim_class::AnimWorldCoord,
         components::AnimClassSpawnDescriptor,
@@ -485,15 +483,15 @@ mod receiver {
             // the crash of enableEMPEffect10062B40 or the inlined Threshold
             // in-air arm. A falling object keeps falling (ObjectAI5F3F11 tests
             // no deactivation) and lands offline; a mind-controlled one keeps
-            // its controller. A Tunnel mover's dig and underground states are
-            // not traced under Deactivate. A Prism tower in a forwarding
+            // its controller. A Tunnel mover keeps the base Power_Off and a
+            // Process (0x00728E30) that tests no power. Deactivate's
+            // ResetOrdersToGuard (0x0070F850) clears its destination and
+            // reaches Tunnel Stop_Moving (0x00728C00), interrupting its dig.
+            // A Prism tower in a forwarding
             // network leaves it at its next operational sample (Ares
             // 10016950, hook454B3D on the4549B0 off edge), as it does going
             // offline; delivery itself touches no network link.
-            let mover = victim.locomotor.as_ref().map(|loco| loco.active_kind());
-            if victim.category() != EntityCategory::Structure
-                && matches!(mover, None | Some(LocomotorKind::Tunnel))
-            {
+            if victim.category() != EntityCategory::Structure && victim.locomotor.is_none() {
                 return EmpDelivery::Unsupported;
             }
             if self.unit_in_contact_war_factory(target, rules) {

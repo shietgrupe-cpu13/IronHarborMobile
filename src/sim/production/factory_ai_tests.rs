@@ -440,6 +440,39 @@ fn legacy_ai_limit_switch_keeps_default_cloning_and_requires_npatch() {
     );
 }
 
+/// NPExt ext173 spells the global switch `DisableAIParallelProduction=`;
+/// both supported names feed the same capability-gated rule field.
+#[test]
+fn parallel_ai_switch_accepts_the_npext_name_without_changing_stock() {
+    let (plain, _, _) = ai_limit_fixture("", "BuildLimit=1");
+    assert!(!plain.rules.general.disable_parallel_ai_queues);
+
+    for key in ["DisableParallelAIQueues", "DisableAIParallelProduction"] {
+        let (named, _, _) = ai_limit_fixture(&format!("{key}=yes"), "BuildLimit=1");
+        assert_eq!(
+            named.rules.general.disable_parallel_ai_queues,
+            crate::rules::NPATCH_ENABLED,
+            "{key}",
+        );
+    }
+}
+
+#[cfg(feature = "npatch")]
+#[test]
+fn parallel_ai_switch_prefers_npse_name_and_falls_back_when_invalid() {
+    let (npse_wins, _, _) = ai_limit_fixture(
+        "DisableParallelAIQueues=no\nDisableAIParallelProduction=yes",
+        "BuildLimit=1",
+    );
+    assert!(!npse_wins.rules.general.disable_parallel_ai_queues);
+
+    let (fallthrough, _, _) = ai_limit_fixture(
+        "DisableParallelAIQueues=maybe\nDisableAIParallelProduction=yes",
+        "BuildLimit=1",
+    );
+    assert!(fallthrough.rules.general.disable_parallel_ai_queues);
+}
+
 /// NPExt173 C2D00D..C2D037 also checks owned counts for a negative cap,
 /// even when no factory has produced an object of this type yet.
 #[cfg(feature = "npatch")]
@@ -581,7 +614,10 @@ fn ares_allow_parallel_ai_queues_no_serializes_and_releases_war_factory_producti
         .ai_unit_choices_mut()
         .set(crate::sim::ai_unit_choice::UnitChoiceKind::Unit, 0);
     ai_limit_visit(&mut f, weap_2);
-    assert!(ai_limit_holds(&f, weap_2), "abandonment releases the Ares reservation");
+    assert!(
+        ai_limit_holds(&f, weap_2),
+        "abandonment releases the Ares reservation"
+    );
 }
 
 /// Phobos `ForbidParallelAIQueues`: inert under `AllowParallelAIQueues=no`;

@@ -598,21 +598,29 @@ pub struct AresUnitLostLine {
     pub radar_event: bool,
 }
 
-
 /// The native playback destination for a map-authored sound reference.
 #[derive(Debug, Clone)]
 pub enum TriggerSoundTarget {
     Centered,
     Eva,
-    Coordinate { coordinate: DriveCoord, flags: u32 },
-    Object { owner: u64, world: crate::sim::anim_class::AnimWorldCoord },
+    Coordinate {
+        coordinate: DriveCoord,
+        flags: u32,
+    },
+    Object {
+        owner: u64,
+        world: crate::sim::anim_class::AnimWorldCoord,
+    },
 }
 
 /// A sound event produced during simulation (combat, death, production).
 /// Pure data — no audio library dependency. Drained by the app layer each frame.
 #[derive(Debug, Clone)]
 pub enum SimSoundEvent {
-    TriggerAudio { reference: crate::rules::sound_ini::SoundReference, target: TriggerSoundTarget },
+    TriggerAudio {
+        reference: crate::rules::sound_ini::SoundReference,
+        target: TriggerSoundTarget,
+    },
     /// PlanMgr638593 accepted an editing order; audio gates the local issuer.
     PlanningNodeAdded { owner: InternedId },
     /// TAction21 Execute6DD8B0 calls VoxQueueVoice752480 with its literal
@@ -2654,7 +2662,7 @@ impl Simulation {
         overlay_registry: Option<&crate::rules::overlay_types::OverlayTypeRegistry>,
     ) {
         let stable_id = self.substrate.allocate_stable_id();
-        if !wave.constructor_distance_is_live() {
+        if !wave.constructor_distance_is_live(self.session.map_exceeds_original_size()) {
             // Constructor UnInit precedes registration and unique identity,
             // but FireAt stores the returned dead pointer. The stable id only
             // represents that same-frame deferred cleanup window.
@@ -4096,11 +4104,7 @@ impl Simulation {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    pub fn submit_object_display_for_test(
-        &mut self,
-        id: u64,
-        layer: display_layers::DisplayLayer,
-    ) {
+    pub fn submit_object_display_for_test(&mut self, id: u64, layer: display_layers::DisplayLayer) {
         Self::submit_object_display(&mut self.substrate, id, layer);
     }
 
@@ -4922,6 +4926,23 @@ impl Simulation {
         viewer: Option<InternedId>,
         reuse: Option<Simulation>,
     ) -> Simulation {
+        self.presentation_copy_with_sensor_sharing(viewer, reuse, false)
+    }
+
+    /// MO's one-stage cloak profile derives allied/neutral sensor visibility
+    /// from lockstep house state immediately before making the draw copy.
+    pub(crate) fn presentation_copy_with_sensor_sharing(
+        &mut self,
+        viewer: Option<InternedId>,
+        reuse: Option<Simulation>,
+        enable_mo_sensor_sharing: bool,
+    ) -> Simulation {
+        if enable_mo_sensor_sharing {
+            self.refresh_sensor_sharing();
+        } else {
+            self.fog
+                .set_sensor_sharing(crate::sim::vision::SensorSharing::default());
+        }
         // What the copy leaves out.
         let mut fog = std::mem::take(&mut self.fog);
         let entities = std::mem::replace(&mut self.substrate.entities, EntityStore::detached());
@@ -4994,6 +5015,21 @@ impl Simulation {
             ) = test_recorders;
         }
         copy
+    }
+
+    fn refresh_sensor_sharing(&mut self) {
+        let houses: std::collections::BTreeSet<_> = self
+            .houses
+            .keys()
+            .copied()
+            .chain(self.fog.sensors_by_house().keys().copied())
+            .collect();
+        self.fog
+            .set_sensor_sharing(crate::sim::vision::compute_sensor_sharing(
+                &self.house_alliances,
+                &self.interner,
+                houses,
+            ));
     }
 
     /// The live terrain objects and their indexes. Read access for systems

@@ -6,7 +6,7 @@
 //! replay each case's script; the damage walk runs on real cell lists, and
 //! its ReceiveDamage calls are recorded as the native stubs record theirs.
 
-use super::fire::{FireHit, FireWorld, OwnerFacts, OwnerSweep};
+use super::fire::{FireHit, FireWorld, OwnerFacts, OwnerSweep, wobble_target};
 use crate::rules::ruleset::RuleSet;
 use crate::sim::combat::TargetKind;
 use crate::sim::native_identity::NativeUniqueIdCursor;
@@ -16,6 +16,16 @@ use crate::sim::world::{Simulation, UninitContext};
 use glam::IVec3;
 use serde_json::{Value, json};
 use std::collections::HashMap;
+
+#[test]
+fn vera_only_map_uses_true_sonic_fire_wobble_distance() {
+    let location = IVec3::ZERO;
+    let target = IVec3::new(46_341, 46_341, 46_341);
+    assert_ne!(
+        wobble_target(2, location, target, false),
+        wobble_target(2, location, target, true)
+    );
+}
 
 fn int(value: &Value) -> i32 {
     value.as_i64().unwrap() as i32

@@ -97,7 +97,11 @@ impl SimRuntime {
         reuse: Option<Simulation>,
     ) -> SimRuntime {
         SimRuntime {
-            simulation: self.simulation.presentation_copy(viewer, reuse),
+            simulation: self.simulation.presentation_copy_with_sensor_sharing(
+                viewer,
+                reuse,
+                self.resources.rules.general.cloaking_stages == 1,
+            ),
             resources: self.resources.clone(),
         }
     }

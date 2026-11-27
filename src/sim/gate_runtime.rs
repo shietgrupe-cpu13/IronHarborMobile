@@ -64,9 +64,8 @@ pub(crate) fn request_gate_open_for_cell(
     // Only a Structure can be a Gate. With none among the others the walk
     // below skips every candidate, so its list is not built (VERA-only,
     // results unchanged).
-    if !others().any(|id| {
-        sim.substrate.entities.category_of(id) == Some(EntityCategory::Structure)
-    }) {
+    if !others().any(|id| sim.substrate.entities.category_of(id) == Some(EntityCategory::Structure))
+    {
         return true;
     }
     let candidates: Vec<u64> = others().collect();
@@ -140,18 +139,15 @@ fn footprint_has_other_object(
     let Some(gate) = sim.substrate.entities.get(id) else {
         return false;
     };
-    crate::sim::production::building_base_foundation_cells(
-        gate.position.rx(),
-        gate.position.ry(),
-        foundation,
-    )
-    .into_iter()
-    .any(|(rx, ry)| {
-        sim.substrate.occupancy.get(rx, ry).is_some_and(|occ| {
-            occ.iter_layer(MovementLayer::Ground)
-                .any(|occupant| occupant.entity_id != id)
+    let (rx, ry) = (gate.position.rx(), gate.position.ry());
+    crate::sim::crew_survival::foundation_cells(rx, ry, foundation)
+        .into_iter()
+        .any(|(rx, ry)| {
+            sim.substrate.occupancy.get(rx, ry).is_some_and(|occ| {
+                occ.iter_layer(MovementLayer::Ground)
+                    .any(|occupant| occupant.entity_id != id)
+            })
         })
-    })
 }
 
 /// Building Mission_Open44E440, called by the existing Health/cadence
@@ -934,5 +930,24 @@ mod tests {
             .set_handler_state(3);
         mission_open(&mut sim, GATE, &rules);
         assert_eq!(played(&mut sim), ["Rules"]);
+    }
+
+    #[test]
+    fn footprint_sees_only_another_ground_object() {
+        for (blocker, obstructed) in [
+            (None, false),
+            (Some("ground"), true),
+            (Some("bridge"), false),
+        ] {
+            let row =
+                json!({"input": {"status": 0, "blocker": blocker}, "initial": {"hold": [0, 0]}});
+            let (sim, rules) = native_fixture(&row);
+            let foundation = &rules.object("GATE").unwrap().foundation;
+            assert_eq!(
+                footprint_has_other_object(&sim, GATE, foundation),
+                obstructed,
+                "{blocker:?}"
+            );
+        }
     }
 }

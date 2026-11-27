@@ -628,9 +628,9 @@ impl ProjectileCollisionWorld<'_> {
         let owner = self.entities.get(projectile.source_id());
         cell_blocks_line_of_fire(
             CellObstructionProbe {
-                source,
-                target,
-                previous,
+                source: &source,
+                target: &target,
+                previous: &previous,
                 sample: crate::sim::components::DriveCoord {
                     x: candidate.x,
                     y: candidate.y,

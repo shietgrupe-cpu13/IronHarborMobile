@@ -55,6 +55,20 @@ impl ImageTheater {
         }
     }
 
+    /// The theater's `TheaterData.Letter` string (`0x007E1BCE`), shared by
+    /// native alternate-art selection and NewTheater filename substitution.
+    pub(crate) const fn letter(self) -> Option<char> {
+        match self {
+            Self::Uninitialized => None,
+            Self::Temperate => Some('T'),
+            Self::Snow => Some('A'),
+            Self::Urban => Some('U'),
+            Self::Desert => Some('D'),
+            Self::NewUrban => Some('N'),
+            Self::Lunar => Some('L'),
+        }
+    }
+
     /// Full_Init687633..687649 invokes ReadTheater475870 with default0
     /// before resetting Types. This reads the raw map, not the merged Rules.
     pub(crate) fn from_map(map: &IniFile) -> Self {
@@ -122,6 +136,9 @@ impl ObjectImageLoad {
 pub(crate) struct ObjectImageState {
     image: String,
     alternate_arctic_art: bool,
+    /// Ares TechnoTypeExt `AlternateTheaterArt`; only an Ares Techno read sets it.
+    #[serde(default)]
+    alternate_theater_art: bool,
     arctic_applied: bool,
     theater: bool,
     new_theater: bool,
@@ -145,6 +162,7 @@ impl ObjectImageState {
         Self {
             image: stored_id.chars().take(24).collect(),
             alternate_arctic_art: false,
+            alternate_theater_art: false,
             arctic_applied: false,
             theater: false,
             new_theater: false,
@@ -169,7 +187,7 @@ impl ObjectImageState {
         self.read_input(input);
         let art = fixed_art.section(&self.image);
         self.read_art(art);
-        self.load_for_read(kind, theater);
+        self.load_for_read(kind, theater, Some(fixed_art));
         art
     }
 
@@ -177,6 +195,13 @@ impl ObjectImageState {
         self.image = input.read_string("Image", &self.image, 25);
         self.alternate_arctic_art =
             input.read_bool("AlternateArcticArt", self.alternate_arctic_art);
+    }
+
+    /// Ares ObjectTypeClass_LoadFromINI (hook `0x005F9634`, body `100413B0`)
+    /// reads this TechnoTypeExt value before the following Load2DArt call.
+    pub(crate) fn read_ares_alternate_theater_art(&mut self, input: &IniSection) {
+        self.alternate_theater_art =
+            input.read_ares_bool("AlternateTheaterArt", self.alternate_theater_art);
     }
 
     pub(crate) fn read_art(&mut self, art: Option<&IniSection>) {
@@ -189,9 +214,14 @@ impl ObjectImageState {
         }
     }
 
-    pub(crate) fn load_for_read(&mut self, kind: ObjectImageKind, theater: ImageTheater) {
+    pub(crate) fn load_for_read(
+        &mut self,
+        kind: ObjectImageKind,
+        theater: ImageTheater,
+        art: Option<&IniFile>,
+    ) {
         if !self.voxel && kind != ObjectImageKind::Animation {
-            self.load_unowned_shp(kind, theater);
+            self.load_unowned_shp(kind, theater, art);
         }
     }
 
@@ -201,8 +231,21 @@ impl ObjectImageState {
     /// before every saved-family call here. This is the proven unowned
     /// read/saved boundary, not the lazy owned-shape lifecycle. A miss never
     /// undoes the name or latch.
-    pub(crate) fn load_unowned_shp(&mut self, kind: ObjectImageKind, theater: ImageTheater) {
-        if self.alternate_arctic_art && theater == ImageTheater::Snow {
+    pub(crate) fn load_unowned_shp(
+        &mut self,
+        kind: ObjectImageKind,
+        theater: ImageTheater,
+        art: Option<&IniFile>,
+    ) {
+        if self.alternate_theater_art {
+            if let (false, Some(letter), Some(art)) = (self.arctic_applied, theater.letter(), art) {
+                let name = format!("{}{letter}", self.image);
+                if art.section(&name).is_some() {
+                    self.image = name.chars().take(24).collect();
+                    self.arctic_applied = true;
+                }
+            }
+        } else if self.alternate_arctic_art && theater == ImageTheater::Snow {
             if !self.arctic_applied {
                 self.image = self.image.chars().chain(['A']).take(24).collect();
                 self.arctic_applied = true;
@@ -240,7 +283,7 @@ impl ObjectImageState {
         phase: AnimImagePhase,
     ) {
         if self.theater {
-            self.load_unowned_shp(ObjectImageKind::Animation, theater);
+            self.load_unowned_shp(ObjectImageKind::Animation, theater, None);
         } else {
             let mut request = self.shp_request(true);
             if request.image.is_empty() {

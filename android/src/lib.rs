@@ -573,8 +573,10 @@ pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeGetRenderOptions(
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
             Err(error) => return Err(error.into()),
         };
-        let (percent, fps) = vera20k::util::config::render_options_from_text(&contents)?;
-        Ok(env.new_string(format!("{percent},{fps}"))?.into_raw())
+        let (percent, fps, backend) = vera20k::util::config::render_options_from_text(&contents)?;
+        Ok(env
+            .new_string(format!("{percent},{fps},{}", backend.config_value()))?
+            .into_raw())
     })();
     match result {
         Ok(value) => value,
@@ -591,10 +593,12 @@ pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeConfigForRenderOp
     _activity: JObject,
     percent: jni::sys::jint,
     fps: jni::sys::jint,
+    backend: JString,
     files_directory: JString,
 ) -> jstring {
     let result = (|| -> anyhow::Result<jstring> {
         let files_directory: String = env.get_string(&files_directory)?.into();
+        let backend: String = env.get_string(&backend)?.into();
         let config_path = std::path::Path::new(&files_directory).join("Config/config.toml");
         let previous = match std::fs::read_to_string(config_path) {
             Ok(contents) => contents,
@@ -603,7 +607,8 @@ pub extern "system" fn Java_org_vera20k_LauncherActivity_nativeConfigForRenderOp
         };
         let percent = u8::try_from(percent).map_err(|_| anyhow::anyhow!("invalid render scale"))?;
         let fps = u16::try_from(fps).map_err(|_| anyhow::anyhow!("invalid FPS limit"))?;
-        let contents = vera20k::util::config::set_render_options(&previous, percent, fps)?;
+        let backend: vera20k::util::config::GraphicsBackend = backend.parse()?;
+        let contents = vera20k::util::config::set_render_options(&previous, percent, fps, backend)?;
         Ok(env.new_string(contents)?.into_raw())
     })();
     match result {

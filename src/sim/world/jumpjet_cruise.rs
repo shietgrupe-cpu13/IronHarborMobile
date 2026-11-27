@@ -168,7 +168,9 @@ impl JumpjetFlightHost for CruiseHost<'_> {
         let position = &self.owner().position;
         let here = (position.rx(), position.ry());
         let there = self.cell_of([coord[0], coord[1]]);
-        if (i32::from(here.0), i32::from(here.1)) != (i32::from(there.0), i32::from(there.1))
+        let cell_changed =
+            (i32::from(here.0), i32::from(here.1)) != (i32::from(there.0), i32::from(there.1));
+        if cell_changed
             && self
                 .sim
                 .substrate
@@ -189,6 +191,16 @@ impl JumpjetFlightHost for CruiseHost<'_> {
             self.rules,
             &self.sim.interner,
         );
+        // MO's single-stage cloak profile expects airborne Jumpjet sensor
+        // circles to follow the unit; vanilla keeps its original PerCell timing.
+        if cell_changed && self.rules.general.cloaking_stages == 1 {
+            self.sim.refresh_airborne_sensor_at_cell_change(
+                self.stable_id,
+                here,
+                self.rules,
+                self.registry,
+            );
+        }
     }
     fn set_z(&mut self, z: i32) {
         self.sim.set_object_z(

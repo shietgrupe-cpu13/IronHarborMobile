@@ -59,6 +59,9 @@ struct HudMore {
     scale_pips: Vec<ScalePipDraw>,
     /// `MindControlLink::controller`.
     controller: Option<u64>,
+    /// Ares radial-ring range for an online non-Building with
+    /// `HasRadialIndicator`; zero when it draws none.
+    radial_radius: i32,
     /// `Simulation::capture_link_coordinates`, for a capture manager.
     capture_links: Vec<crate::sim::capture_manager::CaptureLinkCoordinates>,
     bomb: Option<HudBomb>,
@@ -76,6 +79,7 @@ impl HudMore {
     fn is_empty(&self) -> bool {
         self.scale_pips.is_empty()
             && self.controller.is_none()
+            && self.radial_radius == 0
             && self.capture_links.is_empty()
             && self.bomb.is_none()
             && self.digital_values.is_empty()
@@ -147,6 +151,25 @@ impl HudFacts {
         let more = HudMore {
             scale_pips: scale_pip_rows(sim, entity, rules),
             controller: entity.mind_control.controller(),
+            radial_radius: object
+                .filter(|object| {
+                    rules.ares()
+                        && entity.category() != EntityCategory::Structure
+                        && object.has_radial_indicator()
+                        && !entity.deactivated.is_offline()
+                })
+                .map_or(0, |object| {
+                    object.ares_techno_radial_radius(
+                        crate::sim::combat::combat_weapon::current_weapon(
+                            entity,
+                            object,
+                            sim.entities(),
+                            rules,
+                            sim.interner(),
+                        )
+                        .map(|weapon| weapon.range_leptons),
+                    )
+                }),
             capture_links: if entity.capture_manager.is_some() {
                 sim.capture_link_coordinates(id, rules)
             } else {
@@ -211,6 +234,11 @@ impl HudFacts {
     /// The object that mind-controls it.
     pub(crate) fn controller(&self) -> Option<u64> {
         self.more().and_then(|more| more.controller)
+    }
+
+    /// Ares radial range in cells for a mobile Techno; zero when absent.
+    pub(crate) fn ares_radial_radius(&self) -> i32 {
+        self.more().map_or(0, |more| more.radial_radius)
     }
 
     /// Its capture manager's link coordinates.

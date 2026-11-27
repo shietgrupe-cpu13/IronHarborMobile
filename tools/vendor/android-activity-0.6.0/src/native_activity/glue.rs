@@ -492,6 +492,16 @@ impl WaitableNativeActivityState {
         };
         guard.write_cmd(cmd);
 
+        // Pause/stop callbacks run on Android's UI thread. Do not make that
+        // thread wait for the winit thread to finish its current callback
+        // before it can process the lifecycle command: Android treats a
+        // blocked Activity callback as an input ANR. The pipe preserves
+        // command ordering, and the app thread still applies the state change
+        // through `post_exec_cmd` when it next polls events.
+        if matches!(state, State::Pause | State::Stop) {
+            return;
+        }
+
         while guard.activity_state != state {
             guard = self.cond.wait(guard).unwrap();
         }

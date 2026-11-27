@@ -226,11 +226,14 @@ pub(crate) fn visual_character(
     if invisible && !query.map_editor {
         return 5;
     }
-    // With MO's single cloak stage, Ares can park a cloak-capable unit in
-    // state zero between cloaked frames. A screen observer with sensor vision
-    // still sees the steady half-transparent ghost. Keep this screen-only:
-    // forced sensor queries used by simulation remain native-exact.
-    if cloak_present
+    // MO's single-stage cloak can keep a cloak-capable unit between cloaked
+    // frames. Only show the sensor ghost while a cloak transition is actually
+    // in progress; a state-zero unit or a zero-progress frame is opaque.
+    // Keep this screen-only so forced simulation sensor queries stay native.
+    if cloaking_stages == 1
+        && state != 0
+        && progress > 0
+        && cloak_present
         && !query.force_sensor
         && !query.map_editor
         && !is_building
@@ -1280,6 +1283,29 @@ pub(in crate::sim) mod mirage_tests;
 #[cfg(all(test, tests_sim_c_g))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mo_sensor_ghost_requires_active_single_stage_cloak_progress() {
+        let screen = VisualCharacterQuery::screen(true, true, true, false, false, false);
+        let character = |state, progress, stages| {
+            visual_character(
+                state, progress, stages, false, false, true, false, true, screen,
+            )
+        };
+
+        assert_eq!(character(0, 0, 1), 0, "decloaked unit stays opaque");
+        assert_eq!(character(1, 0, 1), 0, "zero-progress frame stays opaque");
+        assert_eq!(
+            character(1, 1, 1),
+            3,
+            "MO sensor ghost appears in transition"
+        );
+        assert_eq!(
+            character(1, 1, 9),
+            1,
+            "stock YR keeps its native partial-cloak appearance"
+        );
+    }
 
     #[test]
     fn cloak_transition_vectors() {

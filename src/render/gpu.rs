@@ -22,7 +22,6 @@ use anyhow::{Context, Result, bail};
 use winit::event_loop::OwnedDisplayHandle;
 use winit::window::Window;
 
-#[cfg(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown"))]
 #[path = "web_present.rs"]
 mod web_present;
 
@@ -34,15 +33,10 @@ mod web_present;
 /// clamped to the adapter's own maximum anyway.
 pub(crate) const MAX_USEFUL_TEXTURE_DIM: u32 = 16_384;
 
-/// True on the browser's WebGL2 fallback device, which has no storage buffers,
-/// compute or reinterpreting texture views. Renderers that use those select
-/// render-target equivalents there; every other device keeps its ordinary path.
-/// Always false outside the browser build.
+/// True on a GLES/OpenGL device whose requested limits omit the storage and
+/// compute facilities used by the normal renderer. The matching compatibility
+/// render paths are shared by Android GLES and the browser WebGL2 backend.
 pub(crate) fn webgl_fallback(device: &wgpu::Device) -> bool {
-    #[cfg(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown"))]
-    {
-        device.limits().max_storage_buffers_per_shader_stage == 0
-    }
     // Tests can run the fallback's passes on a native device, where the GPU
     // goldens check them against the storage/compute paths they replace.
     #[cfg(all(
@@ -53,13 +47,12 @@ pub(crate) fn webgl_fallback(device: &wgpu::Device) -> bool {
         let _ = device;
         std::env::var_os("VERA20K_TEST_WEBGL_FALLBACK").is_some_and(|value| value == "1")
     }
-    #[cfg(not(any(
+    #[cfg(not(all(
         test,
-        all(feature = "wasm", target_arch = "wasm32", target_os = "unknown")
+        not(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown"))
     )))]
     {
-        let _ = device;
-        false
+        device.limits().max_storage_buffers_per_shader_stage == 0
     }
 }
 
@@ -67,7 +60,6 @@ pub(crate) fn webgl_fallback(device: &wgpu::Device) -> bool {
 pub struct GpuFrame {
     pub texture: wgpu::Texture,
     surface: Option<wgpu::SurfaceTexture>,
-    #[cfg(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown"))]
     web_present: Option<Arc<web_present::WebPresent>>,
 }
 
@@ -76,7 +68,6 @@ impl GpuFrame {
         Self {
             texture: surface.texture.clone(),
             surface: Some(surface),
-            #[cfg(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown"))]
             web_present: None,
         }
     }
@@ -85,7 +76,6 @@ impl GpuFrame {
     /// presentation off `SurfaceTexture`, so the caller passes its queue.
     pub fn present(self, queue: &wgpu::Queue) {
         if let Some(surface) = self.surface {
-            #[cfg(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown"))]
             if let Some(presenter) = self.web_present {
                 presenter.present(&surface);
             }
@@ -113,7 +103,7 @@ impl CaptureTarget {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: config.format,
-                usage: config.usage,
+                usage: config.usage | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
                 view_formats: &config.view_formats,
             }),
         }
@@ -127,7 +117,6 @@ impl CaptureTarget {
         GpuFrame {
             texture: self.texture.clone(),
             surface: None,
-            #[cfg(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown"))]
             web_present: None,
         }
     }
@@ -192,8 +181,7 @@ pub struct GpuContext {
     /// VERA's whole-viewport colour-vision filter. Every present path shares
     /// it, including the synchronous loading repaints outside the frame loop.
     pub(crate) color_vision: super::color_vision::ColorVisionFilter,
-    #[cfg(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown"))]
-    web_present: Arc<web_present::WebPresent>,
+    web_present: Option<Arc<web_present::WebPresent>>,
 }
 
 /// The context of every [`GpuContext::new`] failure: this computer has no
@@ -214,7 +202,7 @@ impl GpuContext {
         window: Arc<Window>,
         display: OwnedDisplayHandle,
     ) -> Result<Self> {
-        Self::new_async(window, display, false).await
+        Self::new_async_with_backends(window, display, false, wgpu::Backends::PRIMARY).await
     }
 
     /// Initialize wgpu with the given window.
@@ -227,15 +215,73 @@ impl GpuContext {
         window: Arc<Window>,
         display: OwnedDisplayHandle,
         hidden_capture: bool,
+        backend: crate::util::config::GraphicsBackend,
     ) -> Result<Self> {
-        block_on(Self::new_async(window, display, hidden_capture)).context(GraphicsUnavailable)
+        block_on(Self::new_async(window, display, hidden_capture, backend))
+            .context(GraphicsUnavailable)
     }
 
-    /// Async initialization — called by new() via block_on().
+    /// Select the launcher preference. Android Automatic is Vulkan-first and
+    /// retries the same renderer through GLES only if Vulkan initialization
+    /// fails. An explicit API choice is honored without a silent switch.
     async fn new_async(
         window: Arc<Window>,
         display: OwnedDisplayHandle,
         hidden_capture: bool,
+        backend: crate::util::config::GraphicsBackend,
+    ) -> Result<Self> {
+        use crate::util::config::GraphicsBackend;
+
+        #[cfg(target_os = "android")]
+        {
+            let selected = match backend {
+                GraphicsBackend::Vulkan => wgpu::Backends::VULKAN,
+                GraphicsBackend::OpenGlEs => wgpu::Backends::GL,
+                GraphicsBackend::Auto => {
+                    match Self::new_async_with_backends(
+                        Arc::clone(&window),
+                        display.clone(),
+                        hidden_capture,
+                        wgpu::Backends::VULKAN,
+                    )
+                    .await
+                    {
+                        Ok(context) => return Ok(context),
+                        Err(vulkan_error) => {
+                            log::warn!(
+                                "Vulkan initialization failed ({vulkan_error:#}); trying OpenGL ES compatibility mode"
+                            );
+                            return Self::new_async_with_backends(
+                                window,
+                                display,
+                                hidden_capture,
+                                wgpu::Backends::GL,
+                            )
+                            .await
+                            .context("Vulkan and OpenGL ES initialization both failed");
+                        }
+                    }
+                }
+            };
+            return Self::new_async_with_backends(window, display, hidden_capture, selected).await;
+        }
+
+        #[cfg(not(target_os = "android"))]
+        {
+            let selected = match backend {
+                GraphicsBackend::Auto => wgpu::Backends::PRIMARY.with_env(),
+                GraphicsBackend::Vulkan => wgpu::Backends::VULKAN,
+                GraphicsBackend::OpenGlEs => wgpu::Backends::GL,
+            };
+            Self::new_async_with_backends(window, display, hidden_capture, selected).await
+        }
+    }
+
+    async fn new_async_with_backends(
+        window: Arc<Window>,
+        display: OwnedDisplayHandle,
+        hidden_capture: bool,
+        backends: wgpu::Backends,
     ) -> Result<Self> {
         // The standard override selects a backend for reproducible
         // shroud GPU comparisons while retaining primary backends by default.
@@ -243,7 +289,11 @@ impl GpuContext {
         // https://docs.rs/wgpu-types/30.0.1/wgpu_types/struct.InstanceDescriptor.html
         #[cfg(not(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown")))]
         let instance: wgpu::Instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::PRIMARY.with_env(),
+            backends: if cfg!(target_os = "android") {
+                backends
+            } else {
+                backends.with_env()
+            },
             ..wgpu::InstanceDescriptor::new_with_display_handle(Box::new(display))
         });
         // Browsers without a usable WebGPU adapter fall back to WebGL2. A
@@ -301,11 +351,15 @@ impl GpuContext {
             .context("No suitable GPU adapter found — is a GPU available?")?;
 
         let adapter_info = adapter.get_info();
+        let gl_fallback = adapter_info.backend == wgpu::Backend::Gl;
         log::info!(
             "Using GPU adapter: {} ({:?})",
             adapter_info.name,
             adapter_info.backend
         );
+        if gl_fallback {
+            log::warn!("OpenGL ES compatibility renderer selected; GPU timing is unavailable");
+        }
 
         // Atlas sizing is bounded by whatever limits we *request*, not by the hardware.
         let adapter_limits = adapter.limits();
@@ -331,22 +385,43 @@ impl GpuContext {
                 .min(MAX_USEFUL_TEXTURE_DIM),
             ..wgpu::Limits::default()
         };
-        // WebGL2 has no storage buffers or compute, so the WebGPU baseline is
-        // unattainable; request what the context offers. Renderers detect the
-        // fallback through `webgl_fallback`.
-        #[cfg(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown"))]
-        let required_limits = if adapter_info.backend == wgpu::Backend::Gl {
+        // GLES/WebGL2 compatibility rendering does not use storage resources or
+        // compute. Request the supported downlevel limits so wgpu can create a
+        // device and the renderer selects its matching compatibility passes.
+        let required_limits = if gl_fallback {
+            let compatibility = wgpu::Limits::downlevel_webgl2_defaults();
             wgpu::Limits {
                 max_texture_dimension_2d: required_limits.max_texture_dimension_2d,
+                max_storage_buffers_per_shader_stage: compatibility
+                    .max_storage_buffers_per_shader_stage,
+                max_storage_textures_per_shader_stage: compatibility
+                    .max_storage_textures_per_shader_stage,
+                max_dynamic_storage_buffers_per_pipeline_layout: compatibility
+                    .max_dynamic_storage_buffers_per_pipeline_layout,
+                max_storage_buffer_binding_size: compatibility.max_storage_buffer_binding_size,
+                max_compute_workgroup_storage_size: compatibility
+                    .max_compute_workgroup_storage_size,
+                max_compute_invocations_per_workgroup: compatibility
+                    .max_compute_invocations_per_workgroup,
+                max_compute_workgroup_size_x: compatibility.max_compute_workgroup_size_x,
+                max_compute_workgroup_size_y: compatibility.max_compute_workgroup_size_y,
+                max_compute_workgroup_size_z: compatibility.max_compute_workgroup_size_z,
+                max_compute_workgroups_per_dimension: compatibility
+                    .max_compute_workgroups_per_dimension,
                 ..adapter_limits.clone()
             }
         } else {
             required_limits
         };
+        let required_features = if gl_fallback {
+            wgpu::Features::empty()
+        } else {
+            super::gpu_timer::GpuTimer::features(&adapter)
+        };
         let (device, queue): (wgpu::Device, wgpu::Queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("RA2 Device"),
-                required_features: super::gpu_timer::GpuTimer::features(&adapter),
+                required_features,
                 required_limits,
                 ..Default::default()
             })
@@ -356,12 +431,18 @@ impl GpuContext {
         // Pick the best texture format for the surface.
         // This is usually Bgra8UnormSrgb on Windows, Bgra8Unorm on some other platforms.
         let surface_caps: wgpu::SurfaceCapabilities = surface.get_capabilities(&adapter);
-        #[cfg(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown"))]
-        let required_surface_usages = wgpu::TextureUsages::RENDER_ATTACHMENT;
-        #[cfg(not(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown")))]
-        let required_surface_usages = wgpu::TextureUsages::RENDER_ATTACHMENT
-            | wgpu::TextureUsages::COPY_SRC
-            | wgpu::TextureUsages::COPY_DST;
+        let present_offscreen = cfg!(all(
+            feature = "wasm",
+            target_arch = "wasm32",
+            target_os = "unknown"
+        )) || gl_fallback;
+        let required_surface_usages = if present_offscreen {
+            wgpu::TextureUsages::RENDER_ATTACHMENT
+        } else {
+            wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST
+        };
         if !surface_caps.usages.contains(required_surface_usages) {
             bail!(
                 "exact stock-shell presentation requires surface usages \
@@ -372,10 +453,7 @@ impl GpuContext {
         let downlevel = adapter.get_downlevel_capabilities();
         // The WebGL2 fallback replaces both requirements below with
         // render-target equivalents; see `webgl_fallback`.
-        #[cfg(not(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown")))]
-        let webgl = false;
-        #[cfg(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown"))]
-        let webgl = adapter_info.backend == wgpu::Backend::Gl;
+        let webgl = gl_fallback;
         if !webgl && !downlevel.flags.contains(wgpu::DownlevelFlags::VIEW_FORMATS) {
             bail!(
                 "exact stock-shell presentation requires compatible sRGB/unorm \
@@ -417,6 +495,12 @@ impl GpuContext {
             .find(|f| f.is_srgb())
             .copied()
             .unwrap_or(surface_caps.formats[0]);
+        if gl_fallback && !surface_format.is_srgb() {
+            bail!(
+                "OpenGL ES presentation requires an sRGB window surface, adapter offers {:?}",
+                surface_caps.formats
+            );
+        }
 
         // Configure the surface with our chosen format and the window's current size.
         let window_size: winit::dpi::PhysicalSize<u32> = window.inner_size();
@@ -437,10 +521,13 @@ impl GpuContext {
             color_space: wgpu::SurfaceColorSpace::Auto,
         };
         surface.configure(&device, &config);
-        #[cfg(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown"))]
-        let web_present = Arc::new(web_present::WebPresent::new(&device, &queue, &config));
-        #[cfg(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown"))]
-        let surface_format = surface_format.add_srgb_suffix();
+        let web_present = present_offscreen
+            .then(|| Arc::new(web_present::WebPresent::new(&device, &queue, &config)));
+        let surface_format = if present_offscreen {
+            surface_format.add_srgb_suffix()
+        } else {
+            surface_format
+        };
         // wgpu-hal 30.0.1 Metal acquire_texture returns SurfaceError::Occluded
         // for any macOS NSWindow without NSWindowOcclusionStateVisible, including
         // deliberately hidden captures. Render those frames offscreen with the
@@ -449,7 +536,25 @@ impl GpuContext {
         // swapchain skip/recovery.
         // https://docs.rs/wgpu-hal/30.0.1/src/wgpu_hal/metal/surface.rs.html#347-371
         let capture_target = hidden_capture.then(|| CaptureTarget::new(&device, &config));
-        let timer = super::gpu_timer::GpuTimer::new(&device, &queue);
+        // Timer setup builds a small compute pipeline. Some drivers can reject
+        // that shader even after device creation; keep rendering available and
+        // report frames as untimed if the optional diagnostics pipeline fails.
+        let timer = if gl_fallback {
+            super::gpu_timer::GpuTimer::default()
+        } else {
+            let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+            let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+            let timer = super::gpu_timer::GpuTimer::new(&device, &queue);
+            let validation_error = validation.pop().await;
+            let internal_error = internal.pop().await;
+            match validation_error.or(internal_error) {
+                None => timer,
+                Some(error) => {
+                    log::warn!("GPU timer unavailable, frames go untimed: {error}");
+                    super::gpu_timer::GpuTimer::default()
+                }
+            }
+        };
 
         log::info!(
             "GPU initialized: {}x{}, format={:?}",
@@ -473,7 +578,6 @@ impl GpuContext {
             capture_target,
             timer,
             color_vision: super::color_vision::ColorVisionFilter::new(),
-            #[cfg(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown"))]
             web_present,
         })
     }
@@ -614,13 +718,12 @@ impl GpuContext {
         if let Some(target) = &mut self.capture_target {
             target.resize(&self.device, &self.config);
         }
-        #[cfg(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown"))]
-        {
-            self.web_present = Arc::new(web_present::WebPresent::new(
+        if self.web_present.is_some() {
+            self.web_present = Some(Arc::new(web_present::WebPresent::new(
                 &self.device,
                 &self.queue,
                 &self.config,
-            ));
+            )));
         }
         log::debug!("Surface resized to {}x{}", width, height);
     }
@@ -688,13 +791,14 @@ impl GpuContext {
         .map(|frame| {
             frame.map(|surface| {
                 let frame = GpuFrame::from_surface(surface);
-                #[cfg(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown"))]
-                let frame = GpuFrame {
-                    texture: self.web_present.texture.clone(),
-                    web_present: Some(self.web_present.clone()),
-                    ..frame
-                };
-                frame
+                match &self.web_present {
+                    Some(presenter) => GpuFrame {
+                        texture: presenter.texture.clone(),
+                        web_present: Some(Arc::clone(presenter)),
+                        ..frame
+                    },
+                    None => frame,
+                }
             })
         })
     }

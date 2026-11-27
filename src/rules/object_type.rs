@@ -3651,6 +3651,23 @@ impl ObjectType {
         }
     }
 
+    /// Ares `TechnoClass::DrawRadialIndicator` radius for a selected mobile
+    /// Techno. An explicit `RadialIndicatorRadius` wins, followed by the
+    /// object's `GapRadiusInCells`, then its current weapon range in cells.
+    /// The caller admits this only for Ares games and types with
+    /// `HasRadialIndicator`.
+    pub fn ares_techno_radial_radius(&self, weapon_range: Option<i32>) -> i32 {
+        if let Some(radius) = self.techno_combat.presentation().radial_indicator_radius() {
+            radius
+        } else if self.gap_generator {
+            self.gap_radius_in_cells
+        } else {
+            weapon_range
+                .filter(|range| *range > 0)
+                .map_or(0, |range| range >> 8)
+        }
+    }
+
     pub const fn attacks_friendlies(&self) -> bool {
         self.attack_friendlies
     }

@@ -157,9 +157,15 @@ A guest also needs the host's map in its own map library.
 - **`NativeActivity`, not `GameActivity`.** Smallest M0. It has no IME, so text
   entry (player name, chat, passwords) is unusable until P6 chooses: switch winit
   to `android-game-activity`, or overlay a Java `EditText` and add JNI.
-- **Vulkan only.** The manifest requires `android.hardware.vulkan.level 0`;
-  GLES-only devices cannot install. Whether to port the existing `webgl`
-  fallback to a runtime capability check is P4's call.
+- **Selectable Vulkan/OpenGL ES.** Launcher Settings saves `[graphics]
+  backend = "auto"`, `"vulkan"`, or `"gles"` in the engine-owned
+  `Config/config.toml`. Automatic tries Vulkan first and retries OpenGL ES
+  compatibility rendering if Vulkan initialization fails. Explicit selections
+  do not switch APIs. The package no longer requires Vulkan at install time;
+  GLES 3.0 is optional at package-filter time. Both APIs use the existing
+  wgpu renderer, and GLES selects the engine's WebGL-compatible render passes
+  and offscreen presentation path. Device and mod validation of GLES remains
+  outstanding; this is a compatibility option, not a performance claim.
 - **`configChanges` covers everything winit handles** so rotation and
   split-screen arrive as a resize, not an activity rebuild. A second activity in
   the same process cannot work — winit builds one event loop per process — so
@@ -286,6 +292,14 @@ Play records durations for game-source sync, selected-mod sync, Ares, Maps, Save
 Launcher Settings now exposes Camera & Zoom minimum and maximum bounds, defaulting to `0.75` and `2.0` within the engine's existing `0.25`–`4.0` camera scale. The values use `[graphics] camera_zoom_min` and `camera_zoom_max` in the engine's `config.toml` parser/writer. Pinch, replay wheel zoom, and the optional in-match wheel view-distance steps obey the configured bounds; an Android service forwards updates into the existing `:game` event loop while it is alive. Otherwise the saved range is read at next launch. Windows uses the same engine configuration and clamp paths; the launcher sliders are Android UI. There is no standalone camera zoom keyboard binding in the current engine, so no new shortcut was added.
 
 Launcher Settings exposes a 50–100% world render scale in 5% steps as an **experimental beta**; 100% is the default and recommended value. Lower settings have been reported to offset the movement indicator and omit building textures, so they are not recommended for normal play until those rendering issues are corrected. The `render_scale_percent` and `fps_limit` keys live in the existing `[graphics]` section. A non-native world target is used for battlefield rendering and upscaled into the existing full-size frame; screen-space UI remains at the surface resolution. The chosen scale takes effect on the next game launch. The FPS cap gates presentation only; simulation and multiplayer pacing are unchanged. The engine's default/display pacing can limit actual output below 120 FPS. Adaptive resolution is not implemented. Lowering scale may reduce GPU pixel work, but does not reduce CPU-side world-instance preparation; no performance gain has been established.
+
+The same settings card allows choosing Automatic, Vulkan only, or OpenGL ES
+compatibility. The backend selection is persisted through the engine's existing
+configuration parser and is applied when the NativeActivity initializes wgpu.
+On Automatic, OpenGL ES is only tried after the Vulkan initialization path
+returns an error. GLES-only startup, presentation, mod rendering, Android
+resume, and device-specific driver behavior still require physical-device
+validation.
 
 
 ## B31 ? direct shared storage and single user-data root

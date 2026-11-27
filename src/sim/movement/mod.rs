@@ -37,7 +37,7 @@ use crate::map::entities::EntityCategory;
 #[cfg(any(test, feature = "test-support"))]
 use crate::map::houses::HouseAllianceMap;
 use crate::map::resolved_terrain::ResolvedTerrainGrid;
-use crate::rules::locomotor_type::{MovementZone, SpeedType};
+use crate::rules::locomotor_type::{LocomotorKind, MovementZone, SpeedType};
 use crate::sim::cell_rect::PlayfieldBounds;
 #[cfg(any(test, feature = "test-support"))]
 use crate::sim::entity_store::EntityStore;
@@ -64,9 +64,9 @@ mod foot_path_window_tests;
 pub(crate) use drive_locomotion::drive_do_turn;
 #[cfg(test)] // shared by test groups
 pub(crate) mod approach_oracle_seam;
+pub(crate) use foot_path::Code2Chain;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use foot_path::FindPathResult;
-pub(crate) use foot_path::Code2Chain;
 pub(crate) use foot_path::FootPathOutcome;
 pub(crate) use foot_path::coord_cell;
 pub(crate) use track_fresh::{BlockingObject, ProcessMovementArgs};
@@ -118,12 +118,12 @@ mod track_host;
 mod track_path;
 pub(crate) use track_path::SetterForceReassign;
 pub mod track_process;
+mod track_speed;
+pub(crate) mod track_turn;
 pub mod tunnel_movement;
 mod tunnel_process;
 #[cfg(all(test, tests_sim_movement))]
 mod tunnel_tests;
-mod track_speed;
-pub(crate) mod track_turn;
 mod walk_admission;
 pub(crate) mod walk_head;
 mod walk_host;
@@ -189,7 +189,8 @@ pub(super) struct MoverSnapshot {
     pub movement_zone: MovementZone,
     pub omni_crusher: bool,
     pub regular_crusher: bool,
-    pub locomotor: Option<locomotor::LocomotorState>,
+    /// The installed locomotor's active kind.
+    pub locomotor_kind: Option<LocomotorKind>,
     /// Native AStar hierarchy admission reads the stored TechnoClass+0x3D5
     /// byte. False under live MapClass authority bypasses hierarchy and runs
     /// the plain cell A*; headless fixtures without authority retain hierarchy.

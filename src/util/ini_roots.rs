@@ -237,6 +237,36 @@ impl IniRoots {
         &self.map_catalog
     }
 
+    /// Every resolved root file that participates in the multiplayer resource
+    /// agreement, in digest order.
+    pub fn files(&self) -> [&str; 11] {
+        [
+            self.rules(),
+            self.art(),
+            self.ai(),
+            self.sound(),
+            self.eva(),
+            self.theme(),
+            self.battle(),
+            self.mission(),
+            self.mapsel(),
+            self.modes(),
+            self.map_catalog(),
+        ]
+    }
+
+    /// Whether every agreement root and the theater suffix use the stock YR
+    /// names. A presentation or catalog override is still a distinct game
+    /// resource selection even when Rules/Art/AI are unchanged.
+    pub fn is_stock(&self) -> bool {
+        let stock = Self::default();
+        self.files()
+            .into_iter()
+            .zip(stock.files())
+            .chain([(self.theater_suffix(), stock.theater_suffix())])
+            .all(|(used, stock)| used.eq_ignore_ascii_case(stock))
+    }
+
     pub fn names(&self) -> [&str; 3] {
         [self.rules(), self.art(), self.ai()]
     }

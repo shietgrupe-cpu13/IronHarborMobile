@@ -54,7 +54,8 @@ struct OverlayFrame {
     timer: FrameTimer,
     pool: InstanceBufferPool,
     size: [u32; 2],
-    depth: wgpu::TextureView,
+    /// The panel's depth attachment, made when it first shows (`draw`).
+    depth: Option<wgpu::TextureView>,
     logged_first_frame: bool,
     simulation_rate: SimulationRate,
     stats: PanelStats,
@@ -205,7 +206,7 @@ impl PerformanceOverlay {
                 timer: FrameTimer::new(),
                 pool: InstanceBufferPool::new(),
                 size: [gpu.config.width, gpu.config.height],
-                depth: gpu.create_depth_texture(),
+                depth: None,
                 logged_first_frame: false,
                 simulation_rate: SimulationRate::default(),
                 stats: PanelStats::default(),
@@ -312,6 +313,9 @@ impl PerformanceOverlay {
         frame.timer.sample(now);
         gpu.timer.set_active(self.visible);
         if !self.visible {
+            // The panel owns no draw work while hidden, so release its
+            // window-sized depth target instead of retaining it all match.
+            frame.depth = None;
             frame.stats = PanelStats::default();
             frame.message_top = 0;
             return;
@@ -390,9 +394,14 @@ impl PerformanceOverlay {
     ) {
         let size = [destination.width(), destination.height()];
         if frame.size != size {
-            frame.depth = gpu.create_depth_texture();
+            frame.depth = None;
             frame.size = size;
         }
+        // The passthrough pipeline carries a depth state, so its pass needs
+        // the attachment; a panel nobody shows holds none.
+        let depth = frame
+            .depth
+            .get_or_insert_with(|| gpu.create_depth_texture());
         let camera = CameraUniform {
             screen_size: [size[0] as f32, size[1] as f32],
             camera_pos: [0.0; 2],
@@ -419,7 +428,7 @@ impl PerformanceOverlay {
                 },
             })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &frame.depth,
+                view: depth,
                 depth_ops: Some(wgpu::Operations {
                     load: wgpu::LoadOp::Clear(1.0),
                     store: wgpu::StoreOp::Discard,

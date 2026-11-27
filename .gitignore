@@ -50,6 +50,8 @@ Thumbs.db
 !/docs/android.md
 !/docs/android-mod-manager-b5.md
 !/docs/android-mod-manager-b6.md
+!/docs/upstream/
+!/docs/upstream/*.md
 !/docs/android-launcher-ui-b7.md
 !/docs/ares-side-defaults.md
 !/docs/ares-country-presentation.md

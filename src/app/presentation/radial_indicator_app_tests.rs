@@ -1000,3 +1000,41 @@ fn placement_enhancer_rings_need_membership_range_and_the_current_player() {
         1
     );
 }
+
+/// Ares draws a ring for the player's selected mobile Techno whose type has
+/// `HasRadialIndicator`; stock YR and another player's unit draw none.
+#[test]
+fn ares_rings_selected_mobile_technos_with_radial_indicators() {
+    let patch = crate::rules::ini_parser::IniFile::from_str(
+        "[HTNK]\nHasRadialIndicator=yes\n[MTNK]\nHasRadialIndicator=yes\nRadialIndicatorRadius=9\n",
+    );
+    let rings = |ares: bool| {
+        let _ares = crate::rules::ares_switch::read_ares_way(ares);
+        let Some(retail) = crate::rules::retail_ini_fixture::retail_battle_rules_for_map_with_patch(
+            "XMP03T4.MAP",
+            &patch,
+        ) else {
+            return None;
+        };
+        let rules = &retail.rules;
+        let mut sim = state(rules);
+        let ids = [
+            sim.spawn_object("HTNK", "Americans", 12, 12, 0, rules)
+                .unwrap(),
+            sim.spawn_object("MTNK", "Americans", 16, 12, 0, rules)
+                .unwrap(),
+            sim.spawn_object("HTNK", "British", 20, 12, 0, rules)
+                .unwrap(),
+        ];
+        let weapon_range = rules.weapon("120mm").unwrap().range_leptons >> 8;
+        Some((query(&sim, rules, &ids, 0), weapon_range as f32))
+    };
+    let Some((draws, weapon_range)) = rings(true) else {
+        return;
+    };
+    assert_eq!(
+        draws.iter().map(|draw| draw.radius).collect::<Vec<_>>(),
+        [weapon_range, 9.0]
+    );
+    assert!(rings(false).unwrap().0.is_empty());
+}

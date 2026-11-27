@@ -631,6 +631,17 @@ mod tests {
         // the right.
         let stored = |z: i32| z as f32 / 65535.0;
         let mut picture = TerrainPicture::default();
+        if crate::render::gpu::webgl_fallback(&device) {
+            // GLES/WebGL targets cannot use the retained texture-copy path.
+            // The production fallback redraws each frame, so assert that it
+            // never keeps stale terrain state instead of running the Vulkan
+            // copy/shift golden below.
+            assert!(picture.step(&device, inputs([100.0, 200.0]), NO_GROUND) == DRAW);
+            assert!(picture.step(&device, inputs([100.0, 200.0]), NO_GROUND) == DRAW);
+            assert!(!picture.valid);
+            assert!(picture.drawn.is_none());
+            return;
+        }
         assert!(picture.step(&device, inputs([100.0, 200.0]), NO_GROUND) == DRAW);
         assert!(picture.step(&device, inputs([100.0, 200.0]), NO_GROUND) == DRAW_AND_KEEP);
         let mut encoder = device.create_command_encoder(&Default::default());

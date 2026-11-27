@@ -205,6 +205,8 @@ pub(crate) trait RocketHost {
     /// `[0x00A8ED84]`, the frame the timers count from.
     fn binary_frame(&self) -> u32;
     fn trig(&self) -> &TrigTable;
+    /// Whether `[Map] Size` exceeds the original engine's 512 sum boundary.
+    fn vera_only_map(&self) -> bool;
     /// Owner `+0x2D4` SpawnOwner is set and `VeterancyStruct::IsElite @
     /// 0x00750010` holds for its `+0x150`.
     fn spawn_owner_is_elite(&self) -> bool;
@@ -474,7 +476,7 @@ fn cruise(
             X87Chop53::load_i32(rocket.cruise_start_distance),
         )
         .expect("the lazy curve runs with a nonzero start distance");
-        let angle = target_angle(destination, host.location());
+        let angle = target_angle(destination, host.location(), host.vera_only_map());
         let rest = X87Chop53::sub(f64_value(NativeF64Bits::ONE), share);
         let toward_final = X87Chop53::mul(
             X87Chop53::mul(f32_value(block.pitch_final), share),
@@ -492,7 +494,7 @@ fn cruise(
 /// State 5 (`0x00662CBF..0x0066300A`) after the impact prediction: turn the
 /// pitch toward the target angle by at most TurnRate.
 fn dive(rocket: &mut RocketRuntime, block: &MissileSpawnParams, host: &mut impl RocketHost) {
-    let angle = target_angle(rocket.destination, host.location());
+    let angle = target_angle(rocket.destination, host.location(), host.vera_only_map());
     let zero = X87Chop53::load_i32(0);
     let pitch = rocket.pitch_value();
     let turn = f32_value(block.turn_rate);
@@ -683,14 +685,21 @@ fn along_nose(rocket: &RocketRuntime, host: &impl RocketHost, length: X87Value) 
 /// 0x00662B2E`) and the dive (`0x00662CBF..0x00662D2E`): the horizontal
 /// distance squares and sums in int32, and nothing left to cover is straight
 /// down.
-fn target_angle(destination: DriveCoord, here: [i32; 3]) -> X87Value {
-    let dx = destination.x.wrapping_sub(here[0]);
-    let dy = destination.y.wrapping_sub(here[1]);
+fn target_angle(destination: DriveCoord, here: [i32; 3], vera_only_map: bool) -> X87Value {
     let dz = destination.z.wrapping_sub(here[2]);
-    let squared = dx.wrapping_mul(dx).wrapping_add(dy.wrapping_mul(dy));
-    let distance = f32_value(
-        sqrt_approx_f32(X87Chop53::load_i32(squared)).expect("a finite int32 has a finite root"),
+    let squared = crate::util::native_coord::squared_xy_leptons_for_map(
+        [destination.x, destination.y],
+        [here[0], here[1]],
+        vera_only_map,
     );
+    let squared = if vera_only_map {
+        X87Chop53::load_f64(NativeF64Bits::from_bits((squared as f64).to_bits()))
+            .expect("a VERA-only squared distance is finite")
+    } else {
+        X87Chop53::load_i32(squared as i32)
+    };
+    let distance =
+        f32_value(sqrt_approx_f32(squared).expect("a finite squared distance has a finite root"));
     if X87Chop53::compare(distance, X87Chop53::load_i32(0)) != X87Ordering::Greater {
         return f64_value(NEG_HALF_PI);
     }
@@ -768,6 +777,10 @@ mod tests {
         }
         fn trig(&self) -> &TrigTable {
             self.trig
+        }
+        fn vera_only_map(&self) -> bool {
+            // The oracle rows are original-executable samples.
+            false
         }
         fn spawn_owner_is_elite(&self) -> bool {
             // VeterancyStruct::IsElite: Veterancy >= [0x007E37B4] (2.0f).
@@ -1114,5 +1127,19 @@ mod tests {
         assert_eq!(rocket.draw_key_bits(block), Some(0x40));
         rocket.current_pitch += 1;
         assert_eq!(rocket.draw_key_bits(block), None);
+    }
+
+    #[test]
+    fn vera_only_target_angle_uses_the_true_square() {
+        let destination = DriveCoord {
+            x: 46_341,
+            y: 46_341,
+            z: 1_000,
+        };
+        let here = [0, 0, 0];
+        let native = f64::from_bits(store_f64(target_angle(destination, here, false)));
+        let vera_only = f64::from_bits(store_f64(target_angle(destination, here, true)));
+        assert!(native > 1.0, "native steep angle {native}");
+        assert!(vera_only < 0.1, "true shallow angle {vera_only}");
     }
 }

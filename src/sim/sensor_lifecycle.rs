@@ -112,9 +112,11 @@ impl Simulation {
         registry: Option<&OverlayTypeRegistry>,
     ) {
         let Some((owner, center, radius)) = self.unit_sensor_parameters(id, rules) else {
+            self.fog.clear_unit_sensor_center(id);
             return;
         };
         self.apply_sensor_add(owner, center, radius, rules, registry);
+        self.fog.set_unit_sensor_center(id, center);
     }
 
     /// Foot Limbo4DB376 and ChangeOwner4DBEFB remove at current coordinates,
@@ -126,6 +128,7 @@ impl Simulation {
         registry: Option<&OverlayTypeRegistry>,
     ) {
         self.remove_unit_sensors_at(id, None, rules, registry);
+        self.fog.clear_unit_sensor_center(id);
     }
     fn sensor_residents_in_native_order(&self, cell: (u16, u16)) -> Vec<u64> {
         self.substrate
@@ -507,15 +510,63 @@ impl Simulation {
         rules: &RuleSet,
         registry: Option<&OverlayTypeRegistry>,
     ) {
-        let old = self
+        let Some(current) = self
             .substrate
             .entities
             .get(stable_id)
-            .map(|entity| entity.navigation.neighbor_state().cell());
-        if let Some(old) = old {
-            self.remove_unit_sensors_at(stable_id, Some(old), rules, registry);
-            self.add_unit_sensors_at_current(stable_id, rules, registry);
+            .map(|entity| (entity.position.rx(), entity.position.ry()))
+        else {
+            return;
+        };
+        let old = self.fog.unit_sensor_center(stable_id).map_or_else(
+            || {
+                self.substrate
+                    .entities
+                    .get(stable_id)
+                    .map(|entity| entity.navigation.neighbor_state().cell())
+                    .unwrap_or((0, 0))
+            },
+            |(x, y)| (x as i16, y as i16),
+        );
+        if old.0 >= 0 && old.1 >= 0 && (old.0 as u16, old.1 as u16) == current {
+            return;
         }
+        self.remove_unit_sensors_at(stable_id, Some(old), rules, registry);
+        self.add_unit_sensors_at_current(stable_id, rules, registry);
+    }
+
+    /// BalloonHover Jumpjets do not reach PerCell until touchdown. In the MO
+    /// single-stage cloak profile, move only their SensorsSight circle as they
+    /// cross cells; leave all other PerCell effects untouched.
+    pub(crate) fn refresh_airborne_sensor_at_cell_change(
+        &mut self,
+        stable_id: u64,
+        previous: (u16, u16),
+        rules: &RuleSet,
+        registry: Option<&OverlayTypeRegistry>,
+    ) {
+        if self
+            .substrate
+            .entities
+            .get(stable_id)
+            .is_some_and(|entity| entity.lifecycle.in_limbo())
+        {
+            return;
+        }
+        let Some((_, current, _)) = self.unit_sensor_parameters(stable_id, rules) else {
+            return;
+        };
+        let old = self.fog.unit_sensor_center(stable_id).unwrap_or(previous);
+        if old == current {
+            return;
+        }
+        self.remove_unit_sensors_at(
+            stable_id,
+            Some((old.0 as i16, old.1 as i16)),
+            rules,
+            registry,
+        );
+        self.add_unit_sensors_at_current(stable_id, rules, registry);
     }
 }
 
@@ -609,6 +660,45 @@ mod tests {
         // FootLimbo4DB376 removes the live owner's current-coordinate circle.
         sim.techno_limbo_with_rules(second, &rules, None);
         assert!(!sim.fog.has_sensor_for_house(soviet, 57, 30));
+    }
+
+    #[test]
+    fn airborne_sensor_circle_moves_and_touchdown_does_not_double_count() {
+        let rules = rules();
+        let mut sim = sim_with_map_authority();
+        let id = sim
+            .spawn_object_at_height("DEST", "Americans", 20, 30, 0, 0, &rules)
+            .unwrap();
+        let owner = sim.substrate.entities.get(id).unwrap().owner();
+        let count_at = |sim: &Simulation, x: u16| {
+            sim.fog.sensors_by_house()[&owner][30 * usize::from(sim.fog.width()) + usize::from(x)]
+        };
+
+        assert_eq!(count_at(&sim, 20), 1);
+        sim.substrate
+            .entities
+            .get_mut(id)
+            .unwrap()
+            .position
+            .set_rx_for_test(40);
+        sim.refresh_airborne_sensor_at_cell_change(id, (20, 30), &rules, None);
+        assert_eq!(count_at(&sim, 20), 0);
+        assert_eq!(count_at(&sim, 40), 1);
+
+        sim.substrate
+            .entities
+            .get_mut(id)
+            .unwrap()
+            .position
+            .set_rx_for_test(50);
+        sim.refresh_airborne_sensor_at_cell_change(id, (40, 30), &rules, None);
+        sim.refresh_airborne_sensor_at_cell_change(id, (50, 30), &rules, None);
+        assert_eq!(count_at(&sim, 50), 1, "repeated cell update is idempotent");
+        sim.refresh_unit_sensor_at_per_cell(id, &rules, None);
+        assert_eq!(count_at(&sim, 50), 1, "touchdown does not add a duplicate");
+
+        sim.techno_limbo_with_rules(id, &rules, None);
+        assert_eq!(count_at(&sim, 50), 0, "Limbo removes the moved circle");
     }
 
     /// `FootClass::Unlimbo @ 0x004D7170` stamps the circle itself

@@ -3960,11 +3960,15 @@ impl GeneralRules {
                     defaults.enable_ai_build_limitation,
                 ),
             // NPSE reads it with the current field as default into Rules+0x2D
-            // (C30303..C3031A); the constructor's 66569B store leaves 0.
+            // (C30303..C3031A); the constructor's 66569B store leaves 0. NPExt
+            // ext173 reads its alias into the same global decision; use it as
+            // the ReadBool default when the NPSE spelling is absent or invalid.
             disable_parallel_ai_queues: crate::rules::NPATCH_ENABLED
                 && general.read_bool(
                     "DisableParallelAIQueues",
-                    defaults.disable_parallel_ai_queues,
+                    general
+                        .read_bool_value("DisableAIParallelProduction")
+                        .unwrap_or(defaults.disable_parallel_ai_queues),
                 ),
             repair_rate_minutes: general.read_double("RepairRate", defaults.repair_rate_minutes),
             // `RulesClass+0x30/+0x34/+0x38/+0x3C`, read by the General reader at
@@ -4823,6 +4827,9 @@ pub struct RuleSet {
     /// handle records a native slot the older name-based object projection
     /// cannot represent uniquely, so exact lookup must not silently alias it.
     native_techno_type_order: Vec<(ObjectCategory, String, Option<TypeHandle>)>,
+    /// Uppercase ID to the first native TechnoType slot with that ID. Ares
+    /// trigger polling uses this index rather than scanning the full order.
+    ares_techno_type_first: LookupMap<String, usize>,
     /// Case-insensitive identity of each type in the four native TechnoType
     /// registries to its ordered array index (`+0xDF8`).
     type_array_indices: CategoryIndex<i32>,
@@ -5490,6 +5497,12 @@ impl RuleSet {
             rules
                 .native_techno_type_order
                 .push((category, id.to_owned(), handle));
+        }
+        for (slot, (_, id, _)) in rules.native_techno_type_order.iter().enumerate() {
+            rules
+                .ares_techno_type_first
+                .entry(id.to_ascii_uppercase())
+                .or_insert(slot);
         }
         for (category, id, coefficients) in processed.techno_threat_coefficients() {
             if let Some(handle) = rules.object_category_index.get(category, id)
@@ -7296,6 +7309,7 @@ impl RuleSet {
             serial: next_rule_set_serial(),
             object_category_index,
             native_techno_type_order: Vec::new(),
+            ares_techno_type_first: LookupMap::default(),
             type_array_indices,
             weapons,
             weapon_types,
@@ -7558,10 +7572,9 @@ impl RuleSet {
         if crate::rules::ini_parser::is_native_none_type_name(id) {
             return None;
         }
-        self.native_techno_type_order
-            .iter()
-            .find(|(_, stored_id, _)| stored_id.eq_ignore_ascii_case(id))
-            .and_then(|(_, _, handle)| *handle)
+        self.ares_techno_type_first
+            .get(&*upper_name_key(id))
+            .and_then(|&slot| self.native_techno_type_order[slot].2)
             .map(|handle| self.object_by_handle(handle))
     }
 
@@ -12215,6 +12228,31 @@ fn parse_particle_system_types(
 
 #[cfg(all(test, tests_rules_o_z))]
 mod tests {
+    /// Ares Find is case-insensitive and returns the first native type slot,
+    /// including when IDs with different case appear in different arrays.
+    #[test]
+    fn ares_find_techno_type_matches_the_first_case_insensitive_slot() {
+        let rules = RuleSet::from_ini(&IniFile::from_str(
+            "[InfantryTypes]\n0=E1\n1=DUP\n[VehicleTypes]\n0=MTNK\n1=Dup\n\
+             [AircraftTypes]\n[BuildingTypes]\n0=GAPOWR\n\
+             [E1]\nStrength=125\n[MTNK]\nStrength=300\n\
+             [GAPOWR]\nStrength=750\n",
+        ))
+        .unwrap();
+        let find = |name| {
+            rules
+                .ares_find_techno_type(name)
+                .map(|object| object.id.as_str())
+        };
+        assert_eq!(find("mtnk"), Some("MTNK"));
+        assert_eq!(find("E1"), Some("E1"));
+        assert_eq!(find("gaPowr"), Some("GAPOWR"));
+        assert_eq!(find("none"), None);
+        assert_eq!(find("<none>"), None);
+        assert_eq!(find("HTNK"), None);
+        assert_eq!(find("dup"), Some("Dup"));
+    }
+
     #[test]
     fn ares_emp_ai_global_mission_uses_production_layers_and_config_hash() {
         use crate::rules::{

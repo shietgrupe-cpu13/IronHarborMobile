@@ -239,7 +239,7 @@ fn original_shared_wave_geometry_in_all_octants_elevation_and_converged_xy() {
                 let rejected =
                     Wave::new(wave_type, coord(&input["source"]), coord(&input["target"]));
                 assert!(
-                    !rejected.constructor_distance_is_live(),
+                    !rejected.constructor_distance_is_live(false),
                     "original ctor rejects zero XY"
                 );
                 continue;
@@ -260,6 +260,17 @@ fn original_shared_wave_geometry_in_all_octants_elevation_and_converged_xy() {
         }
     }
     assert!(directions.into_iter().flatten().all(|covered| covered));
+}
+
+#[test]
+fn vera_only_map_uses_true_wave_constructor_distance() {
+    let wave = Wave::new(
+        0,
+        ProjectileCoord::new(0, 0, 0),
+        ProjectileCoord::new(46_341, 46_341, 0),
+    );
+    assert!(!wave.constructor_distance_is_live(false));
+    assert!(wave.constructor_distance_is_live(true));
 }
 
 #[test]

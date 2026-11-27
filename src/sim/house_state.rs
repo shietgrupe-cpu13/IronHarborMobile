@@ -1719,6 +1719,14 @@ impl HouseState {
         &self.economy
     }
 
+    /// `HouseClass::Available_Storage @ 0x004F69D0`: capacity less the
+    /// House's Ares tiberium store.
+    pub(crate) fn available_storage(&self) -> i32 {
+        self.tracking
+            .storage_capacity()
+            .wrapping_sub(self.economy.ares_storage().house_store().total_amount())
+    }
+
     pub const fn strategy_emergency(&self) -> &HouseStrategyEmergencyState {
         &self.strategy_emergency
     }
