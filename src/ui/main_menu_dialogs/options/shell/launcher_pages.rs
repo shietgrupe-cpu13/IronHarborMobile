@@ -126,6 +126,7 @@ pub(super) fn controls(
                 check(&mut row, id, x, 405 + i as i32 * 24);
             }
             check(&mut row, Check::SkipIntro, right, 405);
+            #[cfg(not(target_os = "android"))]
             check(&mut row, Check::VeraIcon, right, 429);
             if HAS_HD_MAP_PREVIEWS {
                 check(&mut row, Check::HdMapPreviews, right, 453);

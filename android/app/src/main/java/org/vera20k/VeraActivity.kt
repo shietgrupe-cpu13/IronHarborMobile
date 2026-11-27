@@ -2,14 +2,10 @@ package org.vera20k
 
 import android.app.Activity
 import android.app.AlertDialog
-import android.app.ActivityManager.TaskDescription
-import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.ShortcutInfo
 import android.content.pm.ShortcutManager
 import android.graphics.drawable.Icon
-import android.content.pm.PackageManager
-import android.graphics.BitmapFactory
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -174,9 +170,6 @@ class VeraActivity : GameActivity() {
         /** The folders under `tmp/` that hold what Add Mod's pickers copied in. */
         const val PICKED_PREFIX = "mod-import-"
 
-        /** The two launcher entries; exactly one is enabled at a time. */
-        const val LAUNCHER_RETAIL = "org.vera20k.LauncherRetail"
-        const val LAUNCHER_VERA = "org.vera20k.LauncherVera"
     }
 
     /** The folder an export picker is waiting for; empty when none is. */
@@ -854,68 +847,6 @@ class VeraActivity : GameActivity() {
     private external fun nativeConfigForDirectSelection(directory: String, settingsDirectory: String): String
 
     fun cancelImport(): Boolean = AssetImportJob.cancelActive()
-
-    /**
-     * Shows the icon the Options page's VERA Icon box selected.
-     *
-     * A launcher icon is a resource compiled into the package, so the only way
-     * to change it at run time is to enable one `activity-alias` and disable the
-     * other. The app switcher takes the same bitmap from the task description.
-     * Called from Rust at start-up and whenever the box is toggled
-     * (`vera20k::util::app_icon`).
-     */
-    fun applyAppIcon(veraIcon: Boolean) {
-        // Rust calls this from the engine's own thread; enabling, disabling and
-        // finishing an activity all belong to Android's main thread.
-        runOnUiThread { applyAppIconOnUi(veraIcon) }
-    }
-
-    private fun applyAppIconOnUi(veraIcon: Boolean) {
-        val wanted = if (veraIcon) LAUNCHER_VERA else LAUNCHER_RETAIL
-        val other = if (veraIcon) LAUNCHER_RETAIL else LAUNCHER_VERA
-        val wantedName = ComponentName(this, wanted)
-        val otherName = ComponentName(this, other)
-        val enabled = PackageManager.COMPONENT_ENABLED_STATE_ENABLED
-        val disabled = PackageManager.COMPONENT_ENABLED_STATE_DISABLED
-        // Already in effect: touching the components would still tear down the
-        // task, because disabling the alias that launched it removes the task.
-        if (packageManager.getComponentEnabledSetting(wantedName) == enabled &&
-            packageManager.getComponentEnabledSetting(otherName) == disabled
-        ) {
-            updateTaskDescription(veraIcon)
-            return
-        }
-        packageManager.setComponentEnabledSetting(wantedName, enabled, PackageManager.DONT_KILL_APP)
-        packageManager.setComponentEnabledSetting(otherName, disabled, PackageManager.DONT_KILL_APP)
-        // Disabling the alias that launched this task already removed it, and a
-        // surviving process cannot serve another one (winit builds a single
-        // event loop per process). Close deliberately instead of leaving a
-        // headless process, and the next tap on the new icon is a cold start.
-        //
-        // Restarting the app for the player would need a background activity
-        // start, which Android refuses once this process is no longer in front;
-        // the alarm-and-relaunch approach only worked while the app still held
-        // the foreground.
-        finishAndRemoveTask()
-        Process.killProcess(Process.myPid())
-    }
-
-    /** The app switcher's picture and label for the chosen icon. */
-    private fun updateTaskDescription(veraIcon: Boolean) {
-        // The adaptive icon is an XML drawable, which decodes to no bitmap; the
-        // foreground PNG is the same artwork the launcher composites.
-        val icon = BitmapFactory.decodeResource(
-            resources,
-            if (veraIcon) {
-                R.mipmap.ic_launcher_vera_foreground
-            } else {
-                R.mipmap.ic_launcher_retail_foreground
-            },
-        ) ?: return
-        setTaskDescription(
-            TaskDescription(applicationInfo.loadLabel(packageManager).toString(), icon),
-        )
-    }
 
     private var copiedBytes = 0L
     private var reportedBytes = 0L

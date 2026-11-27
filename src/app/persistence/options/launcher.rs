@@ -321,14 +321,11 @@ fn show_vera_icon(
     profile: &RetailOptionsProfile,
     vera_icon: bool,
 ) {
-    // Android's launcher icon is a compiled resource carried by the two
-    // activity aliases, and changing it closes the app, so the choice has to
-    // be on disk first. Every other platform applies the icon to the live
-    // window below and keeps its own write timing.
+    // Android branding is fixed to Iron Harbor. Desktop platforms apply the
+    // selected icon to the live window below.
     #[cfg(target_os = "android")]
     {
         crate::app::persistence::options::persist_options_profile(platform, profile);
-        crate::util::app_icon::apply(vera_icon);
     }
     #[cfg(not(target_os = "android"))]
     let _ = profile;

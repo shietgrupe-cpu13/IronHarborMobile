@@ -1221,6 +1221,7 @@ pub(crate) const ROWS: &[Row] = {
         row!(General, Checkbox(YrOriginalStyle), "YrOriginalStyle"),
         row!(General, Checkbox(SmoothOnlineMenus), "SmoothOnlineMenus"),
         row!(General, Checkbox(HdMapPreviews), "HdMapPreviews"),
+        #[cfg(not(target_os = "android"))]
         row!(General, Checkbox(VeraIcon), "VeraIcon"),
         row!(General, Checkbox(SkipIntro), "SkipIntro"),
         row!(General, Checkbox(ShowStringKeys), "ShowStringKeys"),

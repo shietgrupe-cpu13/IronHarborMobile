@@ -195,25 +195,6 @@ fn cancel_import() -> bool {
     .unwrap_or(false)
 }
 
-/// Launcher and app-switcher icon hook for `vera20k::util::app_icon`.
-///
-/// The choice lives in the two activity aliases, which only `PackageManager`
-/// can flip; the activity keeps that knowledge in [`VeraActivity.applyAppIcon`].
-fn apply_app_icon(vera_icon: bool) {
-    let applied = with_activity(|env, activity| {
-        env.call_method(
-            activity,
-            "applyAppIcon",
-            "(Z)V",
-            &[jni::objects::JValue::Bool(u8::from(vera_icon))],
-        )
-        .is_ok()
-    });
-    if applied != Some(true) {
-        log::warn!("Could not apply the app icon");
-    }
-}
-
 /// LAN network hooks for `vera20k::util::lan_network`.
 ///
 /// Android routes a datagram by the process's default network, so the LAN visit
@@ -1130,9 +1111,6 @@ fn android_main(app: AndroidApp) {
         take_picked: mod_take_picked,
         clear_picked: mod_clear_picked,
     });
-    // The launcher icon is a compiled resource, so the VERA Icon box's choice
-    // reaches the two activity aliases only through PackageManager.
-    vera20k::util::app_icon::install(apply_app_icon);
     // LAN discovery rides the Wi-Fi network: the lobby binds this process to it
     // and the activity reports network changes back through the JNI callback.
     vera20k::util::lan_network::install(vera20k::util::lan_network::Hooks {

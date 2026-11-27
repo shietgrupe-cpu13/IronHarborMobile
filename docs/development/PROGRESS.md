@@ -2,6 +2,13 @@
 
 Updated 2026-11-27. Current authoritative plan: [IRON_HARBOR_MASTER_PLAN.md](IRON_HARBOR_MASTER_PLAN.md).
 
+## Latest device regression and current change
+
+- Latest fork sync: `415fcbe8a` (`docs(android): reconcile legacy launcher and device regression master plan`), branch `android-new`; latest fetched upstream tip `396e19286` has not been merged.
+- The supplied Android 16 Xiaomi diagnostic identifies two separate events. First, pid 6505 received an explicit `SIGKILL` at `VeraActivity.applyAppIconOnUi(VeraActivity.kt:900)` during game startup. The cause is confirmed: startup icon selection flips launcher aliases and deliberately kills the process. Android branding is now fixed to Iron Harbor: the secondary alias and Android VERA-icon controls/callback were removed. This source change has not yet run in Actions or on-device.
+- A later game process (pid 8754) has a distinct shutdown abort: AAudio streams close, then CheckJNI reports `Thread-5` calling `DeleteGlobalRef` with the main thread's `JNIEnv*`; Android also reports destroyed-mutex waits in HWUI's `CommonPool`. The supplied tombstone backtrace is only the HWUI worker, not the offending Thread-5 stack, so the exact owner is not established. Do not mark this crash fixed; trace the CPAL/JNI ownership and Android shutdown path before changing it.
+- The same diagnostic shows the launcher preflight succeeded in 66 ms and the engine loaded configured vanilla YR roots from `/storage/emulated/0/Documents/RA2Harbor/Config/config.toml`. This does not verify the listed mod/profile/map/renderer requirements.
+
 ## Repository state
 
 - Branch: `android-new`, tracking `vera20k-fork/android-new`.

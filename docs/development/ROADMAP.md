@@ -24,11 +24,11 @@ Remaining work: connect launcher SAF-copy fallback; test private-data migration 
 
 ## Guardrails and next order
 
-1. Finish current storage/config-root slice and pass GitHub Actions.
-2. Restore the original Iron Harbor launcher GUI without replacing it with a generic UI.
-3. Restore launcher profile/mod/map/file management using Rust's resolver as authority.
-4. Restore supported renderer settings and diagnostics.
-5. Implement the dynamic in-game HUD and profile editor.
-6. Prepare upstream contribution candidates.
+1. Fix the diagnostic-confirmed Android launcher-alias SIGKILL (source change pending Actions/device retest).
+2. Trace the separate AAudio/JNI/HWUI shutdown crash from its actual owner; do not guess from the partial tombstone.
+3. Remove both launcher campaign shortcuts/pages and correct Maps to `Documents/RA2Harbor/Configs/Maps/` non-destructively.
+4. Restore effective mod selection and supported Mental Omega configuration through the engine resolver; verify actual selected resources.
+5. Restore a renderer selector only for backend(s) actually supported and consumed by the current engine, then finish launcher cleanup.
+6. Continue storage, diagnostics, dynamic in-game HUD and upstream proposal work; track physical-device gates separately.
 
 No local Rust/Cargo/Gradle/APK builds. Do not modify the legacy reference or the untracked `out/` directory. CI success is not device/gameplay validation; the partial user-reported device result remains open in `DEVICE_TEST_MATRIX.md`.
