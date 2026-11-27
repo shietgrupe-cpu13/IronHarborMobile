@@ -65,7 +65,8 @@ public class AssetImportJobTest {
             assertNotEquals(failedDirectory[0], installed);
             assertFalse(AssetImportJob.child(installed, "RULESMD.INI").exists());
             assertEquals("new assets", readUtf8(installed.toPath().resolve("ra2md.mix")));
-            assertEquals("new config", readUtf8(config));
+            assertEquals("old config", readUtf8(config));
+            assertEquals("new config", readUtf8(files.toPath().resolve("Config/config.toml")));
             assertEquals("old rules", readUtf8(oldRules));
         }
     }

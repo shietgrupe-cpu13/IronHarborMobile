@@ -63,7 +63,7 @@ class AndroidSharedStoragePathTest {
         val install = temporary.newFolder("base-ra2")
         File(install, "RA2.MIX").writeBytes(byteArrayOf(1))
 
-        assertEquals(listOf("ra2.mix"), GameFolderValidation.missingRequiredArchives(install, "yr"))
+        assertEquals(listOf("ra2md.mix"), GameFolderValidation.missingRequiredArchives(install, "yr"))
         assertTrue(GameFolderValidation.missingRequiredArchives(install, "ra2").isEmpty())
         assertTrue(GameFolderValidation.missingRequiredArchives(install, "yr", true).isEmpty())
     }
