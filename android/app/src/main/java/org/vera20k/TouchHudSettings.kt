@@ -11,6 +11,7 @@ internal object TouchHudSettings {
     const val HUD_POSITIONS = "hud_positions"
     const val HUD_SIZES = "hud_sizes"
     const val HUD_BUTTON_OPACITIES = "hud_button_opacities"
+    const val HUD_BUTTON_LABELS = "hud_button_labels"
     const val HUD_SCALE = "hud_scale"
     const val HUD_OPACITY = "hud_opacity"
     const val HUD_LAYOUT = "hud_layout"
@@ -252,6 +253,26 @@ internal object TouchHudSettings {
         .mapNotNull { button -> opacities[button.id]?.let { button.id to clampOpacity(it) } }
         .joinToString(";") { (id, opacity) -> "$id:$opacity" }
 
+    fun sanitizeButtonLabel(value: String): String? {
+        val trimmed = value.trim()
+        if (trimmed.any { it.isISOControl() || it == ':' || it == ';' }) return null
+        val label = trimmed.replace(Regex("\\s+"), " ")
+        return label.takeIf { it.isNotEmpty() && it.length <= 8 }
+    }
+
+    fun parseButtonLabels(encoded: String?): Map<String, String> {
+        val valid = layoutButtons.mapTo(hashSetOf()) { it.id }
+        return encoded.orEmpty().split(';').mapNotNull { entry ->
+            val pair = entry.split(':', limit = 2)
+            if (pair.size != 2 || pair[0] !in valid) return@mapNotNull null
+            sanitizeButtonLabel(pair[1])?.let { pair[0] to it }
+        }.toMap()
+    }
+
+    fun encodeButtonLabels(labels: Map<String, String>): String = layoutButtons.asSequence()
+        .mapNotNull { button -> labels[button.id]?.let(::sanitizeButtonLabel)?.let { button.id to it } }
+        .joinToString(";") { (id, label) -> "$id:$label" }
+
     /** Stable, dependency-free backup format. Each value is validated on restore. */
     fun encodeLayoutBackup(
         visible: Set<String>,
@@ -266,9 +287,10 @@ internal object TouchHudSettings {
         activeSet: Int = 1,
         hidden: Boolean = false,
         buttonOpacities: Map<String, Int> = emptyMap(),
+        buttonLabels: Map<String, String> = emptyMap(),
     ): String = listOf(
         "format=iron-harbor-hud",
-        "version=4",
+        "version=5",
         "visible=${encodeVisible(visible)}",
         "positions=${encodePositions(positions)}",
         "sizes=${encodeSizes(sizes)}",
@@ -278,6 +300,7 @@ internal object TouchHudSettings {
         "activeSet=${activeSet.coerceIn(1, 2)}",
         "hidden=$hidden",
         "buttonOpacities=${encodeButtonOpacities(buttonOpacities)}",
+        "buttonLabels=${encodeButtonLabels(buttonLabels)}",
         "scale=${clampScale(scale)}",
         "opacity=${clampOpacity(opacity)}",
         "layout=${layout.coerceIn(LAYOUT_FREE, LAYOUT_YURI)}",
@@ -297,6 +320,7 @@ internal object TouchHudSettings {
         val activeSet: Int,
         val hidden: Boolean,
         val buttonOpacities: Map<String, Int>,
+        val buttonLabels: Map<String, String>,
     )
 
     fun decodeLayoutBackup(source: String): LayoutBackup? {
@@ -305,7 +329,7 @@ internal object TouchHudSettings {
             if (separator <= 0) null else line.substring(0, separator) to line.substring(separator + 1)
         }.toMap()
         val version = fields["version"]?.toIntOrNull()
-        if (fields["format"] != "iron-harbor-hud" || version == null || version !in 1..4) return null
+        if (fields["format"] != "iron-harbor-hud" || version == null || version !in 1..5) return null
         val visible = parseVisible(fields["visible"], true)
         val scale = fields["scale"]?.toIntOrNull() ?: return null
         val opacity = fields["opacity"]?.toIntOrNull() ?: return null
@@ -331,6 +355,7 @@ internal object TouchHudSettings {
             activeSet,
             hidden,
             if (version >= 4) parseButtonOpacities(fields["buttonOpacities"]) else emptyMap(),
+            if (version >= 5) parseButtonLabels(fields["buttonLabels"]) else emptyMap(),
         )
     }
 

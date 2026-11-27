@@ -39,6 +39,7 @@ internal class TouchHudLayoutEditor(private val activity: Activity) {
         scale: Int,
         opacity: Int,
         buttonOpacities: MutableMap<String, Int>,
+        buttonLabels: MutableMap<String, String>,
         onApply: () -> Unit,
     ) {
         val dialog = Dialog(activity)
@@ -98,9 +99,9 @@ internal class TouchHudLayoutEditor(private val activity: Activity) {
         var opacityLabel: TextView? = null
         var opacitySeek: SeekBar? = null
         val preview = TouchHudLayoutPreview(
-            activity, visible, positions, sizes, buttonOpacities, controlSets, layout, dock, scale, opacity,
+            activity, visible, positions, sizes, buttonOpacities, buttonLabels, controlSets, layout, dock, scale, opacity,
         ) { selected ->
-            selectedLabel.text = selected?.let { "${it.label}   /   ${sizes[it.id] ?: 100}%" }
+            selectedLabel.text = selected?.let { "${buttonLabels[it.id] ?: it.label}   /   ${sizes[it.id] ?: 100}%" }
                 ?: "No control selected"
             selected?.let { TouchHudSettings.buttonOpacity(it.id, buttonOpacities, opacity) }?.let { selectedOpacity ->
                 opacityLabel?.text = "Selected button opacity  /  $selectedOpacity%"
@@ -167,9 +168,11 @@ internal class TouchHudLayoutEditor(private val activity: Activity) {
             gravity = Gravity.CENTER_VERTICAL
             orientation = LinearLayout.HORIZONTAL
         }
+        val rename = controlButton("RENAME SELECTED") { renameSelected(preview, buttonLabels, sizes, selectedLabel) }
         val hide = controlButton("HIDE SELECTED") { preview.hideSelected() }
         val restore = controlButton("RESTORE CONTROLS") { showRestoreDialog(visible, preview) }
         val reset = controlButton("RESET POSITIONS") { preview.resetPositions() }
+        root.addView(rename, LinearLayout.LayoutParams(-1, dp(46)))
         actionRow.addView(hide, weighted())
         actionRow.addView(restore, weighted())
         actionRow.addView(reset, weighted())
@@ -216,6 +219,37 @@ internal class TouchHudLayoutEditor(private val activity: Activity) {
                 preview.selectFirstVisible()
                 preview.invalidate()
             }
+            .show()
+    }
+
+    private fun renameSelected(
+        preview: TouchHudLayoutPreview,
+        labels: MutableMap<String, String>,
+        sizes: Map<String, Int>,
+        selectedLabel: TextView,
+    ) {
+        val id = preview.selectedButtonId ?: return
+        val button = TouchHudSettings.layoutButtons.firstOrNull { it.id == id } ?: return
+        val input = android.widget.EditText(activity).apply {
+            setSingleLine(true)
+            filters = arrayOf(android.text.InputFilter.LengthFilter(8))
+            setText(labels[id] ?: button.label)
+            setSelection(text.length)
+            contentDescription = "Button label"
+        }
+        AlertDialog.Builder(activity)
+            .setTitle("Rename ${button.label}")
+            .setMessage("Use up to 8 characters. Clear the text to restore the default label.")
+            .setView(input)
+            .setPositiveButton("Apply") { _, _ ->
+                val value = input.text.toString()
+                if (value.isBlank()) labels.remove(id)
+                else TouchHudSettings.sanitizeButtonLabel(value)?.let { labels[id] = it }
+                    ?: run { labels.remove(id) }
+                selectedLabel.text = "${labels[id] ?: button.label}   /   ${sizes[id] ?: 100}%"
+                preview.invalidate()
+            }
+            .setNegativeButton("Cancel", null)
             .show()
     }
 
@@ -267,6 +301,7 @@ private class TouchHudLayoutPreview(
     private val positions: MutableMap<String, Pair<Float, Float>>,
     private val sizes: MutableMap<String, Int>,
     private val buttonOpacities: MutableMap<String, Int>,
+    private val buttonLabels: MutableMap<String, String>,
     private val controlSets: Map<String, Int>,
     private val layout: Int,
     private val dock: Int,
@@ -325,7 +360,8 @@ private class TouchHudLayoutPreview(
         items.forEach { button ->
             val itemScale = globalScale / 100f * (sizes[button.id] ?: 100) / 100f
             textPaint.textSize = dp(12).toFloat() * itemScale
-            val rectWidth = max(dp(58).toFloat() * itemScale, textPaint.measureText(button.label) + dp(18) * itemScale)
+            val label = buttonLabels[button.id] ?: button.label
+            val rectWidth = max(dp(58).toFloat() * itemScale, textPaint.measureText(label) + dp(18) * itemScale)
                 .coerceAtMost(maxButtonWidth)
             val rectHeight = dp(42).toFloat() * itemScale
             val stored = positions[button.id]
@@ -353,7 +389,7 @@ private class TouchHudLayoutPreview(
             }
             canvas.drawRoundRect(bounds, dp(7).toFloat(), dp(7).toFloat(), outlinePaint)
             val baseline = bounds.centerY() - (textPaint.ascent() + textPaint.descent()) / 2f
-            canvas.drawText(button.label, bounds.centerX(), baseline, textPaint)
+            canvas.drawText(label, bounds.centerX(), baseline, textPaint)
         }
         if (items.isEmpty()) {
             textPaint.textSize = dp(17).toFloat()

@@ -20,6 +20,9 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
     private val baseButtonSize = (46 * density).toInt()
     private val preferences = activity.getSharedPreferences(TouchHudSettings.PREFS, 0)
     private val positions = loadPositions()
+    private val buttonLabels = TouchHudSettings.parseButtonLabels(
+        preferences.getString(TouchHudSettings.HUD_BUTTON_LABELS, null),
+    ).toMutableMap()
     private val overlay = FrameLayout(activity).apply {
         clipChildren = false
         clipToPadding = false
@@ -28,6 +31,7 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
         setBackgroundColor(Color.TRANSPARENT)
     }
     private val buttons = LinkedHashMap<String, TextView>()
+    private val defaultLabels = HashMap<String, String>()
     private val heldKeyDownTimes = HashMap<Int, Long>()
     private val heldKeys = TouchHudKeyLatch { keyCode, pressed ->
         val now = SystemClock.uptimeMillis()
@@ -96,7 +100,7 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
 
     private fun addButton(id: String, label: String, description: String, click: () -> Unit): TextView {
         val button = TextView(activity).apply {
-            text = label
+            text = settingsId(id)?.let(buttonLabels::get) ?: label
             contentDescription = description
             gravity = Gravity.CENTER
             textSize = if (id == "hud" || id == "edit") 12f else 13f
@@ -116,6 +120,7 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
             setOnTouchListener { view, event -> dragButton(id, view, event) }
         }
         buttons[id] = button
+        defaultLabels[id] = label
         val size = buttonPixels(id)
         overlay.addView(button, FrameLayout.LayoutParams(size, size))
         return button
@@ -150,7 +155,11 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
         val buttonOpacities = TouchHudSettings.parseButtonOpacities(
             preferences.getString(TouchHudSettings.HUD_BUTTON_OPACITIES, null),
         )
+        val savedLabels = TouchHudSettings.parseButtonLabels(
+            preferences.getString(TouchHudSettings.HUD_BUTTON_LABELS, null),
+        )
         buttons.forEach { (id, button) ->
+            button.text = settingsId(id)?.let(savedLabels::get) ?: defaultLabels[id].orEmpty()
             button.visibility = when {
                 id == "hud" -> View.VISIBLE
                 id == "edit" -> View.VISIBLE
@@ -173,10 +182,10 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
             }
         }
         buttons["edit"]?.apply {
-            text = if (editing) "DONE" else "EDIT"
+            text = if (editing) "DONE" else buttonLabels[TouchHudSettings.HUD_EDIT] ?: "EDIT"
             contentDescription = if (editing) "Finish moving touch controls" else "Move controls; hold to open layout editor"
         }
-        buttons["ROUTE"]?.text = if (routeModeHeld) "ROUTE ON" else "ROUTE"
+        buttons["ROUTE"]?.text = routeButtonLabel(routeModeHeld)
         positionButtons()
     }
 
@@ -195,6 +204,7 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
         val buttonOpacities = TouchHudSettings.parseButtonOpacities(
             preferences.getString(TouchHudSettings.HUD_BUTTON_OPACITIES, null),
         ).toMutableMap()
+        val labels = buttonLabels.toMutableMap()
         val controlSets = TouchHudSettings.parseControlSets(
             preferences.getString(TouchHudSettings.HUD_CONTROL_SETS, null),
         )
@@ -204,13 +214,14 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
         val scale = TouchHudSettings.clampScale(preferences.getInt(TouchHudSettings.HUD_SCALE, 100))
         val opacity = TouchHudSettings.clampOpacity(preferences.getInt(TouchHudSettings.HUD_OPACITY, 88))
         TouchHudLayoutEditor(activity).show(
-            visible, positions, sizes, controlSets, layout, dock, scale, opacity, buttonOpacities,
+            visible, positions, sizes, controlSets, layout, dock, scale, opacity, buttonOpacities, labels,
         ) {
             preferences.edit()
                 .putString(TouchHudSettings.HUD_VISIBLE, TouchHudSettings.encodeVisible(visible))
                 .putString(TouchHudSettings.HUD_POSITIONS, TouchHudSettings.encodePositions(positions))
                 .putString(TouchHudSettings.HUD_SIZES, TouchHudSettings.encodeSizes(sizes))
                 .putString(TouchHudSettings.HUD_BUTTON_OPACITIES, TouchHudSettings.encodeButtonOpacities(buttonOpacities))
+                .putString(TouchHudSettings.HUD_BUTTON_LABELS, TouchHudSettings.encodeButtonLabels(labels))
                 .putInt(TouchHudSettings.HUD_SCALE, scale)
                 .putInt(TouchHudSettings.HUD_OPACITY, opacity)
                 .putInt(TouchHudSettings.HUD_LAYOUT, layout)
@@ -223,6 +234,10 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
             this.positions.clear()
             this.positions.putAll(TouchHudLayout.fromSettingsPositions(
                 TouchHudSettings.parsePositions(preferences.getString(TouchHudSettings.HUD_POSITIONS, null)),
+            ))
+            buttonLabels.clear()
+            buttonLabels.putAll(TouchHudSettings.parseButtonLabels(
+                preferences.getString(TouchHudSettings.HUD_BUTTON_LABELS, null),
             ))
             controlsVisible = true
             editing = false
@@ -378,7 +393,7 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
             "ROUTE" -> {
                 val keyCode = preferences.getInt("key_${action.id}", action.defaultKeyCode)
                 routeModeHeld = heldKeys.toggle(action.id, keyCode)
-                buttons[action.id]?.text = if (routeModeHeld) "ROUTE ON" else "ROUTE"
+                buttons[action.id]?.text = routeButtonLabel(routeModeHeld)
             }
             else -> {
                 val keyCode = preferences.getInt("key_${action.id}", action.defaultKeyCode)
@@ -395,6 +410,11 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
 
     private fun sendGroupRecall(group: Int) {
         sendKeyStroke(if (group == 10) KeyEvent.KEYCODE_0 else KeyEvent.KEYCODE_1 + group - 1)
+    }
+
+    private fun routeButtonLabel(held: Boolean): String {
+        val label = buttonLabels["ROUTE"] ?: defaultLabels["ROUTE"] ?: "ROUTE"
+        return if (held) "$label ON" else label
     }
 
     private fun sendGroupAssign(group: Int) {
