@@ -6,11 +6,11 @@ Updated 2026-11-28. The authoritative specification is [IRON_HARBOR_MASTER_PLAN.
 
 - Repository: `shietgrupe-cpu13/IronHarborMobile`; branch: `android-new`; local `HEAD` and `vera20k-fork/android-new`: `8e02d79b80eedca143c1c900bd5a7eb45fb83675`.
 - Preserve backup and `android-development` refs. The only untracked path is `out/`; do not inspect, stage, delete, or alter it.
-- Actions [46050368117](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46050368117) succeeded: Kotlin/JVM tests, focused Rust regressions, optimized ARM64 `fast` library, Gradle debug APK, persistent signing, identity/signature, ZIP/ELF alignment and artifact upload all passed. No device test occurred.
-- Latest debug APK artifact: [download from Actions](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46050368117/artifacts/15225361525). Name `IronHarborMobile-android-new-arm64-8e02d79b80eedca143c1c900bd5a7eb45fb83675`; 54,083,163 bytes; artifact digest `aecb19d0f1b9c09f91973f5bd2d9ea6ec452d32a02545acd03fa5827b0bb8a0e`; expires 2026-12-11. Package/signature/alignment checks passed.
+- Actions [46053869832](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46053869832) succeeded: Kotlin/JVM tests, focused Rust regressions, optimized ARM64 `fast` library, Gradle debug APK, persistent signing, identity/signature, ZIP/ELF alignment and artifact upload all passed. No device test occurred.
+- Latest debug APK artifact: [download from Actions](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46053869832/artifacts/15226298591). Name `IronHarborMobile-android-new-arm64-57c066a9b119629bcdfcba71ff3c88eb7aa14829`; 54,084,031 bytes; artifact digest `d8c6b01a1aacb573eea7aae617804edf8e27fbd915afabdd6e09da73a089a896`; expires 2026-12-11. Package/signature/alignment checks passed.
 - Upstream `origin/main` was fetched at `068e965efcf27bfccc59fab3663fe7bded3788be`; upstream `ec197f8a9` was documentation/contract only. Run 46046233771 did not merge newer upstream changes.
 - Commit `8e02d79b8` adds individual HUD button opacity through the shared layout editor and advances HUD export/import to schema v4 while retaining v1-v3 decoding. Its hosted checks passed; actual editor usability, import/update persistence and touch behavior still need device verification.
-- Commit `57c066a9b` adds renaming of existing controls and v5 backup support, retaining v1-v4 decoding. Run [46053869832](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46053869832) is pending. Artifact `15225361525` remains the latest verified APK until this run passes.
+- Commit `57c066a9b` adds renaming of existing controls and v5 backup support, retaining v1-v4 decoding. CI passed; device verification is pending.
 
 ## Current implementation status
 

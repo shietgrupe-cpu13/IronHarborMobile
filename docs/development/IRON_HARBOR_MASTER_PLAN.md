@@ -8,9 +8,8 @@ Deliver the original Iron Harbor mobile frontend on the latest compatible YuriPl
 
 ### Current checkpoint — 2026-11-28
 
-- Latest fully validated source `8e02d79b80eedca143c1c900bd5a7eb45fb83675` passed Kotlin/JVM tests, focused Rust regressions, ARM64 optimized `fast` compilation, signed debug APK assembly, identity/signature and ZIP/ELF alignment checks in Actions run [46050368117](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46050368117). This is build-only evidence; no device/gameplay test occurred.
-- Artifact [15225361525](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46050368117/artifacts/15225361525), `IronHarborMobile-android-new-arm64-8e02d79b80eedca143c1c900bd5a7eb45fb83675`, is 54,083,163 bytes (Actions artifact digest `aecb19d0f1b9c09f91973f5bd2d9ea6ec452d32a02545acd03fa5827b0bb8a0e`), available through 2026-12-11. Package/signature/alignment verification and artifact upload passed.
-- HUD label follow-up commit `57c066a9b119629bcdfcba71ff3c88eb7aa14829` is pushed; run [46053869832](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46053869832) is in progress. It adds rename for existing HUD actions and backup schema v5, while accepting versions 1–4. No artifact or device validation exists for this commit yet.
+- Latest validated source `57c066a9b119629bcdfcba71ff3c88eb7aa14829` passed Kotlin/JVM, focused Rust, optimized ARM64, APK assembly, persistent signing, package/signature/alignment verification and artifact upload in Actions run [46053869832](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46053869832). This is build-only evidence; no device/gameplay test occurred.
+- Artifact [15226298591](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46053869832/artifacts/15226298591), `IronHarborMobile-android-new-arm64-57c066a9b119629bcdfcba71ff3c88eb7aa14829`, is 54,084,031 bytes (Actions artifact digest `d8c6b01a1aacb573eea7aae617804edf8e27fbd915afabdd6e09da73a089a896`), available through 2026-12-11. No device/gameplay test occurred.
 
 ## 2. Repository guardrails
 
