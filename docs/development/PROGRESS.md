@@ -5,7 +5,7 @@ Updated 2026-11-27. Current authoritative plan: [IRON_HARBOR_MASTER_PLAN.md](IRO
 ## Repository state
 
 - Branch: `android-new`, tracking `vera20k-fork/android-new`.
-- Current HEAD: `02a593282da7dadf1033a5dda1e46766ae609ae7` (`Align mod path regression with resolver contract`).
+- Current HEAD: `64cd10c9b` (`Record Android storage validation checkpoint`); validated source tree: `02a593282da7dadf1033a5dda1e46766ae609ae7`.
 - Upstream base in the successful validation run: `d1e28004aa17dc445cbfee450cfe6fa55c5fe949`.
 - Legacy source reference: `android-development` at `1293fb441727e2522f6a284d88faf4f108a1ee3e`; its backup refs remain preserved. Do not merge the branch wholesale.
 - `out/` is untracked user/project data and has not been read, changed or deleted.

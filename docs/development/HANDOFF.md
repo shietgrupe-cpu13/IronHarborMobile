@@ -5,7 +5,7 @@ Updated 2026-11-27. Read [IRON_HARBOR_MASTER_PLAN.md](IRON_HARBOR_MASTER_PLAN.md
 ## Current checkout
 
 - `E:\VERA20K-ANDROID`, branch `android-new`; fork remote `vera20k-fork` is `shietgrupe-cpu13/IronHarborMobile`, upstream remote `origin` is `YuriPlanet/vera20k`.
-- HEAD `02a593282da7dadf1033a5dda1e46766ae609ae7`; pushed to the fork. The untracked `out/` tree is user data; leave it untouched.
+- HEAD `64cd10c9b` (docs-only follow-up); the validated source SHA is `02a593282da7dadf1033a5dda1e46766ae609ae7`. Both are pushed. The untracked `out/` tree is user data; leave it untouched.
 - No local Rust/Cargo/Gradle/APK compilation. Commit and push focused changes, validate with GitHub Actions, and inspect its logs/artifacts.
 
 ## Architecture decisions
