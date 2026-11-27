@@ -213,12 +213,8 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
             0,
             KeyEvent.FLAG_SOFT_KEYBOARD or KeyEvent.FLAG_KEEP_TOUCH_MODE,
         )
-        try {
-            if (action == KeyEvent.ACTION_DOWN) activity.forwardHudKeyDown(keyCode, event)
-            else activity.forwardHudKeyUp(keyCode, event)
-        } finally {
-            event.recycle()
-        }
+        if (action == KeyEvent.ACTION_DOWN) activity.forwardHudKeyDown(keyCode, event)
+        else activity.forwardHudKeyUp(keyCode, event)
     }
 
     private data class DragOrigin(val rawX: Float, val rawY: Float, val viewX: Float, val viewY: Float)

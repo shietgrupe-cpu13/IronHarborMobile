@@ -74,12 +74,54 @@ jobs:
       - name: Configure Gradle cache
         if: steps.upstream.outputs.validate == 'true'
         uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          # setup-gradle defaults non-default branches to read-only. android-new
+          # is a long-lived build branch with its own GitHub cache scope.
+          cache-read-only: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/android-new' }}
 
       - name: Set up Android SDK
         if: steps.upstream.outputs.validate == 'true'
         uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
         with:
           packages: "platform-tools platforms;android-36 build-tools;36.1.0"
+
+      - name: Compile launcher and run JVM tests
+        if: steps.upstream.outputs.validate == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x android/gradlew
+          cat > "$RUNNER_TEMP/gradle-with-network-retry.sh" <<'SCRIPT'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            log="$RUNNER_TEMP/gradle-attempt-$attempt.log"
+            set +e
+            ./android/gradlew "$@" --no-daemon --max-workers=2 2>&1 | tee "$log"
+            status=${PIPESTATUS[0]}
+            set -e
+            if [[ "$status" -eq 0 ]]; then
+              exit 0
+            fi
+            # Retry recognized repository/transport failures only. Kotlin,
+            # test, and other deterministic failures stop without another run.
+            if ! grep -Eiq \
+              'status code (429|5[0-9][0-9]) from server|HTTP/(1\.[01]|2) (429|5[0-9][0-9])|UnknownHostException|Temporary failure in name resolution|Connection reset|Connection refused|ConnectException|SocketTimeoutException|Read timed out|No route to host' \
+              "$log"; then
+              echo "Gradle failed without a recognized transient dependency/network error; not retrying."
+              exit "$status"
+            fi
+            if [[ "$attempt" -eq 3 ]]; then
+              exit "$status"
+            fi
+            delay=$((attempt * 30))
+            echo "Transient Gradle dependency/network failure; retrying in ${delay}s."
+            sleep "$delay"
+          done
+          SCRIPT
+          chmod +x "$RUNNER_TEMP/gradle-with-network-retry.sh"
+          bash "$RUNNER_TEMP/gradle-with-network-retry.sh" -p android \
+            :app:compileDebugKotlin :app:testDebugUnitTest
 
       - name: Install pinned Android NDK
         if: steps.upstream.outputs.validate == 'true'
@@ -117,7 +159,7 @@ jobs:
           cargo ndk -t arm64-v8a --platform 26 -o android/app/src/main/jniLibs build \
             --profile fast -p vera20k-android --no-default-features
 
-      - name: Run launcher JVM tests and assemble debug APK
+      - name: Assemble debug APK
         if: steps.upstream.outputs.validate == 'true'
         shell: bash
         run: |
@@ -127,22 +169,7 @@ jobs:
             -storepass android -alias androiddebugkey -keypass android \
             -keyalg RSA -keysize 2048 -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
-          chmod +x android/gradlew
-          # Maven Central can temporarily throttle cold GitHub-hosted dependency resolution.
-          # Retry Gradle so successful downloads from earlier attempts remain cached.
-          for attempt in 1 2 3; do
-            if ./android/gradlew -p android :app:testDebugUnitTest :app:assembleDebug --no-daemon --max-workers=2; then
-              exit 0
-            else
-              status=$?
-            fi
-            if [[ "$attempt" -eq 3 ]]; then
-              exit "$status"
-            fi
-            delay=$((attempt * 30))
-            echo "Gradle attempt $attempt failed (exit $status); retrying in ${delay}s."
-            sleep "$delay"
-          done
+          bash "$RUNNER_TEMP/gradle-with-network-retry.sh" -p android :app:assembleDebug
 
       - name: Push verified upstream merge
         if: steps.upstream.outputs.changed == 'true'
