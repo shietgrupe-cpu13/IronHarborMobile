@@ -5,11 +5,11 @@ Updated 2026-11-27. Current authoritative plan: [IRON_HARBOR_MASTER_PLAN.md](IRO
 ## Repository state
 
 - Branch: `android-new`, tracking `vera20k-fork/android-new`.
-- Current HEAD: `913e69cbfdd69d72f0abe9c3a8463ee188b95c4c` (`ci(android): fix focused config test filter`).
-- Fetched `origin/main`: `d1e28004aa17dc445cbfee450cfe6fa55c5fe949`; current branch is 11 commits ahead and 0 behind at this fetch.
+- Current HEAD: `02a593282da7dadf1033a5dda1e46766ae609ae7` (`Align mod path regression with resolver contract`).
+- Upstream base in the successful validation run: `d1e28004aa17dc445cbfee450cfe6fa55c5fe949`.
 - Legacy source reference: `android-development` at `1293fb441727e2522f6a284d88faf4f108a1ee3e`; its backup refs remain preserved. Do not merge the branch wholesale.
 - `out/` is untracked user/project data and has not been read, changed or deleted.
-- Current launcher/storage/engine integration is **uncommitted** across `android/`, `src/`, `.github/workflows/`, and `docs/`. Preserve it; do not call it CI-verified yet. The untracked `out/` directory remains untouched.
+- Launcher/storage/engine integration is committed and pushed through `02a5932`; `out/` remains untracked and untouched.
 
 ## Completed and verified previously
 
@@ -19,7 +19,7 @@ Updated 2026-11-27. Current authoritative plan: [IRON_HARBOR_MASTER_PLAN.md](IRO
 - GitHub Actions run [45948571106](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45948571106) passed Kotlin/JVM validation, ARM64 Rust `fast` build, debug APK packaging and artifact upload. It produced a 53,330,817-byte artifact with 14-day retention. This is an older artifact and does not contain the current local storage changes.
 - Master plan added remotely at `ea2bc99959c47eda1bbc297851e8d1c2b2a33c9e`; local branch was fast-forwarded without losing source changes.
 
-## Current implementation in progress (not yet built or tested)
+## Current implementation and validation
 
 - `AndroidSharedStoragePath.kt` restores `sharedDataRoot`, reuses established roots, and resolves supported primary-volume SAF IDs to paths. Direct game selection remains read-in-place.
 - Game validation is profile-aware: RA2 requires `ra2.mix`; YR requires `ra2.mix` and `ra2md.mix`. Explicit base-RA2 detection is used when importing a new installation, and Rust updates the engine profile through its config writer.
@@ -27,11 +27,11 @@ Updated 2026-11-27. Current authoritative plan: [IRON_HARBOR_MASTER_PLAN.md](IRO
 - Legacy JNI/storage integration was inspected on both Kotlin and Rust sides. Launcher JNI calls have matching Rust exports; the folder-picker/import JNI methods are registered against `VeraActivity` and its signatures match. The current game HUD routes keys through GameActivity's normal key callbacks rather than separate JNI.
 - The old Ares support path was traced in `android-development`. Current Android startup, launcher preflight and asset-manager reconstruction now pass `Mods/AresSupport`; only `ares.mix` is considered, only for a selected mod, beneath that mod's own copy. Vanilla does not see the shared archive. A focused test covers vanilla isolation and mod precedence.
 - The existing NativeActivity SAF copy importer remains in place. The new launcher direct-picker flow still cannot import a cloud/provider tree as a fallback; it reports that a local folder is required. Do not describe launcher SAF fallback as working until wired to the importer.
-- The regression workflow now targets the actual config test name and includes focused nested-mod and Ares tests, after Kotlin/JVM validation and before NDK build. No local compiler/test was run; the Actions workflow has not yet validated this candidate.
+- Actions run [45977380464](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45977380464) passed Kotlin compilation/JVM tests, focused Rust config/mod/Ares regressions, ARM64 native compilation, debug APK assembly, and artifact upload. Artifact `IronHarborMobile-android-new-arm64-02a593282da7dadf1033a5dda1e46766ae609ae7` is 53,940,651 bytes, SHA-256 `d94b5feda35b569b09844fc6aa6db57df1075cecbd6c32ffd5e324958bf1ae1e`, retained until 2026-12-11. No local build or device test was performed.
 
 ## Known gaps and gates
 
-- The restored launcher UI and storage flows are still uncommitted and have not passed Kotlin/JVM or APK CI. Physical-device behavior is not verified.
+- Physical-device behavior is not verified; the successful CI APK is a debug artifact only.
 - Launcher SAF copy fallback for cloud/non-path providers is not connected. The legacy GameActivity importer remains, but the main launcher cannot yet route a new user into it without starting gameplay.
 - A stale `CameraZoomSettingsService.nativeApplyCameraZoomLimits` declaration has no Rust export in the current branch, is not referenced by the launcher and is not registered in the manifest. It remains dormant; do not expose this as a working setting until its engine integration is migrated and validated.
 - Private app data migration is non-destructive and copies only missing entries, but its behavior needs JVM coverage; no old source is removed. Config and VERA.INI migration now skips copying whenever either canonical or root-level shared files already exist.

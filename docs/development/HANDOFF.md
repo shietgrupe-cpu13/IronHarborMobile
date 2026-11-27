@@ -5,8 +5,7 @@ Updated 2026-11-27. Read [IRON_HARBOR_MASTER_PLAN.md](IRON_HARBOR_MASTER_PLAN.md
 ## Current checkout
 
 - `E:\VERA20K-ANDROID`, branch `android-new`; fork remote `vera20k-fork` is `shietgrupe-cpu13/IronHarborMobile`, upstream remote `origin` is `YuriPlanet/vera20k`.
-- HEAD `913e69cbfdd69d72f0abe9c3a8463ee188b95c4c`. The latest upstream refs have not been fetched during this storage pass.
-- Uncommitted changes span the launcher, shared storage, JNI/config integration, Ares archive resolver, focused tests and Actions workflow. Preserve them. The untracked `out/` tree is user data; leave it untouched.
+- HEAD `02a593282da7dadf1033a5dda1e46766ae609ae7`; pushed to the fork. The untracked `out/` tree is user data; leave it untouched.
 - No local Rust/Cargo/Gradle/APK compilation. Commit and push focused changes, validate with GitHub Actions, and inspect its logs/artifacts.
 
 ## Architecture decisions
@@ -21,11 +20,11 @@ Updated 2026-11-27. Read [IRON_HARBOR_MASTER_PLAN.md](IRON_HARBOR_MASTER_PLAN.md
 
 ## Current WIP and next action
 
-The local source diff restores the legacy shared-root helper, profile-aware RA2/YR archive checks, canonical-plus-legacy config resolution, atomic config publication without overwriting the old root file, and non-destructive private-data migration. It also ports the shared Ares archive layer through runtime initialization, process asset reconstruction and launcher preflight: shared Ares support is mod-only and a mod-owned `ares.mix` wins. Tests were added/updated but have not run. The workflow regression filters were corrected and now include config, nested-mod and Ares behavior.
+The committed integration restores the legacy shared-root helper, profile-aware RA2/YR archive checks, canonical-plus-legacy config resolution, atomic config publication without overwriting a root-level legacy config, and non-destructive private-data migration. Shared Ares support is mod-only and a mod-owned `ares.mix` wins; vanilla excludes the shared archive. Actions run [45977380464](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45977380464) passed Kotlin/JVM tests, focused Rust config/mod/Ares tests, ARM64 compilation, APK assembly and artifact upload. Artifact details are in `PROGRESS.md`. No on-device validation has occurred.
 
 JNI inventory: all seven `LauncherActivity` external functions have corresponding Rust exports. `VeraActivity` picker/import callbacks are dynamically registered and its other importer/network functions have matching exports. The HUD uses GameActivity's standard key callbacks. `CameraZoomSettingsService.nativeApplyCameraZoomLimits` is the one orphan declaration found: no current Rust export, manifest registration or call site; keep it dormant and record it as unsupported pending an independent migration.
 
-Then run `git diff --check` and targeted static review only, commit and push the coherent source changes to `android-new`, monitor Actions and fix actual failures. No local compilation. Verify the uploaded artifact against its source SHA. The main launcher still lacks a provider-backed SAF copy fallback; the old `VeraActivity` importer remains but is not a launcher route. Continue with that gap and remaining Phase 3–5 items after CI.
+Next, connect the main launcher's explicit SAF copy fallback to the existing importer without changing the normal read-in-place path. The legacy `VeraActivity` importer exists but is not currently a launcher route. Continue Phase 3–5 afterward; use Actions only for compilation/tests.
 
 ## Known manual gate
 
