@@ -400,7 +400,38 @@ fn existing_map_file(path: PathBuf) -> Option<PathBuf> {
     if crate::util::file_system::exists(&path) {
         return Some(path);
     }
-    crate::util::case_insensitive_path::find(path.parent()?, path.file_name()?.to_str()?)
+    let parent = path.parent()?;
+    let file_name = path.file_name()?.to_str()?;
+    if crate::util::file_system::is_dir(parent)
+        && let Some(found) = crate::util::case_insensitive_path::find(parent, file_name)
+    {
+        return Some(found);
+    }
+
+    // Windows resolves every path component without regard to case. On the
+    // Android/Linux filesystems, a mod's catalog may spell `MapsMO/Standard`
+    // while the installed folders are `mapsmo/standard`; resolve each
+    // component from the nearest existing ancestor just as the retail install
+    // does, instead of only case-folding the basename.
+    let mut ancestor = parent;
+    while !crate::util::file_system::is_dir(ancestor) {
+        ancestor = ancestor.parent()?;
+    }
+    let relative = path.strip_prefix(ancestor).ok()?;
+    let mut resolved = ancestor.to_path_buf();
+    for component in relative.components() {
+        let std::path::Component::Normal(name) = component else {
+            return None;
+        };
+        let name = name.to_str()?;
+        let exact = resolved.join(name);
+        resolved = if crate::util::file_system::exists(&exact) {
+            exact
+        } else {
+            crate::util::case_insensitive_path::find(&resolved, name)?
+        };
+    }
+    crate::util::file_system::is_file(&resolved).then_some(resolved)
 }
 
 /// Where the random-map dialog's files live: `RandMap.Sed`, its `RandMap.img`

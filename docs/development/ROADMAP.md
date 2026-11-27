@@ -4,7 +4,7 @@ Updated 2026-11-27. Authoritative specification: [IRON_HARBOR_MASTER_PLAN.md](IR
 
 ## Immediate regression milestone — renderer and MO profile
 
-Current unpushed work addresses the confirmed long Play preflight by removing duplicate archive indexing from JNI validation, moves launcher scans and mod/profile configuration off the UI thread, recognizes Mental Omega from `mod.ini`, discovers its loose nested-map catalog generically, and corrects native-thread Activity UI calls and JNI/lifecycle ownership. Focused tests and workflow steps are in the worktree; no Actions run has validated them. CI ARM64 packaging and physical-device retest are required before claiming a fix. Prior renderer/MO selector changes also remain device-unverified.
+Commit `db2917dd5` removes duplicate archive indexing from JNI validation, moves launcher scans and mod/profile configuration off the UI thread, recognizes Mental Omega from `mod.ini`, discovers its loose nested-map catalog generically, and corrects native-thread Activity UI calls and JNI/lifecycle ownership. Kotlin/JVM checks passed, but run [46023643484](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46023643484) failed its production nested-map loader test before ARM64 packaging. A shared case-insensitive nested-path fix is in the worktree awaiting CI. Device retest is still required. Prior renderer/MO selector changes also remain device-unverified.
 
 ## Phase 2 — Build and distribution
 
