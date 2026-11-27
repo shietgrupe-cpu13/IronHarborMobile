@@ -4,16 +4,15 @@ Updated 2026-11-27. Current authoritative plan: [IRON_HARBOR_MASTER_PLAN.md](IRO
 
 ## Latest device regression and current change
 
-- Latest fork sync: `415fcbe8a` (`docs(android): reconcile legacy launcher and device regression master plan`), branch `android-new`; latest fetched upstream tip `396e19286` has not been merged.
-- The supplied Android 16 Xiaomi diagnostic identifies two separate events. First, pid 6505 received an explicit `SIGKILL` at `VeraActivity.applyAppIconOnUi(VeraActivity.kt:900)` during game startup. The cause is confirmed: startup icon selection flips launcher aliases and deliberately kills the process. Android branding is now fixed to Iron Harbor: the secondary alias and Android VERA-icon controls/callback were removed. This source change has not yet run in Actions or on-device.
+- Latest upstream tip `4fba96a54` is merged into `android-new` at `09405db21` and pushed. Validation run [45990321118](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45990321118) has passed Kotlin/JVM and is running focused Rust tests; native ARM64/APK validation is pending.
+- The supplied Android 16 Xiaomi diagnostic identifies two separate events. First, pid 6505 received an explicit `SIGKILL` at `VeraActivity.applyAppIconOnUi(VeraActivity.kt:900)` during game startup. The cause is confirmed: startup icon selection flips launcher aliases and deliberately kills the process. The secondary alias and Android VERA-icon controls/callback were removed in `4933e78d0`; the merged build is being validated, and device retest remains pending.
 - A later game process (pid 8754) has a distinct shutdown abort: AAudio streams close, then CheckJNI reports `Thread-5` calling `DeleteGlobalRef` with the main thread's `JNIEnv*`; Android also reports destroyed-mutex waits in HWUI's `CommonPool`. The supplied tombstone backtrace is only the HWUI worker, not the offending Thread-5 stack, so the exact owner is not established. Do not mark this crash fixed; trace the CPAL/JNI ownership and Android shutdown path before changing it.
 - The same diagnostic shows the launcher preflight succeeded in 66 ms and the engine loaded configured vanilla YR roots from `/storage/emulated/0/Documents/RA2Harbor/Config/config.toml`. This does not verify the listed mod/profile/map/renderer requirements.
 
 ## Repository state
 
 - Branch: `android-new`, tracking `vera20k-fork/android-new`.
-- Current HEAD: `ace04413e` (successful CI merge of upstream `cf0b6613e516940b55262b91970045f7fe398b3f` into Iron Harbor commit `67f6bc1da`).
-- Upstream base in the successful validation run: `d1e28004aa17dc445cbfee450cfe6fa55c5fe949`.
+- Current HEAD: `09405db21`, merging upstream `4fba96a54` with the Iron Harbor icon fix `4933e78d0`; latest Actions validation has not completed.
 - Legacy source reference: `android-development` at `1293fb441727e2522f6a284d88faf4f108a1ee3e`; its backup refs remain preserved. Do not merge the branch wholesale.
 - `out/` is untracked user/project data and has not been read, changed or deleted.
 - Launcher/storage/engine integration and package verification are committed and pushed. The workflow's tested upstream merge is now fast-forwarded locally; `out/` remains untracked and untouched.
@@ -42,8 +41,10 @@ Updated 2026-11-27. Current authoritative plan: [IRON_HARBOR_MASTER_PLAN.md](IRO
 - Launcher SAF copy fallback for cloud/non-path providers is not connected. The legacy GameActivity importer remains, but the main launcher cannot yet route a new user into it without starting gameplay.
 - A stale `CameraZoomSettingsService.nativeApplyCameraZoomLimits` declaration has no Rust export in the current branch, is not referenced by the launcher and is not registered in the manifest. It remains dormant; do not expose this as a working setting until its engine integration is migrated and validated.
 - Private app data migration is non-destructive and copies only missing entries, but its behavior needs JVM coverage; no old source is removed. Config and VERA.INI migration now skips copying whenever either canonical or root-level shared files already exist.
-- Current Android engine/docs do not support GLES; the legacy renderer selector is not safe to expose as working.
+- Engine source supports `GraphicsAPI=opengl` through wgpu's GL backend; Android feature inclusion and device behavior are not verified, so no Android launcher renderer selector is exposed yet.
 - Persistent release signing, full APK metadata/ABI/alignment checks, nightly release flow and the internal sync PR review remain open.
 - Physical gameplay validation is incomplete. User report says game archives failed with `EACCES` and no game installation configured; exact device/API/artifact and failing path were not captured.
 
-Next: connect the main launcher's explicit SAF copy fallback to the existing tested `VeraActivity` importer without changing normal read-in-place selection; add launcher route tests; then continue Phase 3–5. Preserve the upstream commit now merged by CI. No local Rust, Cargo, Gradle, or APK build/test.
+Current uncommitted milestone: removed the launcher Campaigns page/Home shortcut and dead campaign-selection intent; Android map paths now target `Configs/Maps`, while non-Android keeps `Maps`. Added non-destructive migration of legacy root Maps into one canonical folder, Rust path coverage, Kotlin migration coverage, and a focused Actions Rust test. `git diff --check` passes; no local compilation or tests were run. These changes still need review, commit/push, and hosted validation.
+
+Next: finish static review of map migration and launcher cleanup, commit/push this batch, inspect Actions, then resume mod/profile correctness, storage fallback, renderer support and the unresolved shutdown crash. Preserve upstream sync. No local Rust, Cargo, Gradle, or APK build/test.

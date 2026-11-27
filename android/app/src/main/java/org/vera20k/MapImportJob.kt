@@ -6,7 +6,7 @@ import java.nio.file.Files
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicReference
 
-/** Stages map imports before publishing them in the engine's scanned Maps folder. */
+/** Stages map imports before publishing them in the engine's scanned Configs/Maps folder. */
 internal class MapImportJob private constructor() : AutoCloseable {
     @Volatile private var cancelled = false
 
@@ -28,7 +28,7 @@ internal class MapImportJob private constructor() : AutoCloseable {
     fun run(directory: File, sources: List<Source>, onImported: (Int) -> Unit): List<File> {
         if (sources.isEmpty()) return emptyList()
         if (!directory.isDirectory && !directory.mkdirs()) {
-            throw IOException("Cannot create the engine's Maps folder")
+            throw IOException("Cannot create the engine's Configs/Maps folder")
         }
         val root = directory.canonicalFile
         val imported = mutableListOf<File>()

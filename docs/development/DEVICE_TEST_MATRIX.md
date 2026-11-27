@@ -6,7 +6,7 @@ Updated 2026-11-27. User-reported results are identified separately from CI. Dev
 
 | Device / API | ABI | Status | Observed checks |
 |---|---|---|---|
-| Xiaomi 2412DPC0AG / Android 16 (API 36) | ARM64 | User diagnostic, build `0.4.3` code `207`; artifact SHA not present | `org.ironharbor.mobile.debug`; startup preflight succeeded (66 ms), selected game folder and shared config were visible, and vanilla YR INI roots loaded. First game process was explicitly killed by `VeraActivity.applyAppIconOnUi` while switching aliases. A later game process aborted during shutdown: AAudio streams closed, CheckJNI reported wrong-thread `JNIEnv*` in `DeleteGlobalRef`; captured tombstone frame was HWUI CommonPool waiting on a destroyed mutex. The icon source fix is pending Actions/device retest. Shutdown owner remains unresolved. |
+| Xiaomi 2412DPC0AG / Android 16 (API 36) | ARM64 | User diagnostic, build `0.4.3` code `207`; artifact SHA not present | `org.ironharbor.mobile.debug`; startup preflight succeeded (66 ms), selected game folder and shared config were visible, and vanilla YR INI roots loaded. First game process was explicitly killed by `VeraActivity.applyAppIconOnUi` while switching aliases. Source removal is included in `4933e78d0`; hosted validation [45990321118](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45990321118) is in progress. Later shutdown abort remains unresolved: CheckJNI wrong-thread `JNIEnv*` during `DeleteGlobalRef`, with a captured HWUI destroyed-mutex tombstone. No fixed APK has been device-tested. |
 
 | Device / API | ABI | Status | Observed checks |
 |---|---|---|---|

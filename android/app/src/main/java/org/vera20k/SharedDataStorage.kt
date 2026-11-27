@@ -8,6 +8,7 @@ import android.provider.OpenableColumns
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.nio.file.Files
 import java.util.UUID
 
 /** User-owned Documents/RA2Harbor tree used directly by the Rust engine. */
@@ -56,7 +57,7 @@ internal class SharedDataStorage(private val context: Context) {
         }
         if (!root.exists() && !root.mkdirs()) return null
         if (!root.isDirectory) return null
-        listOf("Saves", "Maps", "Mods", "Logs", "Config", "Mods/AresSupport").forEach { name ->
+        listOf("Saves", "Configs/Maps", "Mods", "Logs", "Config", "Mods/AresSupport").forEach { name ->
             val child = File(root, name)
             if (!child.isDirectory && !child.mkdirs() && !child.isDirectory) return null
         }
@@ -141,11 +142,13 @@ internal class SharedDataStorage(private val context: Context) {
 
     fun ensureLayout() {
         if (treeUri() == null) {
-            if (directRootPath() == null) throw IOException("Grant All files access to prepare Documents/$ROOT_NAME")
+            val root = directRootPath() ?: throw IOException("Grant All files access to prepare Documents/$ROOT_NAME")
+            migrateLegacyMaps(root)
             return
         }
         val root = rootUri()
-        listOf("Mods", "Maps", "Saves", "Logs", "Config", "Mods/AresSupport").forEach { ensureArea(it) }
+        listOf("Mods", "Configs/Maps", "Saves", "Logs", "Config", "Mods/AresSupport").forEach { ensureArea(it) }
+        directRootPath()?.let(::migrateLegacyMaps)
     }
 
     fun setActiveGameFolder(name: String) {
@@ -581,6 +584,58 @@ internal class SharedDataStorage(private val context: Context) {
         private const val GAME_SOURCE_NAME = "game_source_name"
         private const val ROOT_NAME = "RA2Harbor"
         private val LEGACY_ROOT_NAMES = listOf("IronHarborRA2YR", "RA2IRONHARBOR")
+
+        /** Move the former top-level Maps tree under Configs without replacing user files. */
+        @JvmStatic
+        @Throws(IOException::class)
+        internal fun migrateLegacyMaps(root: File) {
+            val canonicalRoot = root.canonicalFile
+            val legacy = File(canonicalRoot, "Maps")
+            if (Files.isSymbolicLink(legacy.toPath()) || !legacy.isDirectory) return
+            val configs = File(canonicalRoot, "Configs")
+            val target = File(configs, "Maps")
+            if (Files.isSymbolicLink(configs.toPath()) || Files.isSymbolicLink(target.toPath())) {
+                throw IOException("Cannot migrate maps through a symbolic link")
+            }
+            if (!configs.isDirectory && !configs.mkdirs()) {
+                throw IOException("Cannot create ${configs.absolutePath} for existing maps")
+            }
+            if (!target.exists()) {
+                Files.move(legacy.toPath(), target.toPath())
+                return
+            }
+            if (!target.isDirectory) throw IOException("${target.absolutePath} exists and is not a folder")
+            mergeLegacyDirectory(legacy, target)
+        }
+
+        @Throws(IOException::class)
+        private fun mergeLegacyDirectory(source: File, target: File) {
+            val children = source.listFiles() ?: throw IOException("Cannot list ${source.absolutePath}")
+            for (entry in children) {
+                if (Files.isSymbolicLink(entry.toPath())) continue
+                val existing = target.listFiles()?.firstOrNull { it.name.equals(entry.name, ignoreCase = true) }
+                if (entry.isDirectory && existing?.isDirectory == true) {
+                    mergeLegacyDirectory(entry, existing)
+                    continue
+                }
+                val destination = existing?.let { uniqueLegacyName(target, entry.name) } ?: File(target, entry.name)
+                Files.move(entry.toPath(), destination.toPath())
+            }
+            if (source.listFiles()?.isEmpty() == true) source.delete()
+        }
+
+        private fun uniqueLegacyName(directory: File, original: String): File {
+            val dot = original.lastIndexOf('.')
+            val stem = if (dot > 0) original.substring(0, dot) else original
+            val extension = if (dot > 0) original.substring(dot) else ""
+            var suffix = 2
+            while (true) {
+                val candidate = File(directory, "$stem (legacy $suffix)$extension")
+                val collision = directory.listFiles()?.any { it.name.equals(candidate.name, ignoreCase = true) } == true
+                if (!collision) return candidate
+                suffix++
+            }
+        }
 
         fun setTree(context: Context, tree: Uri) {
             val preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)

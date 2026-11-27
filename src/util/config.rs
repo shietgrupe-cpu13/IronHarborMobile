@@ -99,7 +99,7 @@ impl PathsConfig {
     /// random-map dialog's files, so nothing is written into the retail
     /// installation (`map::source::keep_received_map`, `random_map_dir`).
     pub fn downloaded_maps_dir(&self) -> PathBuf {
-        self.settings_dir.join("Maps")
+        downloaded_maps_dir(&self.settings_dir, cfg!(target_os = "android"))
     }
 
     /// VERA's folder of mods, one subfolder each (docs/modding.md).
@@ -153,6 +153,14 @@ impl PathsConfig {
             "VERA settings must be outside the game folder; set [paths] settings_dir"
         );
         Ok(())
+    }
+}
+
+fn downloaded_maps_dir(settings_dir: &Path, android: bool) -> PathBuf {
+    if android {
+        settings_dir.join("Configs").join("Maps")
+    } else {
+        settings_dir.join("Maps")
     }
 }
 
@@ -907,6 +915,16 @@ fn retail_asset_root_from_executable(executable: &Path) -> Result<PathBuf> {
 mod tests {
     use super::*;
     use crate::util::ini_roots::IniProfile;
+
+    #[test]
+    fn android_maps_use_configs_subdirectory_without_changing_other_platforms() {
+        let settings = Path::new("Documents/RA2Harbor");
+        assert_eq!(
+            downloaded_maps_dir(settings, true),
+            settings.join("Configs/Maps")
+        );
+        assert_eq!(downloaded_maps_dir(settings, false), settings.join("Maps"));
+    }
 
     #[test]
     fn ini_roots_config_defaults_and_profiles_are_explicit() {

@@ -489,7 +489,7 @@ class VeraActivity : GameActivity() {
     private fun ensureSharedProfileFolders(root: File) {
         require(Environment.isExternalStorageManager()) { "All files access was revoked" }
         require(root.mkdirs() || root.isDirectory) { "Cannot create ${root.absolutePath}" }
-        listOf("Mods", "Maps", "Saves", "Logs", "Config").forEach { name ->
+        listOf("Mods", "Configs/Maps", "Saves", "Logs", "Config").forEach { name ->
             val directory = File(root, name)
             require(directory.mkdirs() || directory.isDirectory) { "Cannot create ${directory.absolutePath}" }
         }
