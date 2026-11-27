@@ -71,7 +71,7 @@ internal class AssetImportJob private constructor() : AutoCloseable {
             }
             return staging
         } finally {
-            if (!published) deleteTree(staging.toPath())
+            if (!published) deleteStagingTree(staging.toPath())
         }
     }
 
@@ -184,7 +184,7 @@ internal class AssetImportJob private constructor() : AutoCloseable {
         }
 
         @Throws(IOException::class)
-        private fun deleteTree(root: Path) {
+        internal fun deleteStagingTree(root: Path) {
             Files.walkFileTree(
                 root,
                 object : SimpleFileVisitor<Path>() {

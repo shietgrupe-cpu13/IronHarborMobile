@@ -32,6 +32,7 @@ val veraVersionName: String = rootProject.file("../Cargo.toml")
     .substringAfter('"')
     .substringBefore('"')
 val veraVersionCode = 207
+val veraBuildLabel = providers.gradleProperty("ironHarborBuildLabel").orElse("Android").get()
 val releaseStoreFile = System.getenv("ANDROID_RELEASE_STORE_FILE")
 val releaseStorePassword = System.getenv("ANDROID_RELEASE_STORE_PASSWORD")
 val releaseKeyAlias = System.getenv("ANDROID_RELEASE_KEY_ALIAS")
@@ -74,6 +75,7 @@ android {
         targetSdk = 36
         versionCode = veraVersionCode
         versionName = veraVersionName
+        resValue("string", "app_build_label", veraBuildLabel)
 
         // arm64 is the Play requirement and the only ABI worth a real device
         // build; x86_64 exists for the emulator. armeabi-v7a is deliberately
