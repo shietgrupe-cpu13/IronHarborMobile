@@ -5,11 +5,9 @@ Updated 2026-11-27. Current authoritative plan: [IRON_HARBOR_MASTER_PLAN.md](IRO
 ## Current renderer and Mental Omega regression work
 
 - Device feedback says removing an old `config.toml` fixed the game-directory selection. Config-source precedence is now recorded in `DEVICE_TEST_MATRIX.md`; the exact deleted path/content was unavailable, so migration fallback precedence remains unchanged to avoid silently redirecting user data.
-- The current uncommitted change restores a launcher renderer selector backed by JNI and the engine-owned VERA.INI writer: Automatic, Vulkan and OpenGL ES. wgpu 30.0.1's pinned default feature set includes Vulkan and GLES; Android startup now gets one alternate-backend attempt after failure. Manifest backend features are optional so installation is not filtered solely by one backend.
-- The current uncommitted change restores explicit `mo` profile parsing and launcher selection, MO INI roots and archive defaults, `mod.ini` per-resource overrides, and the existing Ares resource behavior for MO. A native asset-manager regression fixture asserts MO roots, `expandmo99.mix` contents and mod Ares mounting. No source change is CI- or device-verified yet.
-- Workflow validation now includes focused renderer/MO tests and the final upstream push step checks remote ancestry to avoid failing when the validated candidate is already included.
-- The first Actions attempt on `dd2662d99` passed launcher/JVM tests, then failed in Rust test compilation because that crate has no `tempfile` dev dependency. The new renderer test is being changed to use the standard-library temp-directory pattern already used elsewhere; no ARM64 build or APK was produced by that failed run (`46005997470`).
-- No APK containing these changes exists yet. Next: source review, commit/push to `android-new`, inspect the Actions run and APK artifact, then ask the user to test the three renderer settings and MO preflight/gameplay on device.
+- Commit `106c5184c` on `android-new` contains the launcher renderer selector (Automatic, Vulkan, OpenGL ES), JNI bridge and engine-owned `VERA.INI` persistence; explicit MO profile selection and MO resource/archive resolution; and Android backend fallback/manifest updates. Physical-device rendering and MO gameplay remain unverified.
+- Actions run [46007825583](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46007825583) passed launcher/JVM validation and the preceding focused Rust tests, then failed because the final MO asset test filter used `assets::asset_manager::install_inspection_tests::...`; the test is actually under `assets::asset_manager::tests::...`. Cargo therefore matched zero tests and stopped before ARM64 compilation/APK packaging.
+- The workflow filter has been corrected locally. After pushing, rerun Actions and inspect the focused test, ARM64 build, APK verification and artifact upload before reporting an APK.
 
 ## Latest device regression and current change
 
@@ -21,7 +19,7 @@ Updated 2026-11-27. Current authoritative plan: [IRON_HARBOR_MASTER_PLAN.md](IRO
 ## Repository state
 
 - Branch: `android-new`, tracking `vera20k-fork/android-new`.
-- Current HEAD: `6afcd6798`, pushed to `vera20k-fork/android-new`; run `45995480713` is in progress.
+- Current HEAD: `106c5184c`, pushed to `vera20k-fork/android-new`; run `46007825583` failed before ARM64 compilation because the final MO test filter matched zero tests. A corrected filter is staged locally.
 - Legacy source reference: `android-development` at `1293fb441727e2522f6a284d88faf4f108a1ee3e`; its backup refs remain preserved. Do not merge the branch wholesale.
 - `out/` is untracked user/project data and has not been read, changed or deleted.
 - Launcher/storage/engine integration and package verification are committed and pushed. The workflow's tested upstream merge is now fast-forwarded locally; `out/` remains untracked and untouched.

@@ -157,7 +157,7 @@ jobs:
           python -m tools.cargo_run -- test -p vera20k-core --lib util::mod_definition::tests::mo_profile_defaults_to_mo_resources_and_manifest_overrides_only_named_slots
           python -m tools.cargo_run -- test -p vera20k --lib app::persistence::options_profile::tests::launcher_renderer_write_is_narrow_persistent_and_rejects_desktop_only_apis
           python -m tools.cargo_run -- test -p vera20k --lib app::persistence::startup_backend::tests::android_renderer_fallback_tries_one_alternate_backend_without_a_cycle
-          python -m tools.cargo_run -- test -p vera20k-core --lib assets::asset_manager::install_inspection_tests::mo_profile_resolves_and_loads_mo_roots_expansion_archive_and_mod_ares
+          python -m tools.cargo_run -- test -p vera20k-core --lib assets::asset_manager::tests::mo_profile_resolves_and_loads_mo_roots_expansion_archive_and_mod_ares
 
       - name: Install pinned Android NDK
         if: steps.upstream.outputs.validate == 'true'
