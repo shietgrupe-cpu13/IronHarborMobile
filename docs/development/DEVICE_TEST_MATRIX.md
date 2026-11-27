@@ -1,6 +1,14 @@
 ﻿# Android device test matrix
 
-Updated 2026-11-27. User-reported results are identified separately from CI. Device model/API and artifact hashes were not supplied for the prior test.
+Updated 2026-11-28. User-reported results are identified separately from CI. Device model/API and artifact hashes are recorded only when supplied.
+
+## Red Resurrection map catalog report (2026-11-28)
+
+| Device / API | ABI | Status | Observed checks |
+|---|---|---|---|
+| Xiaomi/POCO test device (exact model/API not newly captured) | ARM64 | User diagnostic, app build `0.4.3` code `208`; artifact SHA not captured in these logs | Red Resurrection selected. Launcher selection and lightweight Play preflight pass. `Resources/ClientDefinitions.ini` selects `INI\\MPMaps.ini`. The selected catalog has `[MultiMaps]` with nested map paths and per-map `GameModes` values, but no `[GameModes]` registry. `ra2.log` reports empty `MPModesMD.ini` rows at `2026-11-27T16:58:03Z`; in-game map/mode selection remains broken on this artifact. Source fix is pending Actions and a device retest. |
+
+HUD layout export/import already existed in the launcher, but gameplay used a separate compact-layout preference file. Source changes now unify preferences and migrate old coordinates without deleting the old preference data. The new artifact still needs a device check: move HUD/Edit/C1/C10, export, update the app without uninstalling, verify placement remains, import the exported file, then relaunch gameplay and check the same positions and visibility. This has not been device-verified.
 
 ## Latest launcher feedback (2026-11-27)
 

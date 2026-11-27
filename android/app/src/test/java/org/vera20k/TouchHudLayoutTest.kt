@@ -34,4 +34,21 @@ class TouchHudLayoutTest {
         assertTrue(TouchHudLayout.buttonIds.contains("group-10"))
         assertFalse(TouchHudLayout.buttonIds.contains("group-11"))
     }
+
+    @Test
+    fun legacyPositionsMigrateToThePortableSettingsIdsAndBack() {
+        val legacy = mapOf(
+            "hud" to TouchHudPoint(0.12f, 0.88f),
+            "edit" to TouchHudPoint(0.23f, 0.77f),
+            "type" to TouchHudPoint(0.34f, 0.66f),
+            "group-1" to TouchHudPoint(0.45f, 0.55f),
+            "group-10" to TouchHudPoint(0.56f, 0.44f),
+        )
+
+        val portable = TouchHudLayout.toSettingsPositions(legacy)
+        assertEquals(legacy, TouchHudLayout.fromSettingsPositions(portable))
+        assertEquals(legacy["hud"]?.let { it.x to it.y }, portable[TouchHudSettings.HUD_TOGGLE])
+        assertEquals(legacy["edit"]?.let { it.x to it.y }, portable[TouchHudSettings.HUD_EDIT])
+        assertFalse(portable.containsKey("C11"))
+    }
 }

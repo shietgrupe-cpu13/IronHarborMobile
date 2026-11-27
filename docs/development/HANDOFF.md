@@ -1,6 +1,14 @@
 ﻿# Iron Harbor Mobile handoff
 
-Updated 2026-11-27. Read [IRON_HARBOR_MASTER_PLAN.md](IRON_HARBOR_MASTER_PLAN.md) as the authoritative specification.
+Updated 2026-11-28. Read [IRON_HARBOR_MASTER_PLAN.md](IRON_HARBOR_MASTER_PLAN.md) as the authoritative specification.
+
+## Active checkpoint — map catalog and HUD preference integration
+
+- Branch `android-new` fast-forwarded to `ae1ce7c09` from the remote, preserving untracked `out/`. Current source changes are uncommitted; do not stage `out/`.
+- Device logs and the selected Red Resurrection files are in `E:\Temp\IHLogs-20261128`. `ClientDefinitions.ini` selects the mod's `INI\\MPMaps.ini`; it contains map-level mode memberships but no `[GameModes]` registry. `ClientInstall::read` currently yields no modes, then skirmish roster filtering drops every mode. A conservative inference fallback and focused Rust regression are now present.
+- `TouchHudSettings` already owns import/export (format `iron-harbor-hud`, versions 1–3). The in-game compact overlay previously used another SharedPreferences file and format. It now uses the launcher store, migrates legacy coordinates without deleting them, and applies launcher IDs/coordinates. Export/import now also preserves active control set and hidden state while accepting old files. Kotlin regressions were edited but not yet run.
+- The only validation run so far is `git diff --check`; no local Rust, Gradle, or APK compilation was performed. The workflow now includes the new Rust test. Next: review/fix the diff, update/checkpoint docs, commit and push `android-new`, monitor GitHub Actions logs, fix deterministic failures, then install its debug APK for map and HUD-layout device checks. Do not claim runtime verification until tested on device.
+- Stable signing was added in the preceding workflow change. A normal update with the same package/signature preserves app preferences; a prior uninstall/reinstall can erase private preferences. Shared `Documents/RA2Harbor` data is separate and must remain untouched.
 
 ## Active checkpoint — launcher stalls, MO and shutdown
 

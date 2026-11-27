@@ -1031,6 +1031,8 @@ class LauncherActivity : Activity() {
             }.toMap(),
             TouchHudSettings.parseControlSets(prefs.getString(TouchHudSettings.HUD_CONTROL_SETS, null)),
             prefs.getInt(TouchHudSettings.HUD_DOCK, 0),
+            prefs.getInt(TouchHudSettings.HUD_ACTIVE_SET, 1),
+            prefs.getBoolean(TouchHudSettings.HUD_HIDDEN, false),
         )
         runCatching { (contentResolver.openOutputStream(uri, "wt") ?: error("Selected document could not be opened")).bufferedWriter().use { it.write(payload) } }
             .onSuccess { Toast.makeText(this, "HUD layout exported.", Toast.LENGTH_SHORT).show() }
@@ -1069,6 +1071,8 @@ class LauncherActivity : Activity() {
             .putInt(TouchHudSettings.HUD_OPACITY, imported.opacity)
             .putInt(TouchHudSettings.HUD_LAYOUT, imported.layout)
             .putInt(TouchHudSettings.HUD_DOCK, imported.dock)
+            .putInt(TouchHudSettings.HUD_ACTIVE_SET, imported.activeSet)
+            .putBoolean(TouchHudSettings.HUD_HIDDEN, imported.hidden)
             .putBoolean(TouchHudSettings.HUD_ENABLED, true)
         TouchHudSettings.remappableActions.forEach { edit.remove("key_${it.id}") }
         imported.keyBindings.forEach { (id, keyCode) -> edit.putInt("key_$id", keyCode) }

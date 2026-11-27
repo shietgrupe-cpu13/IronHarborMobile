@@ -1,6 +1,14 @@
 ﻿# Iron Harbor Mobile progress
 
-Updated 2026-11-27. Current authoritative plan: [IRON_HARBOR_MASTER_PLAN.md](IRON_HARBOR_MASTER_PLAN.md).
+Updated 2026-11-28. Current authoritative plan: [IRON_HARBOR_MASTER_PLAN.md](IRON_HARBOR_MASTER_PLAN.md).
+
+## 2026-11-28 — Red Resurrection catalog and HUD layout persistence
+
+- Fast-forwarded `android-new` from `c73a8606f` to remote `ae1ce7c09`, preserving untracked `out/`. The six incoming commits are upstream engine changes; no local build was run.
+- Device logs pulled to `E:\Temp\IHLogs-20261128` identify Red Resurrection as the selected mod. Its `Resources/ClientDefinitions.ini` selects `INI\\MPMaps.ini`; that catalog has `[MultiMaps]`, map-level `GameModes=...`, and named mode sections but no `[GameModes]` registry. The current `ClientInstall::read` therefore builds an empty client mode/map set; startup then warns that `MPModesMD.ini` has no usable rows. This is a source-backed explanation for the empty in-game map catalog, not yet a device-verified fix.
+- Added a guarded legacy-catalog fallback in `src/assets/client_install.rs`: infer mode candidates only when the registry is empty, only from declared map memberships/aliases with a corresponding section, then retain existing mode/resource and unsupported-option validation. Added a synthetic regression covering aliases, nested map path, and an unsupported mode being excluded.
+- HUD launcher backup/import already used a validated versioned format (v1–v3), while the current compact in-game overlay stored positions separately under `touch_hud/button_positions_v1`. The overlay now reads/writes the launcher preference store and migrates old compact IDs/positions non-destructively. Export/import also retains active set and hidden state; older files still decode with safe defaults. JVM regressions cover migration and old/new backup round-trips.
+- Added the new Rust regression to `.github/workflows/sync-upstream-android.yml`. `git diff --check` passed. Kotlin/JVM, Rust tests, ARM64 APK build, and device behavior remain unverified until the remote Actions run and POCO retest.
 
 ## Current renderer and Mental Omega regression work
 

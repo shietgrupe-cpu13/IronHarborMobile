@@ -239,6 +239,8 @@ internal object TouchHudSettings {
         keyBindings: Map<String, Int> = emptyMap(),
         controlSets: Map<String, Int> = emptyMap(),
         dock: Int = 0,
+        activeSet: Int = 1,
+        hidden: Boolean = false,
     ): String = listOf(
         "format=iron-harbor-hud",
         "version=3",
@@ -248,6 +250,8 @@ internal object TouchHudSettings {
         "keybindings=${encodeKeyBindings(keyBindings)}",
         "controlsets=${encodeControlSets(controlSets)}",
         "dock=${dock.coerceIn(0, 2)}",
+        "activeSet=${activeSet.coerceIn(1, 2)}",
+        "hidden=$hidden",
         "scale=${clampScale(scale)}",
         "opacity=${clampOpacity(opacity)}",
         "layout=${layout.coerceIn(LAYOUT_FREE, LAYOUT_YURI)}",
@@ -264,6 +268,8 @@ internal object TouchHudSettings {
         val keyBindings: Map<String, Int>,
         val controlSets: Map<String, Int>,
         val dock: Int,
+        val activeSet: Int,
+        val hidden: Boolean,
     )
 
     fun decodeLayoutBackup(source: String): LayoutBackup? {
@@ -278,7 +284,13 @@ internal object TouchHudSettings {
         val opacity = fields["opacity"]?.toIntOrNull() ?: return null
         val layout = fields["layout"]?.toIntOrNull() ?: return null
         val dock = if (version >= 3) fields["dock"]?.toIntOrNull() ?: return null else 0
-        if (visible.isEmpty() || scale !in 70..150 || opacity !in 30..100 || layout !in LAYOUT_FREE..LAYOUT_YURI || dock !in 0..2) return null
+        val activeSet = fields["activeSet"]?.toIntOrNull() ?: 1
+        val hidden = when (fields["hidden"]?.lowercase()) {
+            null, "false" -> false
+            "true" -> true
+            else -> return null
+        }
+        if (visible.isEmpty() || scale !in 70..150 || opacity !in 30..100 || layout !in LAYOUT_FREE..LAYOUT_YURI || dock !in 0..2 || activeSet !in 1..2) return null
         return LayoutBackup(
             visible,
             parsePositions(fields["positions"]),
@@ -289,6 +301,8 @@ internal object TouchHudSettings {
             parseKeyBindings(fields["keybindings"]),
             if (version >= 2) parseControlSets(fields["controlsets"]) else emptyMap(),
             dock,
+            activeSet,
+            hidden,
         )
     }
 

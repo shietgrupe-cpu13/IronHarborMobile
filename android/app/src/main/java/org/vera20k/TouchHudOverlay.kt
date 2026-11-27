@@ -18,8 +18,8 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
     private val density = activity.resources.displayMetrics.density
     private val buttonSize = (46 * density).toInt()
     private val margin = (12 * density).toInt()
-    private val preferences = activity.getSharedPreferences(PREFERENCES, 0)
-    private val positions = TouchHudLayout.parse(preferences.getString(POSITIONS, null)).toMutableMap()
+    private val preferences = activity.getSharedPreferences(TouchHudSettings.PREFS, 0)
+    private val positions = loadPositions()
     private val overlay = FrameLayout(activity).apply {
         clipChildren = false
         clipToPadding = false
@@ -28,10 +28,12 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
         setBackgroundColor(Color.TRANSPARENT)
     }
     private val buttons = LinkedHashMap<String, TextView>()
-    private var controlsVisible = false
+    private var controlsVisible = preferences.getBoolean(TouchHudSettings.HUD_ENABLED, true) &&
+        !preferences.getBoolean(TouchHudSettings.HUD_HIDDEN, false)
     private var editing = false
 
     fun attach() {
+        if (!preferences.getBoolean(TouchHudSettings.HUD_ENABLED, true)) return
         addButton("hud", "HUD", "Show touch controls") { toggleControls() }
         addButton("edit", "Edit", "Move touch controls") {
             if (!editing) {
@@ -92,14 +94,20 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
     private fun toggleControls() {
         controlsVisible = !controlsVisible
         if (!controlsVisible) editing = false
+        preferences.edit().putBoolean(TouchHudSettings.HUD_HIDDEN, !controlsVisible).apply()
         setVisibility()
     }
 
     private fun setVisibility() {
+        val visible = TouchHudSettings.parseVisible(
+            preferences.getString(TouchHudSettings.HUD_VISIBLE, null),
+            preferences.contains(TouchHudSettings.HUD_VISIBLE),
+        )
         buttons.forEach { (id, button) ->
             button.visibility = when {
                 id == "hud" -> View.VISIBLE
-                controlsVisible -> View.VISIBLE
+                id == "edit" -> View.VISIBLE
+                controlsVisible && compactButtonEnabled(id, visible) -> View.VISIBLE
                 else -> View.GONE
             }
             button.alpha = if (editing && id != "edit") 0.62f else 1f
@@ -146,20 +154,70 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
         val maxX = (overlay.width - view.width).coerceAtLeast(1)
         val maxY = (overlay.height - view.height).coerceAtLeast(1)
         positions[id] = TouchHudPoint(view.x / maxX, view.y / maxY).bounded()
-        preferences.edit().putString(POSITIONS, TouchHudLayout.serialize(positions)).apply()
+        val portable = TouchHudSettings.parsePositions(
+            preferences.getString(TouchHudSettings.HUD_POSITIONS, null),
+        ).toMutableMap().apply {
+            putAll(TouchHudLayout.toSettingsPositions(positions))
+        }
+        preferences.edit()
+            .putString(TouchHudSettings.HUD_POSITIONS, TouchHudSettings.encodePositions(portable))
+            .apply()
     }
 
     private fun positionButtons() {
         if (overlay.width <= 0 || overlay.height <= 0) return
         val maxX = (overlay.width - buttonSize).coerceAtLeast(0)
         val maxY = (overlay.height - buttonSize).coerceAtLeast(0)
-        val defaults = defaultPositions(maxX, maxY)
+        val layout = preferences.getInt(TouchHudSettings.HUD_LAYOUT, TouchHudSettings.LAYOUT_FREE)
+            .coerceIn(TouchHudSettings.LAYOUT_FREE, TouchHudSettings.LAYOUT_YURI)
+        val dock = preferences.getInt(TouchHudSettings.HUD_DOCK, 0).coerceIn(0, 2)
+        val configured = TouchHudLayout.fromSettingsPositions(
+            TouchHudSettings.parsePositions(preferences.getString(TouchHudSettings.HUD_POSITIONS, null)),
+        )
         for ((id, button) in buttons) {
             if (editing && button.tag is DragOrigin) continue
-            val point = positions[id] ?: defaults.getValue(id)
-            button.x = (point.x * maxX).coerceIn(0f, maxX.toFloat())
-            button.y = (point.y * maxY).coerceIn(0f, maxY.toFloat())
+            val settingsId = settingsId(id)
+            val default = settingsId?.let { TouchHudSettings.defaultPosition(it, layout, dock) }
+                ?: defaultPositions(maxX, maxY).getValue(id).let { it.x to it.y }
+            val point = positions[id]?.let { it.x to it.y } ?: configured[id]?.let { it.x to it.y } ?: default
+            button.x = (point.first * maxX).coerceIn(0f, maxX.toFloat())
+            button.y = (point.second * maxY).coerceIn(0f, maxY.toFloat())
         }
+    }
+
+    private fun loadPositions(): MutableMap<String, TouchHudPoint> {
+        if (preferences.contains(TouchHudSettings.HUD_POSITIONS)) {
+            return TouchHudLayout.fromSettingsPositions(
+                TouchHudSettings.parsePositions(preferences.getString(TouchHudSettings.HUD_POSITIONS, null)),
+            ).toMutableMap()
+        }
+
+        // Earlier Android builds stored only the compact HUD positions in a
+        // separate preference file. Preserve those coordinates and publish
+        // them into the same versioned settings used by launcher import/export.
+        val legacy = activity.getSharedPreferences(LEGACY_PREFERENCES, 0)
+            .getString(LEGACY_POSITIONS, null)
+        val migrated = TouchHudLayout.toSettingsPositions(TouchHudLayout.parse(legacy))
+        if (migrated.isNotEmpty()) {
+            preferences.edit()
+                .putString(TouchHudSettings.HUD_POSITIONS, TouchHudSettings.encodePositions(migrated))
+                .apply()
+        }
+        return TouchHudLayout.fromSettingsPositions(migrated).toMutableMap()
+    }
+
+    private fun compactButtonEnabled(id: String, visible: Set<String>): Boolean {
+        if (!preferences.contains(TouchHudSettings.HUD_VISIBLE)) return true
+        val settingsId = settingsId(id) ?: return true
+        return settingsId in visible
+    }
+
+    private fun settingsId(id: String): String? = when (id) {
+        "hud" -> TouchHudSettings.HUD_TOGGLE
+        "edit" -> TouchHudSettings.HUD_EDIT
+        "type" -> "TYPE"
+        else -> id.removePrefix("group-").toIntOrNull()?.takeIf { id.startsWith("group-") }
+            ?.takeIf { it in 1..10 }?.let { "C$it" }
     }
 
     private fun defaultPositions(maxX: Int, maxY: Int): Map<String, TouchHudPoint> {
@@ -222,7 +280,7 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
     private val touchSlop = (8 * density)
 
     private companion object {
-        const val PREFERENCES = "touch_hud"
-        const val POSITIONS = "button_positions_v1"
+        const val LEGACY_PREFERENCES = "touch_hud"
+        const val LEGACY_POSITIONS = "button_positions_v1"
     }
 }

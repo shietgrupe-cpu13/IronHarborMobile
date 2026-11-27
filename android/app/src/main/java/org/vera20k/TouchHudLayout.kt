@@ -27,4 +27,30 @@ internal object TouchHudLayout {
     fun serialize(positions: Map<String, TouchHudPoint>): String = buttonIds
         .mapNotNull { id -> positions[id]?.bounded()?.let { "$id,${it.x},${it.y}" } }
         .joinToString(";")
+
+    /** Maps the compact pre-settings HUD IDs into the portable launcher schema. */
+    fun toSettingsPositions(positions: Map<String, TouchHudPoint>): Map<String, Pair<Float, Float>> =
+        positions.mapNotNull { (id, point) ->
+            val settingsId = when (id) {
+                "hud" -> TouchHudSettings.HUD_TOGGLE
+                "edit" -> TouchHudSettings.HUD_EDIT
+                "type" -> "TYPE"
+                else -> id.removePrefix("group-").toIntOrNull()?.takeIf { id.startsWith("group-") }
+                    ?.takeIf { it in 1..10 }?.let { "C$it" }
+            } ?: return@mapNotNull null
+            settingsId to (point.bounded().x to point.bounded().y)
+        }.toMap()
+
+    /** Restores compact HUD button positions from the shared portable settings. */
+    fun fromSettingsPositions(positions: Map<String, Pair<Float, Float>>): Map<String, TouchHudPoint> =
+        positions.mapNotNull { (id, point) ->
+            val compactId = when (id) {
+                TouchHudSettings.HUD_TOGGLE -> "hud"
+                TouchHudSettings.HUD_EDIT -> "edit"
+                "TYPE" -> "type"
+                else -> id.removePrefix("C").toIntOrNull()?.takeIf { id.startsWith("C") }
+                    ?.takeIf { it in 1..10 }?.let { "group-$it" }
+            } ?: return@mapNotNull null
+            compactId to TouchHudPoint(point.first, point.second).bounded()
+        }.toMap()
 }
