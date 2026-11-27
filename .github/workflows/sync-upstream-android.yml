@@ -171,6 +171,15 @@ jobs:
             -dname "CN=Android Debug,O=Android,C=US"
           bash "$RUNNER_TEMP/gradle-with-network-retry.sh" -p android :app:assembleDebug
 
+      - name: Upload ARM64 debug APK
+        if: success() && steps.upstream.outputs.validate == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: IronHarborMobile-android-new-arm64-${{ github.sha }}
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Push verified upstream merge
         if: steps.upstream.outputs.changed == 'true'
         shell: bash
