@@ -1,6 +1,7 @@
 package org.vera20k
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.app.ActivityManager.TaskDescription
 import android.content.ComponentName
 import android.content.Intent
@@ -16,6 +17,7 @@ import android.net.NetworkRequest
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.Process
 import android.provider.DocumentsContract
 import android.provider.Settings
@@ -78,6 +80,7 @@ class VeraActivity : GameActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        directSelectionPending = savedInstanceState?.getBoolean(STATE_DIRECT_SELECTION_PENDING) == true
         // GameActivity defaults to TYPE_NULL (0), which puts its InputConnection
         // into raw-key mode (fullEditor = false, mForwardKeyEvents = true). Its
         // sendKeyEvent then dispatches KEYCODE_DEL to the view's OnKeyListener
@@ -97,6 +100,12 @@ class VeraActivity : GameActivity() {
         pruneModShortcuts()
         clearPickedModParts()
         TouchHudOverlay(this).attach()
+        window.decorView.post { showRevokedStorageRecoveryIfNeeded() }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean(STATE_DIRECT_SELECTION_PENDING, directSelectionPending)
+        super.onSaveInstanceState(outState)
     }
 
     /** Forward a HUD edge through GameActivity's regular native input callback. */
@@ -138,11 +147,17 @@ class VeraActivity : GameActivity() {
 
         /** Unique within this activity; "VR" in ASCII. */
         const val REQUEST_PICK_FOLDER = 0x5652
+        const val REQUEST_MANAGE_ALL_FILES = 0x5653
 
         /** The Mods page's system file manager pickers. */
         const val REQUEST_EXPORT_MOD = 0x5654
         const val REQUEST_MOD_ZIP = 0x5655
         const val REQUEST_MOD_FOLDER = 0x5656
+
+        private const val STORAGE_PREFERENCES = "android-storage"
+        private const val KEY_SHARED_DATA_ROOT_ACTIVE = "shared-data-root-active"
+        private const val KEY_LAST_GAME_TREE = "last-game-tree"
+        private const val STATE_DIRECT_SELECTION_PENDING = "direct-selection-pending"
 
         /** A retail installation is about 1.5 GB; leave headroom for the copy. */
         const val REQUIRED_BYTES = 1700L shl 20
@@ -151,7 +166,7 @@ class VeraActivity : GameActivity() {
         const val PROGRESS_STEP_BYTES = 16L shl 20
 
         /** What the engine opens directly; a folder without these is not RA2. */
-        val REQUIRED_ARCHIVES = listOf("ra2md.mix", "ra2.mix")
+        val REQUIRED_ARCHIVES = GameFolderValidation.requiredArchives
 
         /** The intent extra a pinned shortcut carries (`docs/android.md`). */
         const val EXTRA_ENTRY = "org.vera20k.ENTRY"
@@ -170,6 +185,10 @@ class VeraActivity : GameActivity() {
     /** The export's two toasts, in the player's language (`VERA:ModExported`). */
     private var exportDone = ""
     private var exportFailed = ""
+
+    /** True only after the player explicitly chooses in-place game access. */
+    private var directSelectionPending = false
+    private var recoveringRevokedAccess = false
 
     /** The pickers' toast when a copy fails (`VERA:ModActionFailed`). */
     private var pickFailed = ""
@@ -368,15 +387,174 @@ class VeraActivity : GameActivity() {
      * [onActivityResult].
      */
     fun startFolderPicker() {
+        AlertDialog.Builder(this)
+            .setTitle("Choose game-file access")
+            .setMessage(
+                "Read a locally stored game folder in place to avoid copying its files, " +
+                    "or use the standard SAF importer to make a private copy."
+            )
+            .setPositiveButton("USE IN PLACE") { _, _ -> beginDirectSelection() }
+            .setNegativeButton("COPY WITH SAF") { _, _ ->
+                directSelectionPending = false
+                launchGameFolderPicker()
+            }
+            .setNeutralButton("CANCEL") { _, _ -> nativeOnFolderPicked("") }
+            .show()
+    }
+
+    private fun beginDirectSelection() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            AlertDialog.Builder(this)
+                .setMessage("In-place access requires Android 11 or newer. You can still import a copy with SAF.")
+                .setPositiveButton("COPY WITH SAF") { _, _ -> launchGameFolderPicker() }
+                .setNegativeButton("CANCEL") { _, _ -> nativeOnFolderPicked("") }
+                .show()
+            return
+        }
+        directSelectionPending = true
+        if (Environment.isExternalStorageManager()) {
+            launchGameFolderPicker()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Allow in-place game access?")
+            .setMessage(
+                "Android's All files access is broader than the selected game folder. " +
+                    "It lets Iron Harbor read game files directly and use Documents/RA2Harbor " +
+                    "for mods, maps, saves and logs. It does not grant access to other apps' " +
+                    "private Android/data folders. If you decline, SAF copy import remains available."
+            )
+            .setPositiveButton("CONTINUE TO SETTINGS") { _, _ -> openAllFilesAccessSettings() }
+            .setNegativeButton("COPY WITH SAF") { _, _ ->
+                directSelectionPending = false
+                launchGameFolderPicker()
+            }
+            .setNeutralButton("CANCEL") { _, _ ->
+                directSelectionPending = false
+                nativeOnFolderPicked("")
+            }
+            .show()
+    }
+
+    private fun launchGameFolderPicker() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
-            // Keep the grant across the copy: the engine reads the tree for as
-            // long as the import runs, and the copy may outlive this task.
             addFlags(
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or
                     Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION,
             )
         }
-        startActivityForResult(intent, REQUEST_PICK_FOLDER)
+        try {
+            startActivityForResult(intent, REQUEST_PICK_FOLDER)
+        } catch (error: Throwable) {
+            directSelectionPending = false
+            android.util.Log.w("Vera20k", "no game folder picker: $error")
+            nativeOnFolderPicked("")
+        }
+    }
+
+    private fun openAllFilesAccessSettings() {
+        val appSettings = Intent(
+            Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+            Uri.parse("package:$packageName"),
+        )
+        try {
+            startActivityForResult(appSettings, REQUEST_MANAGE_ALL_FILES)
+        } catch (_: Exception) {
+            try {
+                startActivityForResult(
+                    Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION),
+                    REQUEST_MANAGE_ALL_FILES,
+                )
+            } catch (error: Exception) {
+                directSelectionPending = false
+                showCopyFallback("Android could not open All files access settings: ${error.message}")
+            }
+        }
+    }
+
+    private fun sharedDataRoot(): File =
+        AndroidSharedStoragePath.sharedDataRoot(Environment.getExternalStorageDirectory()).canonicalFile
+
+    private fun ensureSharedProfileFolders(root: File) {
+        require(Environment.isExternalStorageManager()) { "All files access was revoked" }
+        require(root.mkdirs() || root.isDirectory) { "Cannot create ${root.absolutePath}" }
+        listOf("Mods", "Maps", "Saves", "Logs", "Config").forEach { name ->
+            val directory = File(root, name)
+            require(directory.mkdirs() || directory.isDirectory) { "Cannot create ${directory.absolutePath}" }
+        }
+    }
+
+    private fun profileDirectoryForCopy(): File {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && Environment.isExternalStorageManager()) {
+            return sharedDataRoot().also(::ensureSharedProfileFolders)
+        }
+        return filesDir
+    }
+
+    private fun showCopyFallback(reason: String) {
+        AlertDialog.Builder(this)
+            .setTitle("Cannot read this folder in place")
+            .setMessage("$reason\n\nChoose a local primary-storage folder and keep All files access enabled, or use SAF copy import.")
+            .setPositiveButton("COPY WITH SAF") { _, _ ->
+                directSelectionPending = false
+                launchGameFolderPicker()
+            }
+            .setNegativeButton("CANCEL") { _, _ ->
+                directSelectionPending = false
+                nativeImportFinished("cancelled")
+            }
+            .show()
+    }
+
+    private fun showRevokedStorageRecoveryIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || Environment.isExternalStorageManager()) return
+        val preferences = getSharedPreferences(STORAGE_PREFERENCES, MODE_PRIVATE)
+        if (!preferences.getBoolean(KEY_SHARED_DATA_ROOT_ACTIVE, false)) return
+        AlertDialog.Builder(this)
+            .setTitle("Shared-storage access was revoked")
+            .setMessage(
+                "The saved game and profile folders are still in place, but Android no longer lets Iron Harbor read them. " +
+                    "Restore All files access in Settings, or use the saved SAF folder to make a private game copy. " +
+                    "Existing files will not be deleted."
+            )
+            .setPositiveButton("OPEN SETTINGS") { _, _ ->
+                recoveringRevokedAccess = true
+                openAllFilesAccessSettings()
+            }
+            .setNegativeButton("USE SAF COPY") { _, _ ->
+                val tree = preferences.getString(KEY_LAST_GAME_TREE, null)
+                if (tree == null) {
+                    directSelectionPending = false
+                    launchGameFolderPicker()
+                } else {
+                    startImport(tree)
+                }
+            }
+            .setNeutralButton("LATER", null)
+            .show()
+    }
+
+    private fun showPermissionReturnStatus(granted: Boolean) {
+        if (recoveringRevokedAccess) {
+            recoveringRevokedAccess = false
+            if (granted) {
+                AlertDialog.Builder(this)
+                    .setMessage("Access is restored. Close and reopen Iron Harbor to retry game startup.")
+                    .setPositiveButton("CLOSE APP") { _, _ -> finish() }
+                    .setNegativeButton("LATER", null)
+                    .show()
+            } else {
+                showRevokedStorageRecoveryIfNeeded()
+            }
+            return
+        }
+        if (!directSelectionPending) return
+        if (granted) {
+            launchGameFolderPicker()
+        } else {
+            directSelectionPending = false
+            showCopyFallback("All files access was not granted. Your existing game files were not changed.")
+        }
     }
 
     /**
@@ -402,8 +580,25 @@ class VeraActivity : GameActivity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         when (requestCode) {
+            REQUEST_MANAGE_ALL_FILES -> {
+                showPermissionReturnStatus(
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && Environment.isExternalStorageManager(),
+                )
+            }
             REQUEST_PICK_FOLDER -> {
                 val tree = if (resultCode == Activity.RESULT_OK) data?.data else null
+                if (tree != null) {
+                    try {
+                        contentResolver.takePersistableUriPermission(
+                            tree,
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                        )
+                    } catch (error: SecurityException) {
+                        android.util.Log.i("Vera20k", "tree grant is foreground-only: $error")
+                    }
+                } else {
+                    directSelectionPending = false
+                }
                 // An empty string, not null: the native side reads it as
                 // "cancelled" without needing a second callback shape.
                 nativeOnFolderPicked(tree?.toString() ?: "")
@@ -575,6 +770,71 @@ class VeraActivity : GameActivity() {
     /** Implemented in `android/src/lib.rs`; the import flow's entry. */
     private external fun nativeOnFolderPicked(treeUri: String)
 
+    /** Chooses opted-in direct access or the existing SAF copy fallback. */
+    fun onGameFolderPicked(treeUri: String) {
+        if (!directSelectionPending) {
+            startImport(treeUri)
+            return
+        }
+        directSelectionPending = false
+        val job = AssetImportJob.begin()
+        if (job == null) {
+            nativeImportFinished("failed:another storage operation is already active")
+            return
+        }
+        Thread {
+            val result = try {
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || !Environment.isExternalStorageManager()) {
+                    throw IOException("All files access is unavailable. Grant it again or import a copy with SAF.")
+                }
+                val tree = Uri.parse(treeUri)
+                val documentId = DocumentsContract.getTreeDocumentId(tree)
+                val directory = AndroidSharedStoragePath.fromDocumentId(
+                    documentId,
+                    Environment.getExternalStorageDirectory(),
+                ) ?: throw IOException("Choose a folder on local primary storage; cloud and removable-volume folders need SAF copy import.")
+                val missing = GameFolderValidation.missingRequiredArchives(directory)
+                if (missing.isNotEmpty()) {
+                    throw IOException("Required game archives are missing or unreadable: ${missing.joinToString()}")
+                }
+                val validation = nativeValidateGameDirectory(directory.absolutePath)
+                if (!validation.startsWith("ok:")) {
+                    throw IOException(validation.removePrefix("error:").ifEmpty { "The engine rejected this game folder." })
+                }
+
+                val settingsRoot = sharedDataRoot()
+                ensureSharedProfileFolders(settingsRoot)
+                val preferences = getSharedPreferences(STORAGE_PREFERENCES, MODE_PRIVATE)
+                val previousUri = preferences.getString(KEY_LAST_GAME_TREE, null)
+                if (!preferences.edit()
+                        .putBoolean(KEY_SHARED_DATA_ROOT_ACTIVE, true)
+                        .putString(KEY_LAST_GAME_TREE, tree.toString())
+                        .commit()) {
+                    throw IOException("Could not save the selected game folder")
+                }
+                try {
+                    val config = nativeConfigForDirectSelection(directory.absolutePath, settingsRoot.absolutePath)
+                    AssetImportJob.publishConfig(settingsRoot, config)
+                    AssetImportJob.publishDataRoot(filesDir, settingsRoot)
+                } catch (error: Throwable) {
+                    preferences.edit()
+                        .putBoolean(KEY_SHARED_DATA_ROOT_ACTIVE, previousUri != null)
+                        .putString(KEY_LAST_GAME_TREE, previousUri)
+                        .apply()
+                    throw error
+                }
+                "ok:Read in place from ${directory.absolutePath}; no game files were copied"
+            } catch (error: Throwable) {
+                "failed:${error.message ?: error.javaClass.simpleName}"
+            }
+            try {
+                nativeImportFinished(result)
+            } finally {
+                job.close()
+            }
+        }.start()
+    }
+
     /** Implemented in `android/src/lib.rs`; reports the copy's outcome. */
     private external fun nativeImportFinished(result: String)
 
@@ -582,7 +842,13 @@ class VeraActivity : GameActivity() {
     private external fun nativeImportProgress(copiedBytes: Long)
 
     /** Uses the engine's config editor, retaining the player's other settings. */
-    private external fun nativeConfigForImport(directory: String): String
+    private external fun nativeConfigForImport(directory: String, settingsDirectory: String): String
+
+    /** Uses the engine archive resolver to validate a directly selected install. */
+    private external fun nativeValidateGameDirectory(directory: String): String
+
+    /** Retains existing settings while selecting the no-copy game/profile roots. */
+    private external fun nativeConfigForDirectSelection(directory: String, settingsDirectory: String): String
 
     fun cancelImport(): Boolean = AssetImportJob.cancelActive()
 
@@ -770,6 +1036,7 @@ class VeraActivity : GameActivity() {
     fun startImport(treeUri: String) {
         val job = AssetImportJob.begin() ?: return
         val worker = Thread {
+            var usesSharedProfileDirectory = false
             val result = try {
                 val free = filesDir.usableSpace
                 if (free < REQUIRED_BYTES) {
@@ -788,15 +1055,27 @@ class VeraActivity : GameActivity() {
                 if (missing.isNotEmpty()) {
                     throw IOException("that folder has no " + missing.joinToString(" or "))
                 }
-                val target = job.run(filesDir,
+                val profileDirectory = profileDirectoryForCopy()
+                usesSharedProfileDirectory = profileDirectory.canonicalFile != filesDir.canonicalFile
+                val target = job.run(filesDir, profileDirectory,
                     { staging -> copyTree(Uri.parse(treeUri), staging, job) },
-                    { staging -> nativeConfigForImport(staging.absolutePath) },
+                    { staging -> nativeConfigForImport(staging.absolutePath, profileDirectory.absolutePath) },
                 )
+                if (profileDirectory.canonicalFile == filesDir.canonicalFile) {
+                    AssetImportJob.clearDataRoot(filesDir)
+                } else {
+                    AssetImportJob.publishDataRoot(filesDir, profileDirectory)
+                }
                 "ok:${target.absolutePath}"
             } catch (_: AssetImportJob.Cancelled) {
                 "cancelled"
             } catch (error: Throwable) {
                 "failed:" + (error.message ?: error.toString())
+            }
+            if (result.startsWith("ok:")) {
+                getSharedPreferences(STORAGE_PREFERENCES, MODE_PRIVATE).edit()
+                    .putBoolean(KEY_SHARED_DATA_ROOT_ACTIVE, usesSharedProfileDirectory)
+                    .apply()
             }
             try {
                 nativeImportFinished(result)

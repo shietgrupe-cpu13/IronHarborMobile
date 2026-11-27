@@ -52,6 +52,11 @@ internal class AssetImportJob private constructor() : AutoCloseable {
 
     @Throws(IOException::class)
     fun run(filesDirectory: File, copy: Copy, config: Config): File {
+        return run(filesDirectory, filesDirectory, copy, config)
+    }
+
+    @Throws(IOException::class)
+    fun run(filesDirectory: File, configDirectory: File, copy: Copy, config: Config): File {
         checkCancelled()
         // The old installation stays selected throughout the copy. Only the
         // final atomic config replacement makes this new directory visible.
@@ -61,22 +66,8 @@ internal class AssetImportJob private constructor() : AutoCloseable {
             synchronized(this) {
                 checkCancelled()
                 val contents = config.forDirectory(staging)
-                val temporary = Files.createTempFile(filesDirectory.toPath(), ".config-", ".tmp")
-                try {
-                    FileOutputStream(temporary.toFile()).use { output ->
-                        output.write(contents.toByteArray(StandardCharsets.UTF_8))
-                        output.fd.sync()
-                    }
-                    Files.move(
-                        temporary,
-                        File(filesDirectory, "config.toml").toPath(),
-                        StandardCopyOption.ATOMIC_MOVE,
-                        StandardCopyOption.REPLACE_EXISTING,
-                    )
-                    published = true
-                } finally {
-                    Files.deleteIfExists(temporary)
-                }
+                publishConfig(configDirectory, contents)
+                published = true
             }
             return staging
         } finally {
@@ -104,6 +95,70 @@ internal class AssetImportJob private constructor() : AutoCloseable {
         /** Ask the running import to stop; false when it already published. */
         @JvmStatic
         fun cancelActive(): Boolean = ACTIVE.get()?.cancel() ?: false
+
+        /** Atomically publish a validated installation path without copying its files. */
+        @JvmStatic
+        @Throws(IOException::class)
+        fun publishConfig(filesDirectory: File, contents: String) {
+            val rootConfig = File(filesDirectory, "config.toml")
+            if (rootConfig.exists() && !rootConfig.isFile) {
+                throw IOException("${rootConfig.absolutePath} is not a regular file")
+            }
+            val destination = if (rootConfig.isFile) rootConfig else File(filesDirectory, "Config/config.toml")
+            val parent = destination.parentFile ?: throw IOException("Config path has no parent")
+            if (!parent.isDirectory && !parent.mkdirs()) {
+                throw IOException("Cannot create ${parent.absolutePath}")
+            }
+            val temporary = Files.createTempFile(parent.toPath(), ".config-", ".tmp")
+            try {
+                FileOutputStream(temporary.toFile()).use { output ->
+                    output.write(contents.toByteArray(StandardCharsets.UTF_8))
+                    output.fd.sync()
+                }
+                Files.move(
+                    temporary,
+                    destination.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING,
+                )
+            } finally {
+                Files.deleteIfExists(temporary)
+            }
+        }
+
+        /** Persist the shared data root for the next native engine start. */
+        @JvmStatic
+        @Throws(IOException::class)
+        fun publishDataRoot(filesDirectory: File, dataRoot: File) {
+            val root = dataRoot.canonicalFile
+            if (!root.isDirectory) throw IOException("${root.absolutePath} is not a directory")
+            val pointer = File(filesDirectory, "launcher-data-root.txt")
+            val temporary = Files.createTempFile(filesDirectory.toPath(), ".data-root-", ".tmp")
+            try {
+                FileOutputStream(temporary.toFile()).use { output ->
+                    output.write(root.path.toByteArray(StandardCharsets.UTF_8))
+                    output.fd.sync()
+                }
+                Files.move(
+                    temporary,
+                    pointer.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING,
+                )
+            } finally {
+                Files.deleteIfExists(temporary)
+            }
+        }
+
+        /** Return engine data to app-private storage for a successful SAF copy. */
+        @JvmStatic
+        @Throws(IOException::class)
+        fun clearDataRoot(filesDirectory: File) {
+            val pointer = File(filesDirectory, "launcher-data-root.txt")
+            if (pointer.exists() && !pointer.delete()) {
+                throw IOException("Cannot clear ${pointer.absolutePath}")
+            }
+        }
 
         /**
          * A child of [directory] named by the chosen provider.

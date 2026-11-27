@@ -1,42 +1,30 @@
-# Iron Harbor Mobile handoff
+﻿# Iron Harbor Mobile handoff
 
-Updated 2026-11-27.
+Updated 2026-11-27. Read [IRON_HARBOR_MASTER_PLAN.md](IRON_HARBOR_MASTER_PLAN.md) as the authoritative specification.
 
-## Start here
+## Current checkout
 
-Use `android-new` as the only integration branch. Upstream is `origin` (`YuriPlanet/vera20k`); the user's fork is `vera20k-fork` (`shietgrupe-cpu13/IronHarborMobile`). Do not switch to or merge `android-development` wholesale. The preserved read-only reference is `1293fb441727e2522f6a284d88faf4f108a1ee3e`; backup branch `backup/android-development-2026-11-27` remains intact.
+- `E:\VERA20K-ANDROID`, branch `android-new`; fork remote `vera20k-fork` is `shietgrupe-cpu13/IronHarborMobile`, upstream remote `origin` is `YuriPlanet/vera20k`.
+- HEAD `ea2bc99959c47eda1bbc297851e8d1c2b2a33c9e`; upstream `main` fetched at `d1e28004aa17dc445cbfee450cfe6fa55c5fe949` (11 ahead / 0 behind at last fetch).
+- Uncommitted source changes implement the shared-storage/config-root integration described in `PROGRESS.md`. Do not reset or overwrite them. The untracked `out/` tree is user data; leave it untouched.
+- No local Rust/Cargo/Gradle/APK compilation. Commit and push focused changes, validate with GitHub Actions, and inspect its logs/artifacts.
 
-No local Rust, Cargo, or Gradle compilation. `out/` is untracked user data and must be preserved. Use `GH_CONFIG_DIR=E:\DevTools\GitHubCLI`, `TMP/TEMP=E:\Temp` for GH CLI; do not print credentials.
+## Architecture decisions
 
-## Latest build
+- Preserve the legacy Iron Harbor launcher GUI and `/storage/emulated/0/Documents/Ra2Harbor/` structure; do not replace the launcher with a generic screen.
+- Reuse legacy spelling/data locations (`RA2Harbor`, `IronHarborRA2YR`, `RA2IRONHARBOR`) when present. Never create a second data root when a legacy one can be reused. Do not delete or overwrite user files.
+- Prefer direct game-folder access without copying the retail installation, but All files access is optional, informed and revocable. Keep upstream SAF copy as fallback. SAF `content://` URIs cannot be passed to Rust path-based archive reads.
+- Use the Rust engine's archive/config resolution as authority. Do not create Kotlin-side INI semantics.
+- The engine owns one GameActivity/winit event loop and simulation control-group semantics. Do not add a second loop or duplicate simulation logic.
+- GLES must remain unavailable unless current engine/backend support is implemented and validated; current docs say Android requires Vulkan.
+- CI build success is separate from device/gameplay verification. No public release or external upstream PR is authorized by the master plan.
 
-- Run [45948571106](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45948571106) passed Kotlin/JVM tests, ARM64 native build, debug APK assembly, and upload.
-- Downloadable artifact: `IronHarborMobile-android-new-arm64-529cbe103361ee75b4862ebc0226ad143ebc4572` (53,330,817 bytes; 14-day retention).
-- Artifact source commit: `529cbe103361ee75b4862ebc0226ad143ebc4572`; the initial development-doc checkpoint was `c533ca3ebec18d245cd8215af92026074f5ba8bd`.
-- At the time of the Actions run, no device testing had been reported. A subsequent user-reported device check is recorded below; do not attribute it to CI.
+## Current WIP and next action
 
-## Latest physical-device report
+The local source diff adds primary-volume path resolution and validation, explicit storage permission UI, direct and SAF-copy flows, config publication under Android's `Config/`, and a native data-root pointer consumed at startup. Regression tests were added, not run. First finish a source-level review for permission revocation, atomic publication and config precedence. Run only non-build checks locally (`git diff --check`, targeted source search, Rust formatting on edited leaves); no compiler/test runner.
 
-- User confirmed latest `android-new` APK installation, native engine startup, UI rendering, and visible HUD. Game startup fails with archive access denied (`os error 13`); screen says no game installation is configured. Device/API/artifact hash and active config/source path were not supplied. This is partial runtime validation only; do not claim gameplay readiness.
-- Current SAF import copies the selected tree through `ContentResolver` to app-private staging and configures `ra2_dir` to that copy only after completion. It does not provide native runtime access to the chosen SAF URI.
-- Legacy in-place access maps a primary-volume SAF ID to a raw path and depends on `MANAGE_EXTERNAL_STORAGE`; do not port that permission by default. Native asset loading currently enumerates directories and memory-maps path-opened archives, so a tree URI cannot be used as-is.
-- Next Phase 4 action: use device diagnostics/config/path details to establish whether import was skipped/incomplete or an archive open is denied at the configured path; improve engine-owned launcher validation and recovery messaging; then evaluate a SAF-aware read source against optional user-granted broad access and the existing copy flow. Maintain the no-game-copy goal. No fix has been implemented or validated for this device report yet.
+Then update docs with exact diff, commit and push to `android-new`, monitor the workflow and fix real failures. Verify the uploaded APK artifact's presence/metadata against its exact source SHA. Once storage is CI-green, restore the original Iron Harbor launcher GUI and lifecycle from the legacy reference selectively; continue with mod/map management, renderer/diagnostics, dynamic HUD, and Phase 5 upstream candidates.
 
-## Next actions
+## Known manual gate
 
-1. Finish Phase 2 APK package/ABI/signature/alignment validation and embed source/build metadata. Ask approval only when repository signing secrets must be created or supplied.
-2. Review internal draft PR #1; scheduled sync requires the workflow on default `main`. The android-new run validated its content. Do not open external upstream PRs.
-3. Implement the small Phase 3 HUD settings-model/persistence migration with tests. Do not copy the legacy Rust event queue; current GameActivity/winit owns input routing.
-4. Use the completed Phase 4 audit for a launcher migration plan. Resolve the SAF/private-copy versus direct-path/`MANAGE_EXTERNAL_STORAGE` tradeoff before implementing file management.
-5. Continue Phase 5 upstream classification and maintain these docs with each verified increment.
-
-The controls audit has completed. First Phase 3 candidate: port a neutral `TouchHudSettings` model/persistence and safe preference migration with JVM tests; do not port the old branch's dedicated Rust input queue. Current GameActivity/winit routing is authoritative. Wait for the launcher/storage audit before selecting Phase 4 work.
-
-## Architecture and compatibility facts
-
-- `android-new` is at current upstream `main` `d1e28004aa17dc445cbfee450cfe6fa55c5fe949`, plus seven functional commits and a docs checkpoint; no current upstream commits are missing.
-- Existing HUD code is `android/app/src/main/java/org/vera20k/TouchHudOverlay.kt`, `TouchHudLayout.kt`, with key forwarding in `VeraActivity.kt`.
-- Latest Android package identity in upstream source is `org.vera20k`; min SDK 26, target/compile SDK 36, NDK `28.2.13676358`, ARM64 `.so` built with Cargo `fast` profile.
-- Existing HUD: `TouchHudOverlay` forwards normal key edges; layout settings live in current `TouchHudLayout`. Legacy `TouchHudSettings` and editor have broader features but use an older input architecture and preference schema.
-- Build workflow: `.github/workflows/sync-upstream-android.yml`; internal sync workflow PR #1 is `feature/enable-android-new-sync` → `main`.
-- Device validation has not occurred. Keep a manual checklist for launch/resume, touch/HUD, SAF, mod/map import, and long-session stability.
+User reported a prior APK installed and showed native startup/UI/HUD, then failed game startup with archive `EACCES` and no game path configured. Device/API/build SHA and failing path are unknown. Record new device tests only from actual user/device evidence. Current local source changes are not a verified fix until Actions passes and the player retests.

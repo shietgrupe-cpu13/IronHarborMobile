@@ -94,6 +94,45 @@ public class AssetImportJobTest {
         }
     }
 
+    @Test public void directSelectionAtomicallyUpdatesConfigWithoutCopyingGameFiles() throws Exception {
+        File files = temporary.newFolder("files");
+        Path install = temporary.newFolder("original-game").toPath();
+        Files.write(install.resolve("ra2.mix"), new byte[] {1});
+        Files.write(install.resolve("ra2md.mix"), new byte[] {2});
+        Path config = files.toPath().resolve("config.toml");
+        writeUtf8(config, "[paths]\nra2_dir = \"old\"\n");
+
+        AssetImportJob.publishConfig(files,
+                "[paths]\nra2_dir = \"" + install.toString().replace("\\", "\\\\") + "\"\n");
+
+        assertTrue(readUtf8(config).contains(install.toString()));
+        assertTrue(Files.exists(install.resolve("ra2.mix")));
+        assertEquals(2, install.toFile().listFiles().length);
+        assertEquals(1, files.listFiles().length);
+    }
+
+    @Test public void publishesConfigUnderDocumentsCompatibilityDirectoryWhenNoRootConfigExists() throws Exception {
+        File dataRoot = temporary.newFolder("data-root");
+        File config = new File(dataRoot, "Config/config.toml");
+
+        AssetImportJob.publishConfig(dataRoot, "[paths]\nra2_dir = 'game'\n");
+
+        assertTrue(config.isFile());
+        assertFalse(new File(dataRoot, "config.toml").exists());
+        assertTrue(readUtf8(config.toPath()).contains("ra2_dir = 'game'"));
+    }
+
+    @Test public void dataRootPointerIsAtomicallyCreatedAndCanReturnToPrivateStorage() throws Exception {
+        File files = temporary.newFolder("files");
+        File shared = temporary.newFolder("shared");
+        File pointer = new File(files, "launcher-data-root.txt");
+
+        AssetImportJob.publishDataRoot(files, shared);
+        assertEquals(shared.getCanonicalPath(), readUtf8(pointer.toPath()));
+        AssetImportJob.clearDataRoot(files);
+        assertFalse(pointer.exists());
+    }
+
     private static AssetImportJob begin() {
         AssetImportJob job = AssetImportJob.begin();
         assertNotNull("a completed job must release admission", job);

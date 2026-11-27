@@ -322,7 +322,9 @@ fn ime_set_secret(secret: bool) {
 }
 
 /// The activity's folder-picker answer: the chosen tree as a `content://` URI,
-/// or an empty string when the player cancelled.
+/// or an empty string when the player cancelled. Java chooses direct access
+/// when the user opted in and the tree resolves to local primary storage;
+/// otherwise it uses the existing SAF copy importer.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_vera20k_VeraActivity_nativeOnFolderPicked(
     mut env: jni::JNIEnv,
@@ -340,11 +342,11 @@ pub extern "system" fn Java_org_vera20k_VeraActivity_nativeOnFolderPicked(
             // The dialog switches to its copying step before the copy's first
             // progress callback can arrive.
             vera20k::util::import_status::note(vera20k::util::import_status::ImportEvent::Started);
-            // The copy itself runs on the Java side (only ContentResolver can
-            // read a SAF tree); this starts it and returns immediately.
+            // Java resolves the SAF tree to an opted-in direct path when
+            // possible, or copies it through ContentResolver as a fallback.
             if let Err(error) = env.call_method(
                 &activity,
-                "startImport",
+                "onGameFolderPicked",
                 "(Ljava/lang/String;)V",
                 &[jni::objects::JValue::Object(&tree_uri)],
             ) {
@@ -379,7 +381,7 @@ pub extern "system" fn Java_org_vera20k_VeraActivity_nativeImportFinished(
     if text == "cancelled" {
         import_status::note(ImportEvent::Cancelled);
     } else if let Some(path) = text.strip_prefix("ok:") {
-        log::info!("asset import: copied into {path}; config.toml written");
+        log::info!("asset source configured at {path}");
         import_status::note(ImportEvent::Done(path.to_owned()));
     } else {
         let reason = text.strip_prefix("failed:").unwrap_or(&text).to_owned();
@@ -389,25 +391,27 @@ pub extern "system" fn Java_org_vera20k_VeraActivity_nativeImportFinished(
     let _ = env.exception_clear();
 }
 
-/// Prepare the next config using the same editor as the desktop folder picker.
-/// Java atomically publishes it only after the complete copy is ready.
+/// Prepare the next config using the engine's existing config editor. Java
+/// atomically publishes it after the SAF copy is complete (or immediately when
+/// selecting a shared-storage profile directory).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_vera20k_VeraActivity_nativeConfigForImport(
     mut env: jni::JNIEnv,
     _activity: JObject,
     directory: JString,
+    settings_directory: JString,
 ) -> jstring {
     let result = (|| -> anyhow::Result<jstring> {
         let directory: String = env.get_string(&directory)?.into();
-        let config_path = vera20k::util::platform_dir::get()
-            .ok_or_else(|| anyhow::anyhow!("The app data directory is unavailable"))?
-            .join("config.toml");
-        let previous = match std::fs::read_to_string(config_path) {
-            Ok(contents) => contents,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
-            Err(error) => return Err(error.into()),
-        };
+        let settings_directory: String = env.get_string(&settings_directory)?.into();
+        let settings_path = std::path::PathBuf::from(&settings_directory);
+        let previous = android_config_contents(&settings_path)?;
         let contents = vera20k::util::config::set_paths_key(&previous, "ra2_dir", &directory);
+        let contents = vera20k::util::config::set_paths_key(
+            &contents,
+            "settings_dir",
+            &settings_directory,
+        );
         Ok(env.new_string(contents)?.into_raw())
     })();
     match result {
@@ -416,6 +420,66 @@ pub extern "system" fn Java_org_vera20k_VeraActivity_nativeConfigForImport(
             let _ = env.throw_new("java/io/IOException", error.to_string());
             std::ptr::null_mut()
         }
+    }
+}
+
+/// Prepare a config for a game selected in place. Retail files remain at
+/// `directory`; user profiles, mods, maps, saves and logs live under
+/// `settings_directory` (Documents/RA2Harbor).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_vera20k_VeraActivity_nativeConfigForDirectSelection(
+    mut env: jni::JNIEnv,
+    _activity: JObject,
+    directory: JString,
+    settings_directory: JString,
+) -> jstring {
+    let result = (|| -> anyhow::Result<jstring> {
+        let directory: String = env.get_string(&directory)?.into();
+        let settings_directory: String = env.get_string(&settings_directory)?.into();
+        let settings_path = std::path::PathBuf::from(&settings_directory);
+        let previous = android_config_contents(&settings_path)?;
+        let contents = vera20k::util::config::set_paths_key(&previous, "ra2_dir", &directory);
+        let contents = vera20k::util::config::set_paths_key(
+            &contents,
+            "settings_dir",
+            &settings_directory,
+        );
+        Ok(env.new_string(contents)?.into_raw())
+    })();
+    match result {
+        Ok(contents) => contents,
+        Err(error) => {
+            let _ = env.throw_new("java/io/IOException", error.to_string());
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Validate a selected directory using the engine's real archive resolver,
+/// before Java persists it as the active installation.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_vera20k_VeraActivity_nativeValidateGameDirectory(
+    mut env: jni::JNIEnv,
+    _activity: JObject,
+    directory: JString,
+) -> jstring {
+    let result = (|| -> anyhow::Result<String> {
+        let directory: String = env.get_string(&directory)?.into();
+        let path = std::path::Path::new(&directory);
+        vera20k::assets::asset_manager::AssetManager::inspect_install(
+            path,
+            vera20k::assets::asset_manager::MediaArchiveMode::STOCK_DIGITAL,
+        )
+        .map(|_| format!("ok:{}", path.display()))
+        .map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))
+    })();
+    let message = match result {
+        Ok(message) => message,
+        Err(error) => format!("error:{error:#}"),
+    };
+    match env.new_string(message) {
+        Ok(value) => value.into_raw(),
+        Err(_) => std::ptr::null_mut(),
     }
 }
 
@@ -533,6 +597,44 @@ fn install_packaged_map(app: &AndroidApp) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Use the player-selected shared data directory when its pointer is valid.
+/// The pointer itself remains in app-private storage so it can be read before
+/// the engine changes its working directory.
+fn android_user_data_root(internal_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    let pointer = internal_dir.join("launcher-data-root.txt");
+    let value = std::fs::read_to_string(pointer).ok()?;
+    let path = std::path::PathBuf::from(value.trim());
+    (path.is_absolute() && path.is_dir()).then_some(path)
+}
+
+/// Read the configuration associated with the selected Android data root,
+/// then fall back to the app's previous private configuration during migration.
+fn android_config_contents(data_dir: &std::path::Path) -> anyhow::Result<String> {
+    let active_dir = vera20k::util::platform_dir::get();
+    let mut candidates = vec![
+        data_dir.join("config.toml"),
+        data_dir.join("Config/config.toml"),
+    ];
+    if let Some(active_dir) = active_dir {
+        for candidate in [
+            active_dir.join("config.toml"),
+            active_dir.join("Config/config.toml"),
+        ] {
+            if !candidates.contains(&candidate) {
+                candidates.push(candidate);
+            }
+        }
+    }
+    for path in candidates {
+        match std::fs::read_to_string(&path) {
+            Ok(contents) => return Ok(contents),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(String::new())
+}
+
 /// Resolved by `android-activity`'s loader trampoline; the name is the ABI.
 ///
 /// Android calls the symbol with the activity's handle, which
@@ -582,13 +684,14 @@ fn android_main(app: AndroidApp) {
         set_state: ime_set_state,
         set_secret: ime_set_secret,
     });
-    // Android starts every process in "/" with no writable home. Hand the app's
-    // private folder to the engine before anything opens a file: it becomes
-    // both the working directory and the settings folder, so logs, config.toml,
-    // VERA.INI, saves and replays all persist there.
+    // Android starts every process in "/" with no writable home. Adopt the
+    // selected shared data root when its app-private pointer is valid; otherwise
+    // use the app's private folder. The chosen root becomes the working and
+    // settings directory before logs, config.toml, saves or replays are opened.
     let data_dir = app.internal_data_path();
     match app.internal_data_path() {
-        Some(dir) => {
+        Some(internal_dir) => {
+            let dir = android_user_data_root(&internal_dir).unwrap_or(internal_dir);
             if let Err(error) = vera20k::entry::adopt_android_data_dir(&dir) {
                 eprintln!("cannot use the app data directory: {error:#}");
             }

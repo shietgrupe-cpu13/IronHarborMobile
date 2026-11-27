@@ -123,15 +123,6 @@ jobs:
           bash "$RUNNER_TEMP/gradle-with-network-retry.sh" -p android \
             :app:compileDebugKotlin :app:testDebugUnitTest
 
-      - name: Install pinned Android NDK
-        if: steps.upstream.outputs.validate == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          sdkmanager --install "ndk;${ANDROID_NDK_VERSION}"
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
-          echo "sdk.dir=$ANDROID_HOME" > android/local.properties
-
       - name: Set up Rust and ARM64 target
         if: steps.upstream.outputs.validate == 'true'
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
@@ -145,6 +136,20 @@ jobs:
         with:
           shared-key: android-new-arm64
           key: fast
+
+      - name: Run focused Android data-root config regression
+        if: steps.upstream.outputs.validate == 'true'
+        shell: bash
+        run: python -m tools.cargo_run -- test -p vera20k-core --lib util::config::android_data_config_is_searched_after_working_directory_and_before_executable
+
+      - name: Install pinned Android NDK
+        if: steps.upstream.outputs.validate == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager --install "ndk;${ANDROID_NDK_VERSION}"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
+          echo "sdk.dir=$ANDROID_HOME" > android/local.properties
 
       - name: Install cargo-ndk
         if: steps.upstream.outputs.validate == 'true'

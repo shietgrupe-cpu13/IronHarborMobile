@@ -6,6 +6,10 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- Optional: requested only after the player chooses in-place game access.
+         SAF copy import remains available without granting this permission. -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+
     <!-- Vulkan is the shipping renderer baseline, so a device without it cannot
          run the game. GLES-only devices are not supported yet (P4 decision). -->
     <uses-feature

@@ -723,14 +723,36 @@ impl std::fmt::Display for ConfigFileError {
     }
 }
 
-/// Where [`GameConfig::load_from`] looks for config.toml, in order: the
-/// working directory, then beside the executable.
-fn config_candidates(working_dir: &Path, executable: &Path) -> Result<[PathBuf; 2]> {
+/// Where [`GameConfig::load_from`] looks for config.toml: working directory,
+/// Android's selected data-root Config directory when available, then the
+/// executable directory.
+fn config_candidates(working_dir: &Path, executable: &Path) -> Result<Vec<PathBuf>> {
+    #[cfg(target_os = "android")]
+    let android_data_dir = crate::util::platform_dir::get();
+    #[cfg(not(target_os = "android"))]
+    let android_data_dir = None;
+
+    config_candidates_with_android_data_dir(working_dir, executable, android_data_dir)
+}
+
+fn config_candidates_with_android_data_dir(
+    working_dir: &Path,
+    executable: &Path,
+    android_data_dir: Option<&Path>,
+) -> Result<Vec<PathBuf>> {
     let root = retail_asset_root_from_executable(executable)?;
-    Ok([
-        working_dir.join(CONFIG_FILE_NAME),
-        root.join(CONFIG_FILE_NAME),
-    ])
+    let mut candidates = vec![working_dir.join(CONFIG_FILE_NAME)];
+    if let Some(data_dir) = android_data_dir {
+        let android_config = data_dir.join("Config").join(CONFIG_FILE_NAME);
+        if !candidates.contains(&android_config) {
+            candidates.push(android_config);
+        }
+    }
+    let executable_config = root.join(CONFIG_FILE_NAME);
+    if !candidates.contains(&executable_config) {
+        candidates.push(executable_config);
+    }
+    Ok(candidates)
 }
 
 /// Return the directory that retail `WinMain` makes its file-search root.
@@ -909,6 +931,27 @@ mod tests {
         assert_eq!(
             fixture.load().unwrap().paths.ra2_dir,
             fixture.0.join("launch/local retail")
+        );
+    }
+
+    #[test]
+    fn android_data_config_is_searched_after_working_directory_and_before_executable() {
+        let fixture = ConfigFixture::new();
+        let android_data = fixture.0.join("Documents/Ra2Harbor");
+        let candidates = config_candidates_with_android_data_dir(
+            &fixture.0.join("launch"),
+            &fixture.0.join("app/vera20k"),
+            Some(&android_data),
+        )
+        .unwrap();
+
+        assert_eq!(
+            candidates,
+            vec![
+                fixture.0.join("launch/config.toml"),
+                android_data.join("Config/config.toml"),
+                fixture.0.join("app/config.toml"),
+            ]
         );
     }
 

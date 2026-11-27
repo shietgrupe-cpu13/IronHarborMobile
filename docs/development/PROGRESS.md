@@ -1,57 +1,39 @@
-# Iron Harbor Mobile progress
+﻿# Iron Harbor Mobile progress
 
-Updated 2026-11-27.
+Updated 2026-11-27. Current authoritative plan: [IRON_HARBOR_MASTER_PLAN.md](IRON_HARBOR_MASTER_PLAN.md).
 
-## Current Git state
+## Repository state
 
-- Working branch: `android-new` (remote `vera20k-fork/android-new`).
-- Last recorded source-and-plan snapshot: `c533ca3ebec18d245cd8215af92026074f5ba8bd` (`docs(android): track autonomous mobile roadmap`); later documentation commits are non-build changes.
-- Latest fetched upstream `origin/main`: `d1e28004aa17dc445cbfee450cfe6fa55c5fe949`.
-- Relationship: `android-new` contains upstream `main`, with seven fork commits on top and zero upstream commits missing at the last audit.
-- Old mobile reference: `android-development` remote HEAD `1293fb441727e2522f6a284d88faf4f108a1ee3e`; backup branch `backup/android-development-2026-11-27` is preserved.
-- Untracked `out/` is user/project data and has not been modified.
+- Branch: `android-new`, tracking `vera20k-fork/android-new`.
+- Current HEAD: `ea2bc99959c47eda1bbc297851e8d1c2b2a33c9e` (`docs(android): add autonomous Iron Harbor master plan`).
+- Fetched `origin/main`: `d1e28004aa17dc445cbfee450cfe6fa55c5fe949`; current branch is 11 commits ahead and 0 behind at this fetch.
+- Legacy source reference: `android-development` at `1293fb441727e2522f6a284d88faf4f108a1ee3e`; its backup refs remain preserved. Do not merge the branch wholesale.
+- `out/` is untracked user/project data and has not been read, changed or deleted.
+- Current storage work is **uncommitted** in `android/` and `src/util/config.rs`. Preserve it; do not call it CI-verified yet.
 
-## Completed and verified
+## Completed and verified previously
 
-- `2e19b4453` removes the inaccessible `KeyEvent.recycle()` call from the HUD dispatch path and reorders CI so Kotlin/JVM checks run before Rust.
-- `d3f9e61be` replaces Java 11 `Files.readString/writeString` calls in `AssetImportJobTest` with Android compile-stub-compatible helpers.
-- GitHub Actions run [45946514319](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45946514319) succeeded: Kotlin/JVM validation, ARM64 Rust build (`fast`, 8m32s), and debug APK assembly (26s). It also saved Rust and Gradle cache entries.
-- `529cbe103` adds pinned `actions/upload-artifact` upload for `android/app/build/outputs/apk/debug/*.apk`, named by branch and workflow SHA, with 14-day retention.
-- GitHub Actions run [45948571106](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45948571106) succeeded end to end: Kotlin/JVM checks, ARM64 Rust build, debug APK assembly, and artifact upload. Artifact `IronHarborMobile-android-new-arm64-529cbe103361ee75b4862ebc0226ad143ebc4572` is available, 53,330,817 bytes, with 14-day retention. Rust build took 5m12s on the cache-backed run; packaging took 11s.
-- `c533ca3eb` adds the five persistent development and handoff documents. It was pushed without triggering a build.
+- HUD key dispatch no longer calls inaccessible `KeyEvent.recycle()` (`2e19b4453`); the fix and API compatibility test passed in GitHub Actions.
+- Android JVM file helpers were corrected for Android API compatibility (`d3f9e61be`).
+- ARM64 debug APK artifact upload was added (`529cbe103`).
+- GitHub Actions run [45948571106](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45948571106) passed Kotlin/JVM validation, ARM64 Rust `fast` build, debug APK packaging and artifact upload. It produced a 53,330,817-byte artifact with 14-day retention. This is an older artifact and does not contain the current local storage changes.
+- Master plan added remotely at `ea2bc99959c47eda1bbc297851e8d1c2b2a33c9e`; local branch was fast-forwarded without losing source changes.
 
-## Latest successful build
+## Current implementation in progress (not yet built or tested)
 
-- All workflow stages passed. `Push verified upstream merge` was skipped because no newer upstream commit was available.
+- `AndroidSharedStoragePath.kt`: safely resolves primary-volume SAF document IDs to real directories, selects `Documents/Ra2Harbor`, and reuses existing `RA2Harbor`, `IronHarborRA2YR`, or `RA2IRONHARBOR` roots.
+- `VeraActivity.kt` and `AndroidManifest.xml`: informed opt-in to `MANAGE_EXTERNAL_STORAGE`, direct folder selection/validation and settings recovery; SAF copy remains available; direct data-root/config selection is persisted.
+- `AssetImportJob.kt`: atomic config publication under the engine's Android `Config` directory (while preserving a pre-existing root config) and atomic data-root pointer helpers.
+- `android/src/lib.rs` and `src/util/config.rs`: game install validation through the engine resolver; Android startup reads the selected data-root pointer; Android config search includes `Documents/<root>/Config/config.toml`; config updates retain prior config where available.
+- JVM tests cover primary path safety, existing root reuse, required archive names, direct no-copy selection, config placement, pointer lifecycle and atomic publication. A focused Rust config-path test is added, and the Actions workflow runs it after JVM checks but before NDK/native compilation. These have **not** run locally or in Actions yet.
 
-## Known gaps
+## Known gaps and gates
 
-- No persistent signing credential is configured; generated debug keys differ between clean runners, so APK update/install-over-install is not yet guaranteed.
-- No post-assembly APK identity, ABI, native-library, signature, ZIP alignment, or ELF alignment audit is in the workflow yet.
-- One partial Android device test has been reported (installation/native startup/UI/HUD passed; game-file access failed). Full gameplay, device model/API, and artifact hash remain unverified; see `DEVICE_TEST_MATRIX.md`.
-- The automatic upstream sync schedule only activates when the workflow is present on the default branch. Internal PR #1 is still draft/open; its content has now run successfully on `android-new` and can be reviewed for internal merge.
-- No APK release is published; the APK is a downloadable workflow artifact, not a release.
+- The original Iron Harbor launcher GUI, launcher-based mod/profile/map management, diagnostics and renderer setting UI have not yet been restored on `android-new`.
+- Private app data migration is not implemented; current changes preserve existing files and config text where the resolver can read it but do not yet migrate old private saves/maps/mods or `VERA.INI` into the shared root.
+- Copy fallback without All files access must use private app storage for engine-writable state; this limitation needs clear UI and a SAF-backed shared-data design before claiming the master plan's shared-data requirement is complete.
+- Current Android engine/docs do not support GLES; the legacy renderer selector is not safe to expose as working.
+- Persistent release signing, full APK metadata/ABI/alignment checks, nightly release flow and the internal sync PR review remain open.
+- Physical gameplay validation is incomplete. User report says game archives failed with `EACCES` and no game installation configured; exact device/API/artifact and failing path were not captured.
 
-## Controls audit (source-level only)
-
-- Current `android-new` HUD: movable positions, show/hide, edit drag, `T`, and C1-C10 key behavior; JVM tests cover position parsing/serialization and bounds. Current runtime path is GameActivity key down/up forwarded through `VeraActivity` to the existing native input route.
-- Legacy branch adds settings/remapping/layout controls and a separate Rust-owned queued Android input/control-group path. Its source/tests were inspected but not executed; no legacy behavior should be called verified on `android-new`.
-- Preserve user control groups in the engine owner. In the old implementation, tap/hold group behavior is delegated to Rust; do not duplicate this decision in Kotlin.
-- Read-only audit agent report completed against exact SHAs in `UPSTREAM_TRACKING.md`; it made no source changes or builds.
-
-## Launcher and storage audit (source-level only)
-
-- Legacy `LauncherActivity` validates the requested profile through Rust JNI `launcher_selection_config` / `validate_launcher_selection`; keep this shared resolver rather than adding a Kotlin INI parser.
-- Legacy direct-path storage maps SAF trees to physical shared-storage paths and requires `MANAGE_EXTERNAL_STORAGE`. Current upstream instead uses SAF and copies into app-private staging. This is an unresolved design tradeoff against the prior read-in-place requirement; do not migrate broad storage permission blindly.
-- Current upstream has no launcher screen/profile catalog. The old branch includes mod/map catalogs, import jobs, campaigns, startup diagnostics, and bounded log archives. Source existence alone is not runtime validation.
-- Migration order: launcher/activity shell -> Rust-owned profile/config validation -> decide storage access model -> mod/map management -> diagnostics; defer campaign UI until current campaign progress writer and UX are confirmed.
-
-## Physical-device storage result and follow-up
-
-- User-reported physical-device check of the latest `android-new` APK: installation succeeded, native engine started, UI rendered, and HUD was visible. Gameplay startup failed with `Could not load the game archives: access was denied (os error 13)`; the screen also reported no game installation configured. Device model/API, artifact SHA, selected folder, import completion, active config path, and failing archive path were not included, so neither message's root cause is confirmed. This is a partial runtime result, not gameplay readiness.
-- Current upstream SAF path is a copy importer: `VeraActivity.startFolderPicker` -> JNI `nativeOnFolderPicked` -> `startImport`/`ContentResolver` traversal -> `AssetImportJob` staging under app-private `filesDir` -> JNI configuration editor writes `[paths].ra2_dir` to the staged copy only after successful completion. The selected URI is not the runtime asset path.
-- The old Iron Harbor path stored a physical shared-storage path and read in place, but `SharedDataStorage.directPathForTree` requires Android's `Environment.isExternalStorageManager()` and therefore `MANAGE_EXTERNAL_STORAGE`. That is broad access and only works for local primary-volume folders. It is not safe to transplant as the default.
-- Engine file access currently requires filesystem paths: `AssetManager` enumerates the install directory and `MixArchive::load` opens/maps archive files. A SAF `content://` URI cannot be substituted directly. A persisted tree grant does not make raw native path reads valid.
-- Next: obtain diagnostic details for the reported open failure; show the active configured path and validate it through the engine-owned asset/config resolver before enabling Play; present a direct recovery instruction for no configured installation; then compare a SAF-backed archive source against optional explicitly granted direct-path access and current copy import. Keep game-file read-in-place as the goal, avoid duplicating the installation, and do not request all-files access by default. No source fix is considered verified yet.
-
-See `HANDOFF.md` for exact next actions.
+Next: complete source review of the uncommitted storage/config integration, run `git diff --check` and formatting-only checks; update docs; commit/push the focused slice; use GitHub Actions, inspect logs and artifact, then continue restoring the original launcher GUI. No local compilation.

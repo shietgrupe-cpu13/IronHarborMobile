@@ -1,38 +1,34 @@
-# Iron Harbor Mobile development roadmap
+﻿# Iron Harbor Mobile development roadmap
 
-Updated 2026-11-27. Primary integration branch: `android-new`.
+Updated 2026-11-27. Authoritative specification: [IRON_HARBOR_MASTER_PLAN.md](IRON_HARBOR_MASTER_PLAN.md). Integration branch: `android-new`.
 
-## Phase 2 — Build and distribution infrastructure
+## Phase 2 — Build and distribution
 
-**In progress.** `android-new` is based on current VERA20K `main` and has a GitHub Actions workflow for scheduled/manual upstream sync and Android validation. It runs Kotlin compilation and JVM tests before native compilation; builds `aarch64-linux-android` with the `fast` profile; packages a debug APK; and now uploads the APK as a run artifact for 14 days. Rust and Gradle caches are configured. `android-new` is explicitly allowed to write its own Gradle cache scope.
+**In progress.** GitHub Actions validates Kotlin/JVM before the ARM64 Rust build, packages an ARM64 debug APK, and uploads a 14-day artifact. The last recorded successful run is [45948571106](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45948571106); it predates the current storage work. APK identity, ABI, ZIP/ELF alignment, signature and source metadata are not yet audited in the workflow. Persistent signing and public releases remain pending; do not create or publish signing secrets without the user's approval. Review internal PR #1 before relying on the scheduled sync from default `main`.
 
-Artifact gate passed on Actions run [45948571106](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/45948571106); GitHub confirms the artifact is downloadable. Remaining Phase 2 work:
+## Phase 3 — Original launcher, storage and configuration
 
-- Validate APK package identity, ARM64 native library, ZIP/ELF alignment, and signature before upload.
-- Embed upstream SHA, fork SHA, and build identity in the artifact metadata.
-- Establish persistent signing for install-over-install. This requires a protected repository secret/credential and explicit user approval; the current debug key is generated per run.
-- Enable the scheduled synchronization workflow on the repository's default branch by merging internal PR #1 after reviewing its final diff and successful validation.
-- Add stable/nightly release handling only after signing and source-to-artifact traceability are configured. Do not publish releases yet.
+**Storage integration in progress; original launcher GUI not yet migrated.** The current engine is still upstream `GameActivity`, not the original Iron Harbor launcher. Current local changes add optional, informed All files access; a primary-volume SAF-folder-to-path mapping; engine-owned installation validation; direct game-file selection; a SAF copy fallback; persisted data-root selection; and config lookup in the legacy Android `Config` location. JVM and Rust regression tests have been added but are not run locally. CI must validate the current candidate before any claim of completion.
 
-## Phase 3 — Mobile gameplay and controls
+The canonical data root is `Documents/Ra2Harbor`. Reuse an existing `RA2Harbor`, `IronHarborRA2YR`, or `RA2IRONHARBOR` directory before creating a new root. Never move/delete user data. Direct access is optional and explicitly disclosed; SAF remains the fallback. Existing installed game files are read in place when direct access is used.
 
-**Audit complete; migration not yet complete.** `android-new` includes a movable Android touch HUD from upstream PR #5295 (commits `302be2b45`, `a725dc756`). It supports show/hide, edit drag, normalized persisted positions, `T` select-matching, and C1-C10 recall/assign chords. The HUD's key dispatch correction is in `2e19b4453`.
+Remaining work: complete review/CI for storage and config-root selection; preserve/migrate existing private app data safely; restore the original launcher GUI and lifecycle; then migrate mod/profile selection, map management, diagnostics and only supported renderer controls. Current upstream documents Vulkan-only Android support; do not expose a GLES selector until the engine actually supports it.
 
-The old `android-development` branch at `1293fb441727e2522f6a284d88faf4f108a1ee3e` adds settings modes/layout presets, per-button size/opacity, remapping, two control-set visibility, editor and SAF layout backup, held-key lifecycle handling, immersive mode, camera zoom, text-input hooks, and an engine-owned queued Android input path. These are source-audited features, not runtime-verified on `android-new`. The old engine queue and control-group JNI path are architecturally different; port individual behavior through current GameActivity/winit owners rather than copying the old queue or adding another event loop.
+## Phase 4 — Dynamic in-game HUD
 
-Next: port a neutral HUD settings model and persistence with schema migration/tests; then adapt the editor and input lifecycle against current engine ownership. Camera zoom and immersive mode are independent later slices. Physical device validation remains manual.
-
-## Phase 4 — Launcher and file management
-
-**Audit complete; migration not yet started.** A user-reported device run confirms install, native startup, UI and HUD, but game startup fails with archive `EACCES` and “no game installation configured”; see `DEVICE_TEST_MATRIX.md`. The old launcher passes selection through Rust JNI validation/config publication so it agrees with gameplay; do not replace it with duplicate Kotlin INI parsing. Old direct-path storage requires `MANAGE_EXTERNAL_STORAGE`, while upstream SAF copies to app-private staging. Engine archive loading uses path enumeration and `File::open`/mmap, so a `content://` SAF URI is not a usable `Path`. Before importing launcher code, diagnose the active config and failing path, then select a design that preserves read-in-place without making broad access mandatory. A SAF-backed file source requires an explicit engine I/O design and memory review. The old branch also has mod/map catalogs, import jobs, campaign progress, startup diagnostics, and bounded diagnostic ZIPs. Preserve original installations and avoid broad storage access until the conflict is resolved.
+**Not started on `android-new`.** The branch has the upstream movable HUD, but not the legacy editor/settings feature set. Migrate a schema-backed, user-extensible in-game editor, per-button appearance and bindings, profile persistence and reliable multi-touch/lifecycle behavior through the existing GameActivity/winit input owner. Do not add a second event loop or duplicate engine-owned control-group semantics.
 
 ## Phase 5 — Upstream contribution preparation
 
-**Not started.** Classify each useful Android-neutral improvement against current upstream, separate Android-specific code from Iron Harbor branding/distribution, then prepare small contribution candidates with tests and documentation. Do not open upstream PRs without approval.
+**Not started.** Compare each completed mobile feature against current upstream; separate reusable behavior from Iron Harbor branding and distribution. Prepare small tested candidate descriptions/branches only after the relevant feature is stable. External PRs require approval.
 
-## Guardrails
+## Guardrails and next order
 
-- Keep `android-development` and `backup/android-development-2026-11-27` intact; never merge the old branch wholesale.
-- Preserve upstream simulation, rendering, mod, and gameplay behavior.
-- Do not run local Rust or Gradle builds. Use GitHub Actions; inspect logs on failure.
-- Do not claim device verification without a real device run.
+1. Finish current storage/config-root slice and pass GitHub Actions.
+2. Restore the original Iron Harbor launcher GUI without replacing it with a generic UI.
+3. Restore launcher profile/mod/map/file management using Rust's resolver as authority.
+4. Restore supported renderer settings and diagnostics.
+5. Implement the dynamic in-game HUD and profile editor.
+6. Prepare upstream contribution candidates.
+
+No local Rust/Cargo/Gradle/APK builds. Do not modify the legacy reference or the untracked `out/` directory. CI success is not device/gameplay validation; the partial user-reported device result remains open in `DEVICE_TEST_MATRIX.md`.
