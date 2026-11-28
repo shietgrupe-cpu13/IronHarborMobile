@@ -12,7 +12,7 @@ on:
         default: debug
         required: true
       publish_release:
-        description: "Publish the validated release APK as a public GitHub Release"
+        description: "Publish the validated APK as a GitHub Release (workflow changes may require ANDROID_RELEASE_GITHUB_TOKEN)"
         type: boolean
         default: false
         required: true
@@ -47,6 +47,7 @@ jobs:
     env:
       BUILD_TYPE: ${{ inputs.build_type || 'debug' }}
       PUBLISH_RELEASE: ${{ inputs.publish_release || false }}
+      HAS_RELEASE_API_TOKEN: ${{ secrets.ANDROID_RELEASE_GITHUB_TOKEN != '' }}
     steps:
       - name: Check out android-new
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -63,6 +64,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote add upstream https://github.com/YuriPlanet/vera20k.git
           git fetch upstream main
+          git fetch origin main
           base_sha="$(git rev-parse HEAD)"
           upstream_sha="$(git rev-parse upstream/main)"
           changed=false
@@ -78,6 +80,12 @@ jobs:
             echo "::error::Public release publishing requires build_type=release."
             exit 1
           fi
+          source_sha="$(git rev-parse HEAD)"
+          if [[ "$PUBLISH_RELEASE" == true && "$HAS_RELEASE_API_TOKEN" != true ]] && \
+             ! git diff --quiet origin/main "$source_sha" -- .github/workflows; then
+            echo "::error::This release target changes .github/workflows relative to main. GITHUB_TOKEN cannot create that release tag; add repository secret ANDROID_RELEASE_GITHUB_TOKEN with Contents: write and Workflows: write, or publish from main. No build was started."
+            exit 1
+          fi
           build_profile=fast
           if [[ "$BUILD_TYPE" == release ]]; then build_profile=shipping; fi
           validate=false
@@ -86,7 +94,6 @@ jobs:
              [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_ACTOR" != github-actions\[bot\] ]]; then
             validate=true
           fi
-          source_sha="$(git rev-parse HEAD)"
           {
             echo "base_sha=$base_sha"
             echo "source_sha=$source_sha"
@@ -336,7 +343,9 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: android-new-arm64
-          key: arm64-${{ needs.prepare.outputs.build_profile }}
+          # Keep the former fast/shipping suffixes so this refactor can restore
+          # the existing ARM64 caches instead of forcing a cold rebuild.
+          key: ${{ needs.prepare.outputs.build_profile }}
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
@@ -642,7 +651,7 @@ jobs:
           success() && github.event_name == 'workflow_dispatch' &&
           needs.prepare.outputs.build_type == 'release' && inputs.publish_release
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.ANDROID_RELEASE_GITHUB_TOKEN || github.token }}
           SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
           UPSTREAM_SHA: ${{ needs.prepare.outputs.upstream_sha }}
         shell: bash
