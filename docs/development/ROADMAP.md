@@ -2,7 +2,13 @@
 
 Updated 2026-11-28. Authoritative specification: [IRON_HARBOR_MASTER_PLAN.md](IRON_HARBOR_MASTER_PLAN.md). Integration branch: `android-new`.
 
-## Latest checkpoint — workflow 46050368117 passed
+## Latest checkpoint — workflow 46090355627 passed
+
+Commit `f4ef8bbf1` passed run [46090355627](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46090355627): Kotlin/JVM, focused Rust regressions, optimized ARM64 native build, debug APK assembly, persistent signature, package identity, ZIP/ELF alignment checks and artifact upload. Artifact [15241902961](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46090355627/artifacts/15241902961) is 54,431,155 bytes, SHA-256 `e9e96beb5bc217792df712842c8fef3e197b89296f6c754263bbc1a1e40b0b15d`, expires 2026-12-12. CI then merged upstream change `c7868bc8f0756f063dd944b91a1a90d565849246`; local/remote `android-new` is `b94e433a9`. No physical-device validation occurred.
+
+Selected-mod loose maps are staged temporarily into the canonical `Documents/RA2Harbor/Maps` directory. Prior `Configs/Maps` content is migrated non-destructively. User device testing is required to verify Choose Map visibility and safe cleanup. Do not describe this as device-verified.
+
+## Prior checkpoint — workflow 46050368117 passed
 
 Commit `1703630f7fd5027eaf89dea04a1f5333e88a7e62` passed run [46046233771](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46046233771): Kotlin/JVM, focused Rust regressions, ARM64 optimized `fast` library build, APK assembly, persistent signature, package identity, ZIP/ELF alignment checks and artifact upload. Debug artifact [15222634738](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46046233771/artifacts/15222634738) (54,082,616 bytes; SHA-256 `59d3e8d5e97947dbe79ddea60eae2f9ee7cde5504bd33235922c12ed782ae77f`) is available until 2026-12-11. No device/gameplay validation was performed.
 

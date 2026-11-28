@@ -2,6 +2,13 @@
 
 Updated 2026-11-28.
 
+## Latest sync and validation — 2026-11-28
+
+- Actions run [46090355627](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46090355627) passed Kotlin/JVM validation, focused Rust regressions, ARM64 native build, signed debug APK packaging and APK identity/signature/alignment checks. Artifact [15241902961](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46090355627/artifacts/15241902961) is an expiring CI artifact, not a release.
+- The sync job merged upstream commit `c7868bc8f0756f063dd944b91a1a90d565849246` (“Fix encrypted MIX, packed map, and UI section readers”, #5337) and pushed merge `b94e433a9` to `android-new`. Local branch was fast-forwarded to the pushed merge.
+- Android-specific changes remain fork-side: temporary mod-map staging and the Iron Harbor Maps path/migration. The CI sync conflict in `VeraActivity.kt` was resolved by preserving both fork lifecycle/input cleanup and upstream ZIP export dialog cleanup. No external PR was created.
+- Map staging is not yet device-verified. Player-visible map catalog rows and safe switch/unselect cleanup remain manual acceptance checks.
+
 ## Latest source/CI checkpoint (2026-11-28)
 
 - `origin/main` remains at `068e965efcf27bfccc59fab3663fe7bded3788be` (upstream `ec197f8a9`, PR #5323), a documentation/contract update; no later upstream change was incorporated in Actions run `46046233771`.
