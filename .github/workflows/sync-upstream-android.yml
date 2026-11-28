@@ -150,7 +150,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m tools.cargo_run -- test -p vera20k-core --lib util::config::tests::android_config_folder_is_canonical_and_root_config_is_a_migration_fallback
-          python -m tools.cargo_run -- test -p vera20k-core --lib util::config::tests::android_maps_use_configs_subdirectory_without_changing_other_platforms
+          python -m tools.cargo_run -- test -p vera20k-core --lib util::config::tests::android_and_desktop_maps_use_the_shared_maps_directory
           python -m tools.cargo_run -- test -p vera20k --lib app::mods::tests::managed_mod_selection_does_not_treat_descendants_as_profiles
           python -m tools.cargo_run -- test -p vera20k-core --lib assets::asset_manager::install_inspection_tests::shared_ares_support_is_mod_only_and_a_mod_archive_takes_precedence
           python -m tools.cargo_run -- test -p vera20k-core --lib util::ini_roots::tests::explicit_mo_profile_resolves_its_roots_and_requires_the_complete_triplet
