@@ -10,6 +10,8 @@ Updated 2026-11-28. User-reported results are identified separately from CI. Dev
 
 The migration code previously rescanned the canonical target directory for every entry while moving legacy `Configs/Maps` contents. The new source diff indexes each target directory once and has a JVM collision-preservation regression. This identifies and removes the repeated-scan algorithm, but no equivalent before/after device timing exists yet. Do not report a measured startup improvement. The MPModes warning is a separate engine/resource-selection issue.
 
+GitHub Actions run [46095669654](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46095669654), commit `cebb86b8e4ea367e9cbb7b6c532d6d436c135c6c`, passed JVM regression tests, focused Rust filters, ARM64 build, APK signing and alignment checks. Artifact [15243652837](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46095669654/artifacts/15243652837) (54,431,654 bytes) is build-verified only and still requires device validation.
+
 ## Latest CI artifact — awaiting physical-device test
 
 | Device / API | ABI | Status | Observed checks |

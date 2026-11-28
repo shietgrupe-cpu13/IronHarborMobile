@@ -4,12 +4,12 @@ Updated 2026-11-28. The authoritative specification is [IRON_HARBOR_MASTER_PLAN.
 
 ## Current unverified change — Maps migration stall
 
-- Worktree branch is `android-new`; last synced base was local `64d374eac`. Untracked `out/` must remain untouched.
+- Worktree branch is `android-new` at pushed commit `cebb86b8e4ea367e9cbb7b6c532d6d436c135c6c`; last synced base was `64d374eac`. Untracked `out/` must remain untouched.
 - Current source diff optimizes `SharedDataStorage.mergeLegacyDirectory`: target names are indexed once per directory rather than rescanned for each legacy entry. A focused JVM regression checks case-insensitive collision handling and preservation of an occupied legacy suffix.
 - Device evidence: latest startup diagnostic reports 7,711 ms in `documents_layout_check` of 7,747 ms preflight. `ensureLayout()` calls the old `Configs/Maps` migration; its previous nested directory rescans are the identified unbounded work. This is a source-based root-cause attribution; there is no equivalent before/after device timing yet.
-- CI has not run for this diff. Do not claim the fix verified until the Android JVM workflow passes. No local Kotlin/Rust/Gradle build was run.
+- GitHub Actions [46095669654](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46095669654) passed Kotlin/JVM, focused Rust, ARM64 native build, APK assembly, signing, package/alignment checks and artifact upload. Artifact [15243652837](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46095669654/artifacts/15243652837) is 54,431,654 bytes. This is CI verification only; there was no local build or device timing retest.
 - Separate remaining gameplay issue: latest logs report zero usable mode rows in `MPModesMD.ini`. The log also reports 497 mod maps staged in canonical `Documents/RA2Harbor/Maps` and no `Configs/Maps`. Mode roster/resource resolution still needs root-cause work; do not fabricate fallback modes or attribute it to this migration fix.
-- Next: inspect the focused diff, push the owned commit to `android-new`, monitor the Actions run, fix any actual failure, and update this handoff with its result/artifact. Physical-device retest is needed to compare startup and verify the map chooser independently.
+- Next: ask the user to install/test the artifact against an equivalent selected mod/map workload and compare `documents_layout_check`; separately investigate why the selected mod's effective mode roster is empty before claiming Choose Map works.
 
 ## Repository and verified build
 
