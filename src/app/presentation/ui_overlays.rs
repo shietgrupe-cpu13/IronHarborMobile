@@ -1595,6 +1595,9 @@ impl StatusViewport {
 pub(crate) struct TechnoExtras {
     ///6F519B..524E: BOMBCURS/MOUSEPAL N1 prefix, before every other status.
     pub bomb_clock: Option<SpriteInstance>,
+    /// The Ares `IvanBomb.Image` strip `bomb_clock` was cut from
+    /// (`SelectionOverlay::bomb_image`); `None` is BOMBCURS.SHP.
+    pub bomb_image: Option<usize>,
     ///6F5253..5345: WRENCH/MOUSEPAL N1 prefix, before rank and Building lines.
     pub wrench: Option<SpriteInstance>,
     /// Ares 10049FE0 (hook 0x6F526C): the POWEROFF/MOUSEPAL marker drawn
@@ -1629,6 +1632,37 @@ pub(crate) struct TechnoExtras {
 }
 
 impl TechnoExtras {
+    /// Move the status strip as a unit, preserving its chosen native mark
+    /// offsets and its fixed-pixel sizing under wheel zoom.
+    pub(super) fn shift_owner(&mut self, offset: [f32; 2]) {
+        if offset == [0.0; 2] {
+            return;
+        }
+        let sprites = self
+            .bomb_clock
+            .iter_mut()
+            .chain(&mut self.wrench)
+            .chain(&mut self.power_off)
+            .chain(&mut self.rank)
+            .chain(&mut self.background)
+            .chain(&mut self.shield_background)
+            .chain(&mut self.fills)
+            .chain(&mut self.scale)
+            .chain(&mut self.self_heal)
+            .chain(&mut self.talk_bubble)
+            .chain(self.digital_shapes.iter_mut().map(|(_, shape)| shape));
+        let labels = self
+            .digital_text
+            .iter_mut()
+            .chain(&mut self.info_text)
+            .chain(std::iter::once(&mut self.group))
+            .flat_map(|label| label.text.iter_mut().chain(&mut label.rectangles));
+        for piece in sprites.chain(labels) {
+            piece.position[0] += offset[0];
+            piece.position[1] += offset[1];
+        }
+    }
+
     /// Leaves out the families the mod's or map's status templates hide
     /// (`ui_modules::status::hide`): the health strip with its bracket and
     /// shield bar (the garrison pips share its list), the pip scale, the
@@ -2296,7 +2330,7 @@ pub(crate) fn techno_extras_for_parent(
         };
         if bomb_visible
             && rules.is_some()
-            && let (Some(bomb), Some(shape)) = (bomb, overlay.bomb_image(images))
+            && let (Some(bomb), Some((image, shape))) = (bomb, overlay.bomb_image(images))
             && let Some(frame) = bomb.clock_frame(
                 sim.session().binary_frame() as i32,
                 shape.frame_count(),
@@ -2305,6 +2339,7 @@ pub(crate) fn techno_extras_for_parent(
             && let Ok(frame) = usize::try_from(frame)
         {
             strip.bomb_clock = prefix(shape, Mark::BombClock, frame, 0.0);
+            strip.bomb_image = image;
         }
         let binary_frame = sim.session().binary_frame() as i32;
         let options = sim.session().game_options();
