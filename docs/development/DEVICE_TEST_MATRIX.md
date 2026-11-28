@@ -2,6 +2,14 @@
 
 Updated 2026-11-28. User-reported results are identified separately from CI. Device model/API and artifact hashes are recorded only when supplied.
 
+## Latest skirmish A/B diagnosis — 2026-11-28 (fix not yet built)
+
+| Device / API | ABI | Status | Observed checks |
+|---|---|---|---|
+| Xiaomi / Android 16 (exact model not recorded in these archives) | ARM64 | User IHLOGS, app `0.4.1 B59`, code 266 | The same 964-byte `MPModesMD.ini` from `ra2md.mix -> localmd.mix` loaded in a successful earlier mod session. In the Red Resurrection session it produced zero usable skirmish rows. Source trace identifies client map-mode filtering as the distinguishing step: if no client catalog mode matches native `map_filter`, every engine mode was removed. The client-catalog map path also returned before listing staged shared Maps. |
+
+Patch in progress preserves native modes only when the client catalog has zero native-mode matches (strict filtering remains if any mode matches) and adds loose maps from `Documents/RA2Harbor/Maps` to the client-catalog path. A focused regression is wired into GitHub Actions but has not run; no APK exists for this patch and no device validation has occurred. Next device check: open Choose Map for Red Resurrection, confirm modes and a staged map appear, load it, switch/unselect mods, then verify only managed copies are removed and personal/source maps remain.
+
 ## Latest startup and map evidence — 2026-11-28
 
 | Device / API | ABI | Status | Observed checks |

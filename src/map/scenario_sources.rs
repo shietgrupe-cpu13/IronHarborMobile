@@ -104,7 +104,7 @@ fn skirmish_scenario_records_in(
     let mut records = Vec::new();
 
     if let (Some(client), Some(root)) = (assets.client_install(), assets.mod_dir()) {
-        // A client catalog owns this folder's scenarios. The retail PKT is
+        // A client catalog owns the mod folder's scenarios. The retail PKT is
         // unrelated and can list maps with the wrong rules for this game.
         let modes = crate::skirmish_modes::skirmish_modes_from_assets(assets)?;
         for map in &client.maps {
@@ -135,6 +135,11 @@ fn skirmish_scenario_records_in(
             }
             records.push(record);
         }
+        // Iron Harbor stages selected-mod maps into the user's shared Maps
+        // directory. Client catalogs do not enumerate those files, so include
+        // them as supplemental loose maps without scanning unrelated game or
+        // mod directories.
+        append_loose_map_records(&mut records, &[], maps_dir, assets)?;
         return Ok(records);
     }
 
@@ -918,6 +923,62 @@ mod tests {
         let loaded = load_map_by_name_or_path_with_assets(base.path(), &row.file_name, &assets)
             .unwrap();
         assert_eq!(loaded.map.basic.name.as_deref(), Some("Arena from the selected mod"));
+    }
+
+    #[test]
+    fn client_catalog_without_native_mode_match_keeps_native_modes_and_shared_maps() {
+        use crate::assets::asset_manager::MediaArchiveMode;
+
+        let base = crate::assets::asset_manager::test_support::audio_test_install(
+            "client-catalog-missing-map-base",
+        );
+        let selected_mod = TestDirectory::new("client-catalog-missing-map-mod");
+        std::fs::create_dir_all(selected_mod.path().join("Resources")).unwrap();
+        std::fs::create_dir_all(selected_mod.path().join("INI")).unwrap();
+        selected_mod.write(
+            "Resources/ClientDefinitions.ini",
+            b"[Settings]\nMPMapsPath=INI/MPMaps.ini\n",
+        );
+        selected_mod.write(
+            "INI/MPMaps.ini",
+            b"[MultiMaps]\n0=ClientArena\n[Custom]\nDescription=Custom mode\n[ClientArena]\nGameModes=Custom\n",
+        );
+        selected_mod.write(
+            "ClientArena.map",
+            b"[Basic]\nName=Client catalog map\nGameMode=custom\n[Map]\nSize=0,0,2,1\n",
+        );
+        let shared_maps = TestDirectory::new("client-catalog-shared-maps");
+        shared_maps.write(
+            "ihmod_staged.map",
+            b"[Basic]\nName=Staged mod map\nGameMode=standard\n[Map]\nSize=0,0,2,1\n",
+        );
+        let mut assets = AssetManager::with_mod(
+            base.path(),
+            Some(selected_mod.path()),
+            MediaArchiveMode::STOCK_DIGITAL,
+        )
+        .unwrap();
+        let client = assets.client_install().expect("selected mod client catalog");
+        assert_eq!(client.maps.len(), 1);
+        assert_eq!(client.maps[0].game_modes, ["Custom"]);
+
+        let modes = crate::skirmish_modes::skirmish_modes_from_assets(&assets).unwrap();
+        assert!(
+            modes.iter().any(|mode| mode.map_filter == "standard"),
+            "unmapped client modes must not erase the native mode roster"
+        );
+        let records = skirmish_scenario_records_in(
+            base.path(),
+            &mut assets,
+            None,
+            Some(shared_maps.path()),
+        )
+        .unwrap();
+        assert!(records.iter().any(|record| {
+            record.file_name == "ihmod_staged.map"
+                && record.display_name == "Staged mod map"
+                && record.source == SkirmishScenarioSource::LooseMap("ihmod_staged.map".into())
+        }));
     }
 
     #[test]

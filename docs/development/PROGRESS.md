@@ -2,6 +2,14 @@
 
 Updated 2026-11-28. Current authoritative plan: [IRON_HARBOR_MASTER_PLAN.md](IRON_HARBOR_MASTER_PLAN.md).
 
+## 2026-11-28 — skirmish mode roster and staged mod maps (CI pending)
+
+- Compared the two newest IHLOGS with earlier successful sessions. The same 964-byte `MPModesMD.ini` from `ra2md.mix -> localmd.mix` loads successfully with another mod; Red Resurrection alone logs that no mode rows survive. This points to the client catalog's mode names filtering out every native YR mode, not a missing/corrupt common archive. The separate earlier Mental Omega/YR profile mismatch remains distinct.
+- Changed `skirmish_modes_from_selected_ini` to preserve the engine's native mode roster when a client catalog has no intersection with native `map_filter` values; the existing strict filtering remains when the catalog has compatible modes. In the client-catalog map path, shared `Documents/RA2Harbor/Maps` loose maps are now added as supplemental entries, keeping user maps visible without scanning unrelated folders.
+- Added a focused Rust regression using a legacy client catalog without a `[GameModes]` registry, a catalog-only `Custom` mode, and a `standard` map staged in the shared Maps directory. The test asserts the mod catalog was actually recognized, native `standard` remains available, and the staged map is listed.
+- Added that focused test to `.github/workflows/sync-upstream-android.yml`. `git diff --check` passed; no local Rust/Cargo/Gradle build or test was run. CI has not run yet. Device behavior is unverified.
+- Previous note that `ClientInstall::read` necessarily built an empty client catalog is superseded: current parser infers catalog modes, but the subsequent native-mode intersection can still remove the entire engine roster. The map list plus staged map visibility now require CI and device verification.
+
 ## 2026-11-28 — legacy Maps migration startup stall
 
 - Latest device diagnostics measured `documents_layout_check` at 7,711 ms (total Play preflight 7,747 ms). In the direct-path storage mode used by this device, the only unbounded work inside `ensureLayout()` is the legacy `Configs/Maps` migration. Its merge loop called `target.listFiles()` for each entry and again for collisions, causing repeated full-directory scans on large map collections.
