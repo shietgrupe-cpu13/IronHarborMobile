@@ -96,6 +96,7 @@ class LauncherActivity : Activity() {
     private var modMapScanGeneration = 0
     private var modMapScanLoading = false
     private var modMapScanResult: List<LauncherModMapCatalog.MapFile> = emptyList()
+    private var modMapStagingNote: String? = null
     private var validatingLaunch = false
     @Volatile private var launchCancellationRequested = false
     private var applyingModSelection = false
@@ -137,6 +138,7 @@ class LauncherActivity : Activity() {
         updateEngineDataRoot()
         buildShell()
         refreshInstallation()
+        synchronizePersistedModMaps()
         showSupportPromptForBuild()
     }
 
@@ -1308,6 +1310,9 @@ class LauncherActivity : Activity() {
         card.addView(kicker("ENGINE MAP LIBRARY"))
         card.addView(text(mapDirectory?.absolutePath ?: "Engine map folder unavailable", 12, R.color.launcher_muted))
         card.addView(text("Editable folder: Documents/RA2Harbor/Configs/Maps", 12, R.color.launcher_accent), margin(top = 6))
+        modMapStagingNote?.let { note ->
+            card.addView(text(note, 13, R.color.launcher_muted), margin(top = 6))
+        }
         if (mapDirectory == null) {
             card.addView(text(
                 "The current config.toml could not be resolved. Fix the engine configuration before importing maps.",
@@ -1357,7 +1362,7 @@ class LauncherActivity : Activity() {
         }
     }
 
-    /** Show the selected mod's own map tree in place; never import or flatten it. */
+    /** Show the selected mod's source map tree and explain its temporary engine copies. */
     private fun renderActiveModMaps() {
         val selected = modCatalog.selectedMod
         val card = card()
@@ -1383,7 +1388,12 @@ class LauncherActivity : Activity() {
             card.addView(text("No supported loose map files were found in this mod folder.", 13, R.color.launcher_muted), margin(top = 6))
         } else {
             val groups = modMapScanResult.groupingBy { it.group }.eachCount().toSortedMap(String.CASE_INSENSITIVE_ORDER)
-            card.addView(text("${modMapScanResult.size} map files found. They stay in the mod folder; nothing is imported.", 13, R.color.launcher_muted), margin(top = 6))
+            val engineMaps = modMapScanResult.count { File(it.relativePath).extension.lowercase(Locale.ROOT) in setOf("map", "yrm", "mpr") }
+            card.addView(text(
+                "$engineMaps engine map${if (engineMaps == 1) "" else "s"} are mirrored temporarily into Documents/RA2Harbor/Configs/Maps. The original mod files stay in place; unselecting the mod removes only unchanged Iron Harbor copies.",
+                13,
+                R.color.launcher_muted,
+            ), margin(top = 6))
             groups.forEach { (group, count) ->
                 card.addView(text("$group  ·  $count", 12, R.color.launcher_text), margin(top = 5))
             }
@@ -1887,6 +1897,8 @@ class LauncherActivity : Activity() {
         launcherIo.execute {
             val started = SystemClock.elapsedRealtime()
             val timings = mutableListOf<String>()
+            var stagedModMapCount: Int? = null
+            var mapStageWarning: String? = null
             val selection = runCatching {
                 if (request != modSelectionGeneration.get()) throw java.util.concurrent.CancellationException("Superseded selection")
                 val nativeStarted = SystemClock.elapsedRealtime()
@@ -1906,6 +1918,23 @@ class LauncherActivity : Activity() {
                 }
                 SharedDataStorage(this).setExternalModPath(externalPath)
                 timings += "launcher_preferences_ms=${SystemClock.elapsedRealtime() - preferenceStarted}"
+                if (profile == null) {
+                    val mapsStarted = SystemClock.elapsedRealtime()
+                    val mapsSync = runCatching {
+                        val mapsDirectory = File(nativeMapsDirectory(dataDirectory.absolutePath))
+                        val modDirectory = modName?.let {
+                            selectedModDirectory(it)
+                                ?: throw IOException("The selected mod folder is no longer accessible; its map files were left unchanged.")
+                        }
+                        LauncherModMapStaging.sync(mapsDirectory, modDirectory)
+                    }
+                    timings += "temporary_mod_maps_ms=${SystemClock.elapsedRealtime() - mapsStarted}"
+                    mapsSync.onSuccess {
+                        stagedModMapCount = it.activeMaps
+                        if (it.cleanupPending > 0) mapStageWarning = "cleanup is pending for ${it.cleanupPending} previous map copy/copies"
+                    }
+                        .onFailure { error -> mapStageWarning = error.message ?: error.javaClass.simpleName }
+                }
                 contents
             }
             val elapsed = SystemClock.elapsedRealtime() - started
@@ -1924,7 +1953,21 @@ class LauncherActivity : Activity() {
                 applyingModSelection = false
                 selection.fold(
                     onSuccess = {
-                        modSelectionNote = "Saved. Profile and mod selection completed in ${elapsed} ms. Archive indexing is deferred to game startup and runs once there."
+                        modSelectionNote = buildString {
+                            append("Saved. Profile and mod selection completed in ${elapsed} ms. Archive indexing is deferred to game startup and runs once there.")
+                            stagedModMapCount?.let { append(" $it temporary mod maps are in the unified Maps folder.") }
+                            mapStageWarning?.let { append(" Mod map staging could not finish: $it") }
+                        }
+                        if (stagedModMapCount != null) {
+                            val summary = if (stagedModMapCount == 0) {
+                                "No temporary mod maps are staged. Unselecting the mod clears only managed copies."
+                            } else {
+                                "$stagedModMapCount temporary mod map copies are staged in the engine Maps folder. Unselecting the mod removes only unchanged managed copies."
+                            }
+                            modMapStagingNote = summary + (mapStageWarning?.let { " Cleanup is pending: $it" } ?: "")
+                        } else if (mapStageWarning != null) {
+                            modMapStagingNote = "Temporary mod-map sync failed: $mapStageWarning"
+                        }
                         refreshInstallation()
                     },
                     onFailure = { error ->
@@ -1934,6 +1977,39 @@ class LauncherActivity : Activity() {
                         }
                     },
                 )
+            }
+        }
+    }
+
+    /** Reconcile temporary maps once at launcher startup for the persisted selection. */
+    private fun synchronizePersistedModMaps() {
+        val dataDirectory = engineDataDirectory()
+        launcherIo.execute {
+            val catalog = runCatching { readModCatalog(dataDirectory) }.getOrNull() ?: return@execute
+            if (catalog.configError != null || !catalog.containsSelectedMod()) return@execute
+            val result = runCatching {
+                val mapsDirectory = File(nativeMapsDirectory(dataDirectory.absolutePath))
+                val modDirectory = catalog.selectedMod?.let { selectedModDirectory(it) }
+                if (catalog.selectedMod != null && modDirectory == null) {
+                    throw IOException("The saved mod folder is inaccessible; temporary maps were left untouched.")
+                }
+                if (LauncherModMapStaging.isSynchronized(mapsDirectory, modDirectory)) {
+                    null
+                } else {
+                    LauncherModMapStaging.sync(mapsDirectory, modDirectory)
+                }
+            }
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                modMapStagingNote = result.fold(
+                    onSuccess = {
+                        if (it == null) "Temporary mod maps are already synchronized. Unselecting the mod removes only unchanged managed copies."
+                        else "${it.activeMaps} temporary mod map copies are staged. Unselecting the mod removes only unchanged managed copies." +
+                            if (it.cleanupPending > 0) " Cleanup pending for ${it.cleanupPending} old map file(s)." else ""
+                    },
+                    onFailure = { "Temporary mod-map sync failed: ${it.message ?: it.javaClass.simpleName}" },
+                )
+                if (page == Page.MAPS) renderPage()
             }
         }
     }

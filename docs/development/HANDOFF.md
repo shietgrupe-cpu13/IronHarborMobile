@@ -14,6 +14,9 @@ Updated 2026-11-28. The authoritative specification is [IRON_HARBOR_MASTER_PLAN.
 
 ## Current implementation status
 
+- New pending change: selected mod loose maps are staged into the configured `Documents/RA2Harbor/Configs/Maps` folder for the engine’s flat map catalog. The app uses a manifest and content hashes to remove only unchanged Iron Harbor generated copies on mod switch/unselect. Focused JVM tests are authored but not yet run; no local builds were performed. Await Actions, inspect its Kotlin/JVM and ARM64 APK verification results, then ask the user to verify the mod’s map list and vanilla cleanup on device.
+- Latest IHLOGS archive shows Red-Resurrection starts after 15 ms lightweight launcher preflight. No loose map file records appear in `ra2.log`; `MPModesMD.ini` has no usable mode rows in three starts. The latter warning may independently affect map/mode presentation and remains unresolved pending exact on-device Choose Map observation.
+
 - Commit `1703630f7` integrates the configured action list and persisted launcher HUD layout with `TouchHudOverlay`. Existing positions, size/global scale, global opacity, visibility, set selection and saved layout editor are consumed by gameplay. EDIT toggles drag mode; EDIT long-press opens the shared layout editor. Held route keys release on pause, focus loss and destruction. Focused JVM tests passed.
 - The HUD remains partial. Per-button opacity is implemented in `8e02d79b8` and CI-verified, but awaits device testing. Arbitrary add/duplicate/rename, named profiles, broader modifier/chord editing and physical multitouch testing remain.
 - Red Resurrection catalog inference, nested-map path resolution, HUD backup migration, and HUD action/layout parser changes have host-side regressions. They do not prove actual RR or MO gameplay/resource selection on device.

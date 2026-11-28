@@ -2,6 +2,15 @@
 
 Updated 2026-11-28. Current authoritative plan: [IRON_HARBOR_MASTER_PLAN.md](IRON_HARBOR_MASTER_PLAN.md).
 
+## Current work — selected-mod maps in the engine Maps folder
+
+- Latest IHLOGS archive (2026-11-28, `Iron Harbor Mobile full diagnostics`) reports Red-Resurrection selected and a 15 ms lightweight preflight. Its game log confirms the mod starts, but contains no loose `.map`, `.yrm`, or `.mpr` records; it logs `mapsmd03.mix` with one entry and warns three times that the selected `MPModesMD.ini` has no usable mode rows. The log does not by itself prove what the Choose Map screen displayed.
+- Source trace found the concrete nested-map gap: the launcher recursively lists mod maps but says they remain in place; the engine’s scenario catalog scans the mod root as a flat directory and separately scans the configured Android `Configs/Maps` folder as a flat directory. Nested mod maps therefore never enter the Choose Map catalog.
+- Added `LauncherModMapStaging` to mirror loose `.map`, `.yrm`, and `.mpr` files from the selected mod into the configured engine Maps directory with generated collision-resistant filenames. Original mod files remain in place. An atomic ownership manifest tracks only Iron Harbor copies; unselect/switch removes only unchanged copies, preserving user maps and user-edited files. Startup reconciles the persisted selection without rescanning an already synchronized mod.
+- Mod/profile selection records map-staging timing. Profile-only changes do not rescan maps. Startup sync and selection copying run on the existing launcher I/O executor.
+- Added JVM regression cases for nested map staging, unchanged source files, content refresh on reselect, mod switching, vanilla unselect cleanup, and preservation of user-owned/edited files. No local Kotlin/Gradle/Rust compilation or tests were run; `git diff --check` passed. GitHub Actions and device verification are pending.
+- Legacy `android-development` currently has the same read-only map listing behavior; it does not implement this temporary copy lifecycle. This change implements the requested behavior without modifying that branch.
+
 ## Latest verified checkpoint — 2026-11-28 / commit `57c066a9b`
 
 - Source commit `57c066a9b119629bcdfcba71ff3c88eb7aa14829` is pushed to `android-new`; docs-only checkpoint commits may follow it. Untracked `out/` is untouched and must be preserved.
