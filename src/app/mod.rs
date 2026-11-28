@@ -81,6 +81,8 @@ pub(crate) mod input;
 /// `vera20k-android` cdylib).
 #[cfg(target_os = "android")]
 pub use input::android_mouse;
+#[cfg(target_os = "android")]
+pub use input::android_hud;
 pub(crate) mod lan_service;
 pub(crate) mod loading;
 #[cfg(target_os = "macos")]

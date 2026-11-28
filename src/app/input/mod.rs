@@ -4,6 +4,8 @@
 
 #[cfg(any(target_os = "android", test))]
 pub mod android_mouse;
+#[cfg(target_os = "android")]
+pub mod android_hud;
 pub(crate) mod autoload;
 pub(crate) mod smart_command;
 pub(crate) mod build_repeat;

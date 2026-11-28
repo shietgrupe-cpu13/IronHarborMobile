@@ -2,8 +2,7 @@ package org.vera20k
 
 import android.view.KeyEvent
 
-/** Persisted Android control layout. It contains presentation/input bindings only;
- * actions are sent to the engine through the ordinary keyboard event path. */
+/** Persisted Android control layout and bindings to VERA's existing game inputs. */
 internal object TouchHudSettings {
     const val PREFS = "iron_harbor_controls"
     const val HUD_ENABLED = "hud_enabled"
@@ -47,17 +46,17 @@ internal object TouchHudSettings {
         val shortcutLabel: String? = null,
     )
 
-    // Android KeyEvent values match winit's physical keys. Defaults below use
-    // Yuri's Revenge hotkeys for actions with a direct one-key equivalent.
-    // Modifier-plus-click commands remain unbound; a one-shot key cannot
-    // faithfully perform those interactions.
+    // Android KeyEvent values match winit's physical keys. Direct YR commands
+    // use their PC keys; click modifiers remain held until the battlefield
+    // click/drag and are released on a second tap or lifecycle loss.
     private val commandButtons = listOf(
         Button("STOP", "STOP", 47),
         Button("GUARD", "GUARD", 35),
         Button("DEPLOY", "DEPLOY", 32),
         Button("SCATTER", "SCATTER", 52),
     ) + listOf(
-        "FIRE" to "Force fire", "MOVE" to "Attack move", "ADD" to "Add selection",
+        "FIRE" to "Force fire", "MOVE" to "Force move", "ADD" to "Add selection",
+        "ATTACK" to "Attack move",
         "MORE" to "More commands", "BOX" to "Box selection", "ROUTE" to "Waypoint route",
         "HOME" to "Home base", "TYPE" to "Select matching units", "NEXT" to "Next unit",
         "PREV" to "Previous unit", "EVENT" to "Last event", "FOLLOW" to "Follow selection",
@@ -67,14 +66,19 @@ internal object TouchHudSettings {
         "PATROL" to "Patrol between two points",
     ).map { (id, label) ->
         val keyCode = when (id) {
+            "FIRE" -> KeyEvent.KEYCODE_CTRL_LEFT
+            "MOVE" -> KeyEvent.KEYCODE_ALT_LEFT
+            "ADD" -> KeyEvent.KEYCODE_SHIFT_LEFT
+            "ATTACK" -> KeyEvent.KEYCODE_CTRL_LEFT
             // Planning Mode is a held key, not a one-shot command: the player
             // holds Z while clicking each route point, then releases it.
             "ROUTE" -> KeyEvent.KEYCODE_Z
             "TYPE" -> 48 // T: select matching unit type
+            "MINER" -> KeyEvent.KEYCODE_D // D: deploy/pack the selected unit.
             "NEXT" -> 41 // M: next unit
             "PREV" -> 42 // N: previous selection
             "EVENT" -> 62 // Space: last radar event
-            "FOLLOW" -> 34 // F: follow selection
+            "FOLLOW" -> 50 // V: VERA reserves F for Formation Line.
             "HOME" -> 36 // H: center on home/base
             else -> 0 // No direct single-key equivalent for this HUD action.
         }
@@ -103,6 +107,15 @@ internal object TouchHudSettings {
     val defaultVisible: Set<String> = commandButtons.take(4).mapTo(linkedSetOf()) { it.id } +
         groupButtons.take(5).map { it.id } + listOf("TYPE") + setSelectorButtons.map { it.id }
     val remappableActions: List<Button> = commandButtons
+
+    /** PC modifiers held while making the corresponding battlefield input. */
+    fun modifierKeys(id: String): List<Int> = when (id) {
+        "FIRE" -> listOf(KeyEvent.KEYCODE_CTRL_LEFT)
+        "MOVE" -> listOf(KeyEvent.KEYCODE_ALT_LEFT)
+        "ADD" -> listOf(KeyEvent.KEYCODE_SHIFT_LEFT)
+        "ATTACK" -> listOf(KeyEvent.KEYCODE_CTRL_LEFT, KeyEvent.KEYCODE_SHIFT_LEFT)
+        else -> emptyList()
+    }
 
     fun parseVisible(encoded: String?, isStored: Boolean): Set<String> {
         if (!isStored) return defaultVisible

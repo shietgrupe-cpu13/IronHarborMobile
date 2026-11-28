@@ -2,6 +2,10 @@
 
 Updated 2026-11-28. User-reported results are identified separately from CI. Device model/API and artifact hashes are recorded only when supplied.
 
+## Pending next `android-new` build (2026-11-28)
+
+No device test has been performed for these pending changes. After downloading the Actions artifact, verify: tap empty C1 assigns selected units; tap populated C1 recalls them; hold C1 with selected units adds them; hold C1 without selection clears it; external-keyboard Ctrl+1 assigns and 1 recalls; modifier buttons release after switching HUD sets; a short one-finger battlefield swipe pans while a long drag still box-selects; pinch zoom remains anchored; selected-mod maps appear in `Documents/RA2Harbor/Maps` and are removed on unselect without deleting personal maps. If cloaked/submersible units still render as opaque light, capture a screenshot with the unit, mod and renderer identified.
+
 ## Latest skirmish A/B diagnosis — 2026-11-28 (fix not yet built)
 
 | Device / API | ABI | Status | Observed checks |

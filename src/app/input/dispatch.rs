@@ -115,6 +115,125 @@ use unit_orders::{
 #[cfg(test)]
 pub(super) use {hotkey_dispatch::ready_tab_factory, sidebar::ready_cameo_factory};
 
+/// Android's C1..C10 gesture mirrors the legacy mobile controls: tap assigns
+/// an empty group or recalls a populated group; hold merges selected units or
+/// clears that group when the selection is empty.
+#[cfg(target_os = "android")]
+pub(crate) fn handle_android_hud_control_group(
+    state: &mut AppState,
+    group_number: i32,
+    held: bool,
+) {
+    let Some(slot) = android_hud_group_slot(group_number) else {
+        return;
+    };
+    let sim = state
+        .match_state
+        .sim_runtime
+        .runtime()
+        .map(|runtime| &runtime.simulation);
+    let group = sim
+        .map(|sim| sim.projected_control_groups()[slot].clone())
+        .unwrap_or_default();
+    let selected = selected_stable_ids_in_order(
+        sim,
+        state.rules(),
+        &state.match_state.input.selection_order,
+        state.match_state.input.selection_order_pending,
+    );
+    match android_hud_group_action(&group, &selected, held) {
+        Some(AndroidHudGroupAction::Assign(members)) => {
+            queue_control_group_assignment(&mut state.match_state.sim_runtime, slot, members)
+        }
+        Some(AndroidHudGroupAction::Recall) => handle_control_group_command(
+            &state.platform,
+            &mut state.renderer,
+            &state.diag,
+            &state.frontend,
+            &mut state.match_state,
+            &state.process_assets,
+            &mut state.audio.sfx_player,
+            &state.persistence,
+            slot,
+            GroupPress::Fixed(GroupPressAction::Recall),
+        ),
+        None => {}
+    }
+}
+
+#[cfg(any(target_os = "android", all(test, tests_app_input_d_z)))]
+fn android_hud_group_slot(group_number: i32) -> Option<usize> {
+    match group_number {
+        1..=9 => Some(group_number as usize),
+        10 => Some(0),
+        _ => None,
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+#[cfg(any(target_os = "android", all(test, tests_app_input_d_z)))]
+enum AndroidHudGroupAction {
+    Assign(Vec<u64>),
+    Recall,
+}
+
+#[cfg(any(target_os = "android", all(test, tests_app_input_d_z)))]
+fn android_hud_group_action(
+    group: &[u64],
+    selected: &[u64],
+    held: bool,
+) -> Option<AndroidHudGroupAction> {
+    if held {
+        if selected.is_empty() {
+            return Some(AndroidHudGroupAction::Assign(Vec::new()));
+        }
+        let mut merged = Vec::with_capacity(group.len() + selected.len());
+        for id in group.iter().chain(selected) {
+            if !merged.contains(id) {
+                merged.push(*id);
+            }
+        }
+        Some(AndroidHudGroupAction::Assign(merged))
+    } else if group.is_empty() {
+        (!selected.is_empty()).then(|| AndroidHudGroupAction::Assign(selected.to_vec()))
+    } else {
+        Some(AndroidHudGroupAction::Recall)
+    }
+}
+
+#[cfg(all(test, tests_app_input_d_z))]
+mod android_hud_group_tests {
+    use super::{AndroidHudGroupAction, android_hud_group_action, android_hud_group_slot};
+
+    #[test]
+    fn tap_assigns_empty_group_and_recalls_populated_group() {
+        assert_eq!(
+            android_hud_group_action(&[], &[4, 7], false),
+            Some(AndroidHudGroupAction::Assign(vec![4, 7]))
+        );
+        assert_eq!(
+            android_hud_group_action(&[4], &[7], false),
+            Some(AndroidHudGroupAction::Recall)
+        );
+        assert_eq!(android_hud_group_action(&[], &[], false), None);
+    }
+
+    #[test]
+    fn hold_merges_unique_selection_or_clears_group_and_maps_c10_to_slot_zero() {
+        assert_eq!(
+            android_hud_group_action(&[4, 7], &[7, 9], true),
+            Some(AndroidHudGroupAction::Assign(vec![4, 7, 9]))
+        );
+        assert_eq!(
+            android_hud_group_action(&[4, 7], &[], true),
+            Some(AndroidHudGroupAction::Assign(vec![]))
+        );
+        assert_eq!(android_hud_group_slot(1), Some(1));
+        assert_eq!(android_hud_group_slot(10), Some(0));
+        assert_eq!(android_hud_group_slot(0), None);
+    }
+}
+
 /// Handle mouse button press/release for selection and move commands.
 ///
 /// The match's chrome runs FIRST (study G22/A8, `input::chrome_input`): its

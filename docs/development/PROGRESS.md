@@ -2,6 +2,14 @@
 
 Updated 2026-11-28. Current authoritative plan: [IRON_HARBOR_MASTER_PLAN.md](IRON_HARBOR_MASTER_PLAN.md).
 
+## 2026-11-28 — HUD controls, touch camera, mod maps and faction flags (CI pending)
+
+- C1..C10 floating controls follow the requested mobile gestures: tap assigns an empty group or recalls a populated group; hold merges selected units or clears the group when none are selected. C1 routes to the engine control-group slot for Ctrl+1. Android events enter the existing game loop and use existing assignment/recall owners.
+- Added source-grounded PC hotkeys and held Ctrl/Alt/Shift/Ctrl+Shift modifiers for force fire, force move, add selection and attack move. Modifier keys are reference-counted; switching HUD sets releases held modifiers before hiding the old set. Unmapped actions remain user-remappable rather than receiving guessed shortcuts.
+- Added one-finger swipe camera pan, two-finger centroid pan and pinch zoom while retaining drag selection and stationary two-finger context click. Profile-only mod changes now synchronize selected-mod maps without repeating scans when already synchronized. Skirmish flag-atlas cache identity now includes active-mod flag filenames.
+- Added focused Rust workflow filters for touch, camera zoom, HUD group gestures and mod faction flag atlas behavior. `git diff --check` and leaf-file rustfmt passed locally; no Rust/Cargo/Gradle compilation or tests were run locally. CI/device verification is pending.
+- The cloaked/submersible opaque-light appearance was not established by available logs; no rendering fix is claimed. It needs a screenshot or device capture with a named unit and mod.
+
 ## 2026-11-28 — skirmish mode roster and staged mod maps (CI pending)
 
 - Compared the two newest IHLOGS with earlier successful sessions. The same 964-byte `MPModesMD.ini` from `ra2md.mix -> localmd.mix` loads successfully with another mod; Red Resurrection alone logs that no mode rows survive. This points to the client catalog's mode names filtering out every native YR mode, not a missing/corrupt common archive. The separate earlier Mental Omega/YR profile mismatch remains distinct.

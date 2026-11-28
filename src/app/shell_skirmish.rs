@@ -368,10 +368,26 @@ impl App {
         options_profile: &RetailOptionsProfile,
     ) -> bool {
         let yr_original_style = options_profile.plays_yr_original_style();
+        // Mod-specific Ares flag names arrive with the selected Rules and are
+        // part of this derived atlas's identity, just like its visual style.
+        let extra_flags = if process_assets.reads_ares_way() {
+            process_assets
+                .native_rules()
+                .map(|rules| rules.country_flag_files())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         if frontend
             .skirmish_shell_chrome
             .as_ref()
-            .is_some_and(|atlas| atlas.yr_original_style == yr_original_style)
+            .is_some_and(|atlas| {
+                atlas.yr_original_style == yr_original_style
+                    && crate::render::skirmish_shell_chrome::same_country_flag_files(
+                        &atlas.country_flag_files,
+                        &extra_flags,
+                    )
+            })
         {
             return true;
         }
@@ -386,17 +402,6 @@ impl App {
             return false;
         };
 
-        // Ares' country flags join the atlas when Ares.dll is loaded (the
-        // game is read the Ares way).
-        let ares = process_assets.reads_ares_way();
-        let extra_flags = if ares {
-            process_assets
-                .native_rules()
-                .map(|rules| rules.country_flag_files())
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
         let dialog_background = frontend.shell_dialog_background.clone();
         let started = crate::util::time::Instant::now();
         frontend.skirmish_shell_chrome =

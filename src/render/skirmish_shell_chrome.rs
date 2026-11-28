@@ -142,6 +142,17 @@ const COOP_SETUP_PALETTE: &str = "MnScrnLCoopGameSetup.PAL";
 
 pub type SkirmishShellChromeEntry = ChromeAtlasEntry;
 
+/// Whether a cached shell atlas contains the requested Ares country flags.
+/// Filename case and declaration order do not change which files it packs.
+pub(crate) fn same_country_flag_files(cached: &[String], requested: &[String]) -> bool {
+    cached.len() == requested.len()
+        && cached.iter().all(|name| {
+            requested
+                .iter()
+                .any(|candidate| candidate.eq_ignore_ascii_case(name))
+        })
+}
+
 pub struct SkirmishShellChromeAtlas {
     pub texture: BatchTexture,
     pub right_panel_top_sdtp: Option<SkirmishShellChromeEntry>,
@@ -174,6 +185,8 @@ pub struct SkirmishShellChromeAtlas {
     /// Style identity for rebuilding this derived atlas when the Options
     /// preview changes the selected source family.
     pub yr_original_style: bool,
+    /// Ares country flag names requested when this derived atlas was built.
+    pub country_flag_files: Vec<String>,
     /// The setup-family background pair, slot 0 at exactly 640 wide and slot 1
     /// otherwise: shared by offline Skirmish `0x102` and the LAN/WOL pages
     /// `0xBB/0xBC/0xBD/0xC2/0xC9`. YR style selects the Cooperative setup art
@@ -726,6 +739,7 @@ pub fn build_skirmish_shell_chrome_atlas(
     Some(SkirmishShellChromeAtlas {
         texture,
         yr_original_style,
+        country_flag_files: extra_flags.to_vec(),
         setup_backgrounds: setup_background_pair(yr_original_style, first, get),
         client_skirmish_background: get("client-skirmish-background"),
         launcher_warning_frames: labels.run("sdwrnanm.shp"),
@@ -1165,13 +1179,23 @@ mod tests {
         PRIMITIVE_BEVEL_COLOR_A_RGB, PRIMITIVE_BEVEL_COLOR_B_RGB, SkirmishShellChromeEntry,
         TRACKBAR_FRAME_BORDER, average_rgb, draw_axis_line_inclusive_clipped,
         render_primitive_bevel_entry, render_trackbar_frame_geometry, rgba_color,
-        setup_background_pair, trackbar_frame_rgba,
+        same_country_flag_files, setup_background_pair, trackbar_frame_rgba,
     };
     use super::{TRACKBAR_FRAMES, drawn_trackbar_frame_slot};
     use crate::assets::asset_manager::MediaArchiveMode;
     use crate::render::chrome_atlas::{
         load_palette as load_named_palette, pcx_piece, shp_file_piece,
     };
+
+    #[test]
+    fn skirmish_chrome_flag_identity_tracks_mod_country_files() {
+        let vanilla = vec!["usai.pcx".to_owned()];
+        assert!(same_country_flag_files(&vanilla, &["USAI.PCX".to_owned()]));
+        assert!(!same_country_flag_files(
+            &vanilla,
+            &["custom.pcx".to_owned()]
+        ));
+    }
     use std::collections::HashMap;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]

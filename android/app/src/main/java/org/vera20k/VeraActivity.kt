@@ -153,6 +153,10 @@ class VeraActivity : GameActivity() {
     internal fun forwardHudKeyUp(keyCode: Int, event: KeyEvent): Boolean =
         super.onKeyUp(keyCode, event)
 
+    /** Queue a C1..C10 tap/hold for the Rust gameplay input owner. */
+    internal fun sendHudControlGroup(group: Int, held: Boolean): Boolean =
+        nativeHudControlGroup(group, held)
+
     private fun updateDisplayInsets(insets: WindowInsets) {
         if (Build.VERSION.SDK_INT < 28) {
             return
@@ -693,6 +697,8 @@ class VeraActivity : GameActivity() {
         eventTime: Long,
         tool: Int,
     )
+
+    private external fun nativeHudControlGroup(group: Int, held: Boolean): Boolean
 
     /**
      * Ends the process with the task.

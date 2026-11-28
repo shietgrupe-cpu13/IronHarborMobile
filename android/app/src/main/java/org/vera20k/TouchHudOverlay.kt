@@ -72,8 +72,11 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
             val id = overlayId(action)
             val label = buttonLabel(id, action)
             val description = when {
-                action.groupNumber != null -> "Control group ${action.groupNumber}: tap to select, hold to assign"
+                action.groupNumber != null -> "Control group ${action.groupNumber}, Ctrl+${if (action.groupNumber == 10) 0 else action.groupNumber}: tap assigns an empty group or recalls it; hold adds selected units, or clears when none are selected"
                 action.id == TouchHudSettings.SET_ONE || action.id == TouchHudSettings.SET_TWO -> "Show control set ${if (action.id == TouchHudSettings.SET_ONE) 1 else 2}"
+                TouchHudSettings.modifierKeys(action.id).isNotEmpty() -> "${action.label}: hold the matching PC modifier while tapping or dragging on the battlefield; tap again to release"
+                action.id == "ROUTE" -> "Hold Z while placing successive route points; tap again to finish"
+                action.defaultKeyCode == KeyEvent.KEYCODE_UNKNOWN -> "${action.label}: no direct PC hotkey is registered by default; assign a game key in HUD settings"
                 else -> action.label
             }
             val button = addButton(id, label, description) { activate(action) }
@@ -81,7 +84,9 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
                 val group = action.groupNumber
                 button.setOnLongClickListener {
                     if (editing) return@setOnLongClickListener false
-                    sendGroupAssign(group)
+                    if (!activity.sendHudControlGroup(group, held = true)) {
+                        Toast.makeText(activity, "Control group input is unavailable.", Toast.LENGTH_SHORT).show()
+                    }
                     true
                 }
             }
@@ -139,6 +144,11 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
     fun releaseHeldInputs() {
         heldKeys.releaseAll()
         routeModeHeld = false
+        val releasedModifiers = modifierModesHeld.toList()
+        modifierModesHeld.clear()
+        releasedModifiers.forEach { id ->
+            buttons[id]?.text = modifierButtonLabel(id, held = false)
+        }
         buttons["ROUTE"]?.text = "ROUTE"
     }
 
@@ -186,6 +196,7 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
             contentDescription = if (editing) "Finish moving touch controls" else "Move controls; hold to open layout editor"
         }
         buttons["ROUTE"]?.text = routeButtonLabel(routeModeHeld)
+        modifierModesHeld.forEach { id -> buttons[id]?.text = modifierButtonLabel(id, held = true) }
         positionButtons()
     }
 
@@ -365,6 +376,7 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
 
     private fun buttonLabel(id: String, action: TouchHudSettings.Button): String = when {
         id == "type" -> "T"
+        id == "ATTACK" -> "ATK"
         action.groupNumber != null -> "C${action.groupNumber}"
         action.label.length <= 7 -> action.label.uppercase(java.util.Locale.ROOT)
         else -> action.id
@@ -383,10 +395,12 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
         if (editing) return
         when (action.id) {
             TouchHudSettings.SET_ONE -> {
+                releaseHeldInputs()
                 preferences.edit().putInt(TouchHudSettings.HUD_ACTIVE_SET, 1).apply()
                 setVisibility()
             }
             TouchHudSettings.SET_TWO -> {
+                releaseHeldInputs()
                 preferences.edit().putInt(TouchHudSettings.HUD_ACTIVE_SET, 2).apply()
                 setVisibility()
             }
@@ -399,8 +413,16 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
                 val keyCode = preferences.getInt("key_${action.id}", action.defaultKeyCode)
                 if (keyCode == KeyEvent.KEYCODE_UNKNOWN) {
                     Toast.makeText(activity, "Assign a game key to ${action.label} in HUD settings first.", Toast.LENGTH_SHORT).show()
+                } else if (!preferences.contains("key_${action.id}") &&
+                    TouchHudSettings.modifierKeys(action.id).isNotEmpty()
+                ) {
+                    val held = heldKeys.toggle(action.id, TouchHudSettings.modifierKeys(action.id))
+                    if (held) modifierModesHeld.add(action.id) else modifierModesHeld.remove(action.id)
+                    buttons[action.id]?.text = modifierButtonLabel(action.id, held)
                 } else if (action.groupNumber != null) {
-                    sendGroupRecall(action.groupNumber)
+                    if (!activity.sendHudControlGroup(action.groupNumber, held = false)) {
+                        Toast.makeText(activity, "Control group input is unavailable.", Toast.LENGTH_SHORT).show()
+                    }
                 } else {
                     sendKeyStroke(keyCode)
                 }
@@ -408,30 +430,21 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
         }
     }
 
-    private fun sendGroupRecall(group: Int) {
-        sendKeyStroke(if (group == 10) KeyEvent.KEYCODE_0 else KeyEvent.KEYCODE_1 + group - 1)
-    }
-
     private fun routeButtonLabel(held: Boolean): String {
         val label = buttonLabels["ROUTE"] ?: defaultLabels["ROUTE"] ?: "ROUTE"
         return if (held) "$label ON" else label
     }
 
-    private fun sendGroupAssign(group: Int) {
-        sendKeyStroke(
-            if (group == 10) KeyEvent.KEYCODE_0 else KeyEvent.KEYCODE_1 + group - 1,
-            KeyEvent.META_CTRL_ON or KeyEvent.META_CTRL_LEFT_ON,
-            controlChord = true,
-        )
+    private fun modifierButtonLabel(id: String, held: Boolean): String {
+        val label = buttonLabels[id] ?: defaultLabels[id] ?: id
+        return if (held) "$label ON" else label
     }
 
     /** GameActivity forwards these key edges to the same native input queue as hardware keys. */
-    private fun sendKeyStroke(keyCode: Int, metaState: Int = 0, controlChord: Boolean = false) {
+    private fun sendKeyStroke(keyCode: Int) {
         val now = SystemClock.uptimeMillis()
-        if (controlChord) dispatchKey(KeyEvent.KEYCODE_CTRL_LEFT, KeyEvent.ACTION_DOWN, now, now, 0)
-        dispatchKey(keyCode, KeyEvent.ACTION_DOWN, now, now, metaState)
-        dispatchKey(keyCode, KeyEvent.ACTION_UP, now, now + 1, metaState)
-        if (controlChord) dispatchKey(KeyEvent.KEYCODE_CTRL_LEFT, KeyEvent.ACTION_UP, now, now + 2, 0)
+        dispatchKey(keyCode, KeyEvent.ACTION_DOWN, now, now, 0)
+        dispatchKey(keyCode, KeyEvent.ACTION_UP, now, now + 1, 0)
     }
 
     private fun dispatchKey(keyCode: Int, action: Int, downTime: Long, eventTime: Long, metaState: Int) {

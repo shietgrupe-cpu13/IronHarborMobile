@@ -1567,17 +1567,39 @@ fn pan_touch_camera(input: &mut MatchInputState, dx: f32, dy: f32) {
 /// Android: turns the activity's queued pointing-device events into window events.
 #[cfg(target_os = "android")]
 fn pump_android_pointer(app: &mut App, event_loop: &ActiveEventLoop) {
-    let window_id = app.state.as_ref().map(|state| state.platform.window.id())
-        .or_else(|| app.pending_initialization.as_ref().map(|job| job.window_id()));
+    let window_id = app
+        .state
+        .as_ref()
+        .map(|state| state.platform.window.id())
+        .or_else(|| {
+            app.pending_initialization
+                .as_ref()
+                .map(|job| job.window_id())
+        });
     let Some(window_id) = window_id else { return };
     let mut translated = Vec::new();
     for event in crate::app::input::android_mouse::take() {
         let in_game = app.state.as_ref().is_some_and(|state| {
             state.frontend.screen == GameScreen::InGame && !state.match_state.paused()
         });
-        app.android_pointer.translate(event, in_game, &mut translated);
+        app.android_pointer
+            .translate(event, in_game, &mut translated);
         for event in translated.drain(..) {
             app.window_event(event_loop, window_id, event);
+        }
+    }
+}
+
+/// Route floating HUD control-group gestures through the game-state owner.
+#[cfg(target_os = "android")]
+fn pump_android_hud(app: &mut App) {
+    for (group, held) in crate::app::android_hud::take_control_groups() {
+        let Some(state) = app.state.as_mut() else {
+            continue;
+        };
+        if state.frontend.screen == GameScreen::InGame && !state.match_state.paused() {
+            dispatch::handle_android_hud_control_group(state, group, held);
+            state.platform.window.request_redraw();
         }
     }
 }
@@ -1593,6 +1615,8 @@ impl ApplicationHandler for App {
         // not a frame behind the system one.
         #[cfg(target_os = "android")]
         pump_android_pointer(self, _event_loop);
+        #[cfg(target_os = "android")]
+        pump_android_hud(self);
     }
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
@@ -1775,7 +1799,8 @@ impl ApplicationHandler for App {
 
         #[cfg(target_os = "android")]
         if let WindowEvent::PanGesture { delta, .. } = &event {
-            if !shell_capture_active && !hidden_run_active
+            if !shell_capture_active
+                && !hidden_run_active
                 && let Some(state) = self.state.as_mut()
                 && state.frontend.screen == GameScreen::InGame
                 && !state.match_state.paused()
@@ -1863,6 +1888,15 @@ impl ApplicationHandler for App {
                     && in_game
                 {
                     pan_touch_camera(&mut state.match_state.input, dx, dy);
+                }
+                if let Some((factor, anchor)) = output.zoom
+                    && in_game
+                {
+                    crate::app::input::camera::apply_touch_zoom(
+                        &mut state.match_state.input,
+                        factor,
+                        anchor,
+                    );
                 }
                 self.dispatching_touch = true;
                 for event in output.events.into_iter().flatten() {
@@ -1987,8 +2021,11 @@ impl ApplicationHandler for App {
                     button,
                     ..
                 } => {
-                    if !crate::app::ui_modules::pointer_button(state, *button, button_state.is_pressed())
-                        && watching
+                    if !crate::app::ui_modules::pointer_button(
+                        state,
+                        *button,
+                        button_state.is_pressed(),
+                    ) && watching
                     {
                         crate::app::match_runtime::watching::mouse(
                             &state.platform,

@@ -1918,23 +1918,26 @@ class LauncherActivity : Activity() {
                 }
                 SharedDataStorage(this).setExternalModPath(externalPath)
                 timings += "launcher_preferences_ms=${SystemClock.elapsedRealtime() - preferenceStarted}"
-                if (profile == null) {
-                    val mapsStarted = SystemClock.elapsedRealtime()
-                    val mapsSync = runCatching {
-                        val mapsDirectory = File(nativeMapsDirectory(dataDirectory.absolutePath))
-                        val modDirectory = modName?.let {
-                            selectedModDirectory(it)
-                                ?: throw IOException("The selected mod folder is no longer accessible; its map files were left unchanged.")
-                        }
+                val mapsStarted = SystemClock.elapsedRealtime()
+                val mapsSync = runCatching {
+                    val mapsDirectory = File(nativeMapsDirectory(dataDirectory.absolutePath))
+                    val modDirectory = modName?.let {
+                        selectedModDirectory(it)
+                            ?: throw IOException("The selected mod folder is no longer accessible; its map files were left unchanged.")
+                    }
+                    if (LauncherModMapStaging.isSynchronized(mapsDirectory, modDirectory)) {
+                        null
+                    } else {
                         LauncherModMapStaging.sync(mapsDirectory, modDirectory)
                     }
-                    timings += "temporary_mod_maps_ms=${SystemClock.elapsedRealtime() - mapsStarted}"
-                    mapsSync.onSuccess {
+                }
+                timings += "temporary_mod_maps_ms=${SystemClock.elapsedRealtime() - mapsStarted}"
+                mapsSync.onSuccess { result ->
+                    result?.let {
                         stagedModMapCount = it.activeMaps
                         if (it.cleanupPending > 0) mapStageWarning = "cleanup is pending for ${it.cleanupPending} previous map copy/copies"
                     }
-                        .onFailure { error -> mapStageWarning = error.message ?: error.javaClass.simpleName }
-                }
+                }.onFailure { error -> mapStageWarning = error.message ?: error.javaClass.simpleName }
                 contents
             }
             val elapsed = SystemClock.elapsedRealtime() - started

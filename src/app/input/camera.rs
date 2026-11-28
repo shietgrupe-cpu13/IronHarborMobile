@@ -1889,6 +1889,20 @@ pub(crate) fn wheel_zoom(input: &mut MatchInputState, lines: f32) {
     ease_zoom_around(input, anchor, target);
 }
 
+/// Apply a touch pinch around its centroid, preserving the world point under
+/// the fingers while the normal frame update eases toward the new zoom.
+pub(crate) fn apply_touch_zoom(input: &mut MatchInputState, factor: f32, anchor: [f32; 2]) {
+    if !factor.is_finite() || factor <= 0.0 {
+        return;
+    }
+    let old = input.zoom_target;
+    let target = (old * factor).clamp(MIN_ZOOM, MAX_ZOOM);
+    if (target - old).abs() < 1e-6 {
+        return;
+    }
+    ease_zoom_around(input, anchor, target);
+}
+
 /// Restore the stock tactical scale when the player turns wheel zoom off.
 pub(crate) fn reset_view_distance(
     platform: &PlatformState,
@@ -3778,6 +3792,22 @@ fn wheel_zoom_is_continuous_anchored_on_the_cursor_and_clamped_at_the_ends() {
     assert_eq!(input.zoom_target, MIN_ZOOM);
     wheel_zoom(&mut input, 100.0);
     assert_eq!(input.zoom_target, MAX_ZOOM);
+}
+
+#[cfg(test)]
+#[test]
+fn touch_zoom_keeps_its_anchor_and_clamps_to_the_camera_range() {
+    use crate::app::input::state::MatchInputState;
+    let mut input = MatchInputState::new(Default::default());
+    (input.camera_x, input.camera_y) = (300.0, 200.0);
+    input.zoom_level = 2.0;
+    input.zoom_target = 3.0;
+
+    apply_touch_zoom(&mut input, 2.0, [100.0, 40.0]);
+
+    assert_eq!(input.zoom_target, MAX_ZOOM);
+    assert_eq!(input.zoom_anchor_screen, [100.0, 40.0]);
+    assert_eq!(input.zoom_anchor_world, [350.0, 220.0]);
 }
 
 /// Half a tile on **both** axes from the tile corner — the Y half is the one

@@ -138,10 +138,15 @@ class TouchHudSettingsTest {
         assertEquals(41, TouchHudSettings.buttons.first { it.id == "NEXT" }.defaultKeyCode) // M
         assertEquals(42, TouchHudSettings.buttons.first { it.id == "PREV" }.defaultKeyCode) // N
         assertEquals(62, TouchHudSettings.buttons.first { it.id == "EVENT" }.defaultKeyCode) // Space
-        assertEquals(34, TouchHudSettings.buttons.first { it.id == "FOLLOW" }.defaultKeyCode) // F
+        assertEquals(50, TouchHudSettings.buttons.first { it.id == "FOLLOW" }.defaultKeyCode) // V: F is Formation Line in VERA.
         assertEquals(36, TouchHudSettings.buttons.first { it.id == "HOME" }.defaultKeyCode) // H
-        assertEquals(24, TouchHudSettings.remappableActions.size)
-        assertEquals(0, TouchHudSettings.remappableActions.first { it.id == "FIRE" }.defaultKeyCode) // Unknown until bound to an existing game key.
+        assertEquals(KeyEvent.KEYCODE_D, TouchHudSettings.buttons.first { it.id == "MINER" }.defaultKeyCode)
+        assertEquals(25, TouchHudSettings.remappableActions.size)
+        assertEquals(KeyEvent.KEYCODE_CTRL_LEFT, TouchHudSettings.buttons.first { it.id == "FIRE" }.defaultKeyCode)
+        assertEquals(KeyEvent.KEYCODE_ALT_LEFT, TouchHudSettings.buttons.first { it.id == "MOVE" }.defaultKeyCode)
+        assertEquals(KeyEvent.KEYCODE_SHIFT_LEFT, TouchHudSettings.buttons.first { it.id == "ADD" }.defaultKeyCode)
+        assertEquals(listOf(KeyEvent.KEYCODE_CTRL_LEFT, KeyEvent.KEYCODE_SHIFT_LEFT), TouchHudSettings.modifierKeys("ATTACK"))
+        assertEquals(emptyList<Int>(), TouchHudSettings.modifierKeys("BOX"))
     }
 
     @Test fun waypointButtonHoldsPlanningModeAcrossClicksAndReleasesOnLifecycleExit() {
@@ -159,6 +164,31 @@ class TouchHudSettingsTest {
             KeyEvent.KEYCODE_Z to true,
             KeyEvent.KEYCODE_Z to false,
         ), events)
+    }
+
+    @Test fun overlappingModifierButtonsReleaseOnlyAfterTheirLastOwnerReleases() {
+        val events = mutableListOf<Pair<Int, Boolean>>()
+        val latch = TouchHudKeyLatch { keyCode, pressed -> events += keyCode to pressed }
+        assertTrue(latch.toggle("FIRE", listOf(KeyEvent.KEYCODE_CTRL_LEFT)))
+        assertTrue(latch.toggle("ATTACK", listOf(KeyEvent.KEYCODE_CTRL_LEFT, KeyEvent.KEYCODE_SHIFT_LEFT)))
+        assertFalse(latch.toggle("FIRE", listOf(KeyEvent.KEYCODE_CTRL_LEFT)))
+        assertEquals(
+            listOf(
+                KeyEvent.KEYCODE_CTRL_LEFT to true,
+                KeyEvent.KEYCODE_SHIFT_LEFT to true,
+            ),
+            events,
+        )
+        latch.releaseAll()
+        assertEquals(
+            listOf(
+                KeyEvent.KEYCODE_CTRL_LEFT to true,
+                KeyEvent.KEYCODE_SHIFT_LEFT to true,
+                KeyEvent.KEYCODE_SHIFT_LEFT to false,
+                KeyEvent.KEYCODE_CTRL_LEFT to false,
+            ),
+            events,
+        )
     }
 
     @Test fun controlGroupButtonsMapToTheVanillaCtrlDigitTeams() {

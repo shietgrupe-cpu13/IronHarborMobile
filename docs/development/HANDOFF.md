@@ -1,5 +1,13 @@
 # Iron Harbor Mobile handoff
 
+## Current checkpoint — HUD/control changes (2026-11-28; CI pending)
+
+- Repository `shietgrupe-cpu13/IronHarborMobile`, branch `android-new`; remote matched `9022149a829658d5cadcdb4633109f3c19b98438` before pending changes. Commit/push these changes and let Actions perform all compilation and tests; never compile locally.
+- Pending changes: C1..C10 tap/hold group behavior routed through the Rust game loop; source-grounded PC hotkeys and modifier chords; modifier release when switching HUD sets; swipe/pinch camera input; mod map synchronization; faction flag cache invalidation. Focused workflow filters were added for touch, camera, groups and flag rendering.
+- `git diff --check` and leaf-file rustfmt passed. No local build/test or device validation. `out/` is user data: leave untracked and untouched, exclude from commits.
+- Next: stage exact source/workflow/docs paths, commit, push to `android-new`, monitor Actions, inspect APK verification and artifact. Diagnose CI failures from actual logs.
+- Cloaked/submersible opacity is not confirmed from logs; no rendering fix is claimed. Request a screenshot or capture with a named unit/mod after install. Physical tests should include C1 tap/hold/clear, keyboard Ctrl+1/1, modifier set switching, swipe pan versus drag-select, pinch anchoring, and mod-map stage/unselect cleanup.
+
 ## Current checkpoint — skirmish mode/map regression (2026-11-28)
 
 - Branch `android-new`, base `dbb8c7526db50f116469febb183194ff6236f373`, remote `vera20k-fork/android-new` matched at last fetch. Worktree contains a focused uncommitted source/test/workflow patch plus documentation; untracked `out/` is user data and must remain untouched.

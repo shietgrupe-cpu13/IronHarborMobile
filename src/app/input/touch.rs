@@ -8,14 +8,14 @@
 //! re-issues each touch as the gesture it means:
 //!
 //! - a quick release clicks the left button — select, order, UI;
-//! - a drag past the threshold holds the left button from the touch origin,
-//!   which is RA2's own select box over the battlefield and its slider/list
-//!   drag over the sidebar and menus;
-//! - two fingers move the camera 1:1 with the hand (grab style: the map
-//!   follows the fingers), reported as a `pan` displacement for the caller to
-//!   apply — native RA2's right-drag pan is a joystick that keeps gliding
-//!   while the finger rests, which overshoots badly on a touchscreen, and its
-//!   release can fire the right-click cancel ladder;
+//! - after a 250ms hold, a drag past the threshold holds the left button from
+//!   the drag point, for the select box or a menu slider/list;
+//! - a short in-game one-finger drag pans the camera; two fingers move it by
+//!   their centroid (grab style) and pinch zooms around that centroid;
+//!   native RA2's right-drag pan is a joystick that keeps gliding while the
+//!   finger rests, which overshoots badly on a touchscreen, and its release
+//!   can fire the right-click cancel ladder;
+//! - a stationary two-finger tap dispatches one right-click context action;
 //! - a long, still touch fires the right button — RA2's cancel/context action.
 //!
 //! A touch first only moves the cursor: the button decision waits until the
@@ -52,6 +52,10 @@ use winit::event::{DeviceId, ElementState, MouseButton, Touch, TouchPhase, Windo
 /// A pending touch held this long without leaving its origin becomes a right
 /// click immediately.
 const LONG_PRESS: Duration = Duration::from_millis(400);
+/// A short in-game one-finger drag pans; holding first makes the drag a select.
+const BOX_HOLD: Duration = Duration::from_millis(250);
+/// Two stationary fingers tap the map's context/right-click action.
+const TWO_FINGER_TAP: Duration = Duration::from_millis(300);
 /// Movement beyond this many logical pixels from the touch origin upgrades a
 /// pending touch into a drag — Rusted Warfare's touch threshold. Multiplied
 /// by the window scale factor so the hand travel stays the same on every
@@ -80,8 +84,10 @@ pub(crate) struct TouchOutput {
     pub events: TouchSynthetics,
     /// Camera displacement in screen pixels, grab style: the camera moves by
     /// this much so the map follows the fingers. The caller divides by the
-    /// current zoom to reach world pixels. `None` outside a two-finger pan.
+    /// current zoom to reach world pixels. `None` outside a camera pan.
     pub pan: Option<(f32, f32)>,
+    /// Multiplicative zoom change and the screen-space point to keep anchored.
+    pub zoom: Option<(f32, [f32; 2])>,
 }
 
 impl TouchOutput {
@@ -107,8 +113,13 @@ enum Gesture {
     Pending,
     /// A synthesized left-button drag: the select box, or a slider/list drag.
     Drag,
-    /// Two-finger camera pan; `last` is the previous centroid.
-    Pan { last: PhysicalPosition<f64> },
+    /// Camera pan; `last` is the previous centroid or one finger position.
+    Pan {
+        last: PhysicalPosition<f64>,
+        last_span: Option<f64>,
+        started: Instant,
+        moved: bool,
+    },
     /// A long-press right click fired; the touch's remaining events are
     /// consumed.
     Done,
@@ -125,6 +136,8 @@ pub(crate) struct TouchMouseMapper {
     /// long-press stillness check.
     origin: PhysicalPosition<f64>,
     started: Option<Instant>,
+    /// Only an in-game short one-finger drag is camera pan; menus still drag.
+    allow_pan: bool,
     /// Set when a pan's remaining finger is re-anchored: that finger was part
     /// of a multi-finger gesture, so its lift must not click and its hold
     /// must not fire the context button. Cleared on the next fresh touch or
@@ -139,6 +152,7 @@ impl TouchMouseMapper {
             gesture: Gesture::Pending,
             origin: PhysicalPosition::new(0.0, 0.0),
             started: None,
+            allow_pan: false,
             suppress_tap: false,
         }
     }
@@ -151,14 +165,16 @@ impl TouchMouseMapper {
         self.gesture = Gesture::Pending;
         self.origin = PhysicalPosition::new(0.0, 0.0);
         self.started = None;
+        self.allow_pan = false;
         self.suppress_tap = false;
     }
 
-    /// Whether a two-finger pan owns the camera right now. The app inhibits
+    /// Whether a touch pan owns the camera right now. The app inhibits
     /// edge auto-scroll while it does, standing in for the tactical capture
     /// native's right-drag pan holds.
     pub(crate) fn pan_active(&self) -> bool {
-        matches!(self.gesture, Gesture::Pan { .. })
+        matches!(self.gesture, Gesture::Pan { moved: true, .. })
+            || (self.tracked() == 2 && matches!(self.gesture, Gesture::Pan { .. }))
     }
 
     /// Map one touch into the events and camera motion it means. `in_game`
@@ -286,6 +302,7 @@ impl TouchMouseMapper {
             self.gesture = Gesture::Pending;
             self.origin = touch.location;
             self.started = Some(now);
+            self.allow_pan = in_game;
             self.suppress_tap = false;
             [Some(Self::cursor_moved(touch)), None, None]
         } else {
@@ -300,7 +317,15 @@ impl TouchMouseMapper {
                 Gesture::Pending | Gesture::Pan { .. } | Gesture::Done => None,
             };
             let centroid = self.centroid();
-            self.gesture = Gesture::Pan { last: centroid };
+            self.gesture = Gesture::Pan {
+                last: centroid,
+                last_span: Some(distance(
+                    self.fingers[0].expect("first tracked finger").pos,
+                    self.fingers[1].expect("second tracked finger").pos,
+                )),
+                started: now,
+                moved: false,
+            };
             [
                 release,
                 Some(Self::cursor_at(touch.device_id, centroid)),
@@ -318,21 +343,41 @@ impl TouchMouseMapper {
             Gesture::Done => TouchOutput::default(),
             Gesture::Pending => {
                 let threshold = drag_threshold(scale);
-                let held = !self.suppress_tap
-                    && self
-                        .started
-                        .is_some_and(|start| now.duration_since(start) >= LONG_PRESS);
+                let elapsed = self
+                    .started
+                    .map(|start| now.duration_since(start))
+                    .unwrap_or_default();
+                let held = !self.suppress_tap && elapsed >= LONG_PRESS;
                 if held && distance(touch.location, self.origin) <= threshold {
                     // Long press: fire the context click right away.
                     self.gesture = Gesture::Done;
                     return TouchOutput::events(Self::click_at(touch, MouseButton::Right));
                 }
                 if distance(touch.location, self.origin) > threshold {
+                    if self.allow_pan && !self.suppress_tap && elapsed < BOX_HOLD {
+                        self.gesture = Gesture::Pan {
+                            last: touch.location,
+                            last_span: None,
+                            started: now,
+                            moved: true,
+                        };
+                        return TouchOutput {
+                            events: [Some(Self::cursor_moved(touch)), None, None],
+                            pan: Some((
+                                (self.origin.x - touch.location.x) as f32,
+                                (self.origin.y - touch.location.y) as f32,
+                            )),
+                            ..TouchOutput::default()
+                        };
+                    }
                     // Upgrade to the select box: press the left button where
-                    // the finger landed, so the box starts at the origin. The
+                    // the held finger moved, so the box starts there. The
                     // same path drags sliders and lists over the UI.
                     self.gesture = Gesture::Drag;
                     self.suppress_tap = false;
+                    if elapsed >= BOX_HOLD {
+                        self.origin = touch.location;
+                    }
                     TouchOutput::events([
                         Some(Self::cursor_at(touch.device_id, self.origin)),
                         Some(Self::mouse_input(
@@ -351,12 +396,36 @@ impl TouchMouseMapper {
             Gesture::Drag => TouchOutput::events([Some(Self::cursor_moved(touch)), None, None]),
             // The camera follows the fingers: the map moves with the hand, so
             // the camera moves against it.
-            Gesture::Pan { last } => {
+            Gesture::Pan {
+                last,
+                last_span,
+                started,
+                moved,
+            } => {
                 let centroid = self.centroid();
-                self.gesture = Gesture::Pan { last: centroid };
+                let span = (self.tracked() == 2).then(|| {
+                    distance(
+                        self.fingers[0].expect("first tracked finger").pos,
+                        self.fingers[1].expect("second tracked finger").pos,
+                    )
+                });
+                let zoom = span.zip(last_span).and_then(|(next, previous)| {
+                    (previous > 1.0 && (next - previous).abs() > 0.5).then_some((
+                        (next / previous) as f32,
+                        [centroid.x as f32, centroid.y as f32],
+                    ))
+                });
+                let moved = moved || distance(last, centroid) > 1.0 || zoom.is_some();
+                self.gesture = Gesture::Pan {
+                    last: centroid,
+                    last_span: span,
+                    started,
+                    moved,
+                };
                 TouchOutput {
                     events: [Some(Self::cursor_at(touch.device_id, centroid)), None, None],
                     pan: Some(((last.x - centroid.x) as f32, (last.y - centroid.y) as f32)),
+                    zoom,
                 }
             }
         }
@@ -415,8 +484,41 @@ impl TouchMouseMapper {
                     None,
                 ]
             }
-            Gesture::Pan { .. } if remaining == 0 => {
+            Gesture::Pan { started, moved, .. } if remaining == 0 => {
                 self.gesture = Gesture::Done;
+                if !moved
+                    && touch.phase == TouchPhase::Ended
+                    && now.duration_since(started) <= TWO_FINGER_TAP
+                {
+                    Self::click_at(touch, MouseButton::Right)
+                } else {
+                    none()
+                }
+            }
+            Gesture::Pan {
+                started,
+                moved: false,
+                ..
+            } if remaining > 0 => {
+                // The surviving finger keeps the camera gesture. Re-anchor
+                // to its current position before the next move, otherwise a
+                // stationary pair's old centroid makes the camera jump.
+                let survivor = self
+                    .fingers
+                    .iter()
+                    .flatten()
+                    .find(|finger| finger.id != touch.id)
+                    .map(|finger| finger.pos);
+                self.gesture = survivor.map_or(Gesture::Done, |last| Gesture::Pan {
+                    last,
+                    last_span: None,
+                    started,
+                    moved: touch.phase != TouchPhase::Ended,
+                });
+                none()
+            }
+            Gesture::Pan { moved: false, .. } => {
+                // Wait for both fingers to lift before dispatching one context click.
                 none()
             }
             Gesture::Pan { .. } => {
@@ -549,7 +651,7 @@ mod tests {
     }
 
     #[test]
-    fn a_single_finger_drag_selects_from_the_touch_origin() {
+    fn a_held_single_finger_drag_starts_selection_at_the_drag_point() {
         let mut mapper = TouchMouseMapper::new();
         let now = Instant::now();
         let _ = names(mapper.translate(&touch(1, TouchPhase::Started, 40.0, 60.0), now, true, 1.0));
@@ -557,19 +659,19 @@ mod tests {
         // The select box presses where the finger landed, then follows it.
         let upgrade = names(mapper.translate(
             &touch(1, TouchPhase::Moved, 40.0 + STEP, 60.0),
-            now,
+            now + BOX_HOLD,
             true,
             1.0,
         ));
         let follow = names(mapper.translate(
             &touch(1, TouchPhase::Moved, 40.0 + STEP + 30.0, 60.0),
-            now,
+            now + BOX_HOLD + Duration::from_millis(20),
             true,
             1.0,
         ));
         let lift = names(mapper.translate(
             &touch(1, TouchPhase::Ended, 40.0 + STEP + 30.0, 60.0),
-            now + Duration::from_millis(200),
+            now + BOX_HOLD + Duration::from_millis(200),
             true,
             1.0,
         ));
@@ -588,7 +690,7 @@ mod tests {
 
         let upgrade = names(mapper.translate(
             &touch(1, TouchPhase::Moved, 300.0 + STEP, 400.0),
-            now,
+            now + BOX_HOLD,
             true,
             1.0,
         ));
@@ -606,10 +708,18 @@ mod tests {
 
         // At scale 2.0 the threshold is 30 physical px: 25 px stays pending,
         // 31 px upgrades.
-        let below =
-            names(mapper.translate(&touch(1, TouchPhase::Moved, 25.0, 0.0), now, true, 2.0));
-        let above =
-            names(mapper.translate(&touch(1, TouchPhase::Moved, 31.0, 0.0), now, true, 2.0));
+        let below = names(mapper.translate(
+            &touch(1, TouchPhase::Moved, 25.0, 0.0),
+            now + BOX_HOLD,
+            true,
+            2.0,
+        ));
+        let above = names(mapper.translate(
+            &touch(1, TouchPhase::Moved, 31.0, 0.0),
+            now + BOX_HOLD + Duration::from_millis(20),
+            true,
+            2.0,
+        ));
 
         assert_eq!(below, vec!["move".to_owned()]);
         assert_eq!(above, vec!["move".to_owned(), "Pressed Left".to_owned()]);
@@ -753,6 +863,113 @@ mod tests {
     }
 
     #[test]
+    fn a_short_in_game_one_finger_drag_pans_before_selection_hold() {
+        let mut mapper = TouchMouseMapper::new();
+        let now = Instant::now();
+        let _ = mapper.translate(&touch(1, TouchPhase::Started, 100.0, 100.0), now, true, 1.0);
+
+        let pan = mapper.translate(
+            &touch(1, TouchPhase::Moved, 130.0, 110.0),
+            now + Duration::from_millis(100),
+            true,
+            1.0,
+        );
+
+        assert_eq!(pan.pan, Some((-30.0, -10.0)));
+        assert!(pan.zoom.is_none());
+        assert_eq!(names(pan), vec!["move".to_owned()]);
+    }
+
+    #[test]
+    fn two_finger_pinch_reports_scale_and_centroid_anchor() {
+        let mut mapper = TouchMouseMapper::new();
+        let now = Instant::now();
+        let _ = mapper.translate(&touch(1, TouchPhase::Started, 100.0, 100.0), now, true, 1.0);
+        let _ = mapper.translate(
+            &touch(2, TouchPhase::Started, 200.0, 100.0),
+            now + Duration::from_millis(10),
+            true,
+            1.0,
+        );
+
+        let pinch = mapper.translate(
+            &touch(2, TouchPhase::Moved, 240.0, 100.0),
+            now + Duration::from_millis(20),
+            true,
+            1.0,
+        );
+
+        let (factor, anchor) = pinch.zoom.expect("pinch scale");
+        assert!((factor - 1.4).abs() < 1e-6);
+        assert_eq!(anchor, [170.0, 100.0]);
+        assert_eq!(pinch.pan, Some((-20.0, 0.0)));
+    }
+
+    #[test]
+    fn stationary_two_finger_tap_dispatches_one_right_click() {
+        let mut mapper = TouchMouseMapper::new();
+        let now = Instant::now();
+        let _ = mapper.translate(&touch(1, TouchPhase::Started, 100.0, 100.0), now, true, 1.0);
+        let _ = mapper.translate(
+            &touch(2, TouchPhase::Started, 200.0, 100.0),
+            now + Duration::from_millis(10),
+            true,
+            1.0,
+        );
+        let first_lift = names(mapper.translate(
+            &touch(1, TouchPhase::Ended, 100.0, 100.0),
+            now + Duration::from_millis(80),
+            true,
+            1.0,
+        ));
+        let second_lift = names(mapper.translate(
+            &touch(2, TouchPhase::Ended, 200.0, 100.0),
+            now + Duration::from_millis(100),
+            true,
+            1.0,
+        ));
+
+        assert!(first_lift.is_empty());
+        assert_eq!(
+            second_lift,
+            vec![
+                "move".to_owned(),
+                "Pressed Right".to_owned(),
+                "Released Right".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn lifting_one_stationary_pan_finger_reanchors_the_survivor() {
+        let mut mapper = TouchMouseMapper::new();
+        let now = Instant::now();
+        let _ = mapper.translate(&touch(1, TouchPhase::Started, 100.0, 100.0), now, true, 1.0);
+        let _ = mapper.translate(
+            &touch(2, TouchPhase::Started, 200.0, 100.0),
+            now + Duration::from_millis(10),
+            true,
+            1.0,
+        );
+        let _ = mapper.translate(
+            &touch(1, TouchPhase::Ended, 100.0, 100.0),
+            now + Duration::from_millis(20),
+            true,
+            1.0,
+        );
+
+        let pan = mapper.translate(
+            &touch(2, TouchPhase::Moved, 210.0, 100.0),
+            now + Duration::from_millis(30),
+            true,
+            1.0,
+        );
+
+        assert_eq!(pan.pan, Some((-10.0, 0.0)));
+        assert!(pan.zoom.is_none());
+    }
+
+    #[test]
     fn a_second_finger_ends_an_in_progress_select() {
         let mut mapper = TouchMouseMapper::new();
         let now = Instant::now();
@@ -760,14 +977,18 @@ mod tests {
             names(mapper.translate(&touch(1, TouchPhase::Started, 100.0, 100.0), now, true, 1.0));
         let _ = names(mapper.translate(
             &touch(1, TouchPhase::Moved, 100.0 + STEP, 100.0),
-            now,
+            now + BOX_HOLD,
             true,
             1.0,
         ));
 
         // The select releases first, then the pan anchors at the centroid.
-        let takeover =
-            names(mapper.translate(&touch(2, TouchPhase::Started, 300.0, 100.0), now, true, 1.0));
+        let takeover = names(mapper.translate(
+            &touch(2, TouchPhase::Started, 300.0, 100.0),
+            now + BOX_HOLD + Duration::from_millis(10),
+            true,
+            1.0,
+        ));
 
         assert_eq!(
             takeover,
@@ -867,7 +1088,7 @@ mod tests {
         // The surviving finger still selects and clicks normally.
         let upgrade = names(mapper.translate(
             &touch(7, TouchPhase::Moved, 120.0 + STEP, 90.0),
-            now,
+            now + BOX_HOLD,
             true,
             1.0,
         ));
