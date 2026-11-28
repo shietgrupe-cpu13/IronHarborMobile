@@ -9,6 +9,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.nio.file.Files
+import java.util.Locale
 import java.util.UUID
 
 /** User-owned Documents/RA2Harbor tree used directly by the Rust engine. */
@@ -606,28 +607,36 @@ internal class SharedDataStorage(private val context: Context) {
         @Throws(IOException::class)
         private fun mergeLegacyDirectory(source: File, target: File) {
             val children = source.listFiles() ?: throw IOException("Cannot list ${source.absolutePath}")
+            val targetChildren = target.listFiles() ?: throw IOException("Cannot list ${target.absolutePath}")
+            val targetByName = LinkedHashMap<String, File>(targetChildren.size)
+            for (child in targetChildren) {
+                targetByName.putIfAbsent(child.name.lowercase(Locale.ROOT), child)
+            }
             for (entry in children) {
                 if (Files.isSymbolicLink(entry.toPath())) continue
-                val existing = target.listFiles()?.firstOrNull { it.name.equals(entry.name, ignoreCase = true) }
-                if (entry.isDirectory && existing?.isDirectory == true) {
+                val existing = targetByName[entry.name.lowercase(Locale.ROOT)]
+                if (entry.isDirectory && existing?.isDirectory == true &&
+                    !Files.isSymbolicLink(existing.toPath())
+                ) {
                     mergeLegacyDirectory(entry, existing)
                     continue
                 }
-                val destination = existing?.let { uniqueLegacyName(target, entry.name) } ?: File(target, entry.name)
+                val destination = existing?.let { uniqueLegacyName(target, entry.name, targetByName.keys) }
+                    ?: File(target, entry.name)
                 Files.move(entry.toPath(), destination.toPath())
+                targetByName[destination.name.lowercase(Locale.ROOT)] = destination
             }
             if (source.listFiles()?.isEmpty() == true) source.delete()
         }
 
-        private fun uniqueLegacyName(directory: File, original: String): File {
+        private fun uniqueLegacyName(directory: File, original: String, occupiedNames: Set<String>): File {
             val dot = original.lastIndexOf('.')
             val stem = if (dot > 0) original.substring(0, dot) else original
             val extension = if (dot > 0) original.substring(dot) else ""
             var suffix = 2
             while (true) {
                 val candidate = File(directory, "$stem (legacy $suffix)$extension")
-                val collision = directory.listFiles()?.any { it.name.equals(candidate.name, ignoreCase = true) } == true
-                if (!collision) return candidate
+                if (candidate.name.lowercase(Locale.ROOT) !in occupiedNames) return candidate
                 suffix++
             }
         }

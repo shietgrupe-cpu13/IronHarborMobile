@@ -2,9 +2,18 @@
 
 Updated 2026-11-28. The authoritative specification is [IRON_HARBOR_MASTER_PLAN.md](IRON_HARBOR_MASTER_PLAN.md).
 
+## Current unverified change — Maps migration stall
+
+- Worktree branch is `android-new`; last synced base was local `64d374eac`. Untracked `out/` must remain untouched.
+- Current source diff optimizes `SharedDataStorage.mergeLegacyDirectory`: target names are indexed once per directory rather than rescanned for each legacy entry. A focused JVM regression checks case-insensitive collision handling and preservation of an occupied legacy suffix.
+- Device evidence: latest startup diagnostic reports 7,711 ms in `documents_layout_check` of 7,747 ms preflight. `ensureLayout()` calls the old `Configs/Maps` migration; its previous nested directory rescans are the identified unbounded work. This is a source-based root-cause attribution; there is no equivalent before/after device timing yet.
+- CI has not run for this diff. Do not claim the fix verified until the Android JVM workflow passes. No local Kotlin/Rust/Gradle build was run.
+- Separate remaining gameplay issue: latest logs report zero usable mode rows in `MPModesMD.ini`. The log also reports 497 mod maps staged in canonical `Documents/RA2Harbor/Maps` and no `Configs/Maps`. Mode roster/resource resolution still needs root-cause work; do not fabricate fallback modes or attribute it to this migration fix.
+- Next: inspect the focused diff, push the owned commit to `android-new`, monitor the Actions run, fix any actual failure, and update this handoff with its result/artifact. Physical-device retest is needed to compare startup and verify the map chooser independently.
+
 ## Repository and verified build
 
-- Repository `shietgrupe-cpu13/IronHarborMobile`, branch `android-new`; local and remote branch head `b94e433a9` (`Merge commit 'c7868bc8f0756f063dd944b91a1a90d565849246' into android-new`).
+- Repository `shietgrupe-cpu13/IronHarborMobile`, branch `android-new`; last synced local and remote base `64d374eac`. Current worktree includes the uncommitted Maps migration fix and its JVM regression; CI has not run for this diff.
 - The last source commits before CI's upstream sync were `96b0c6b87` (temporary selected-mod map staging), `e2b8227ba` (canonical Maps path correction), `99211b28d` (resolve `VeraActivity.kt` upstream conflict), and `f4ef8bbf1` (fix renamed map-root test filter).
 - Actions [46090355627](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46090355627) passed Kotlin/JVM tests, focused Rust regressions, ARM64 native compilation, APK assembly, persistent signing, package/signature/alignment checks, artifact upload and upstream merge push.
 - Debug APK artifact [15241902961](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46090355627/artifacts/15241902961), 54,431,155 bytes, SHA-256 digest `e9e96beb5bc217792df712842c8fef3e197b89296f6c754263bbc1a1e40b0b15d`; expires 2026-12-12. This is an Actions artifact, not a public release. No device test occurred.

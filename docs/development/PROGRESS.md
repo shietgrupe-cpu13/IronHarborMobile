@@ -2,6 +2,14 @@
 
 Updated 2026-11-28. Current authoritative plan: [IRON_HARBOR_MASTER_PLAN.md](IRON_HARBOR_MASTER_PLAN.md).
 
+## 2026-11-28 — legacy Maps migration startup stall
+
+- Latest device diagnostics measured `documents_layout_check` at 7,711 ms (total Play preflight 7,747 ms). In the direct-path storage mode used by this device, the only unbounded work inside `ensureLayout()` is the legacy `Configs/Maps` migration. Its merge loop called `target.listFiles()` for each entry and again for collisions, causing repeated full-directory scans on large map collections.
+- Changed `SharedDataStorage.mergeLegacyDirectory` to index each target directory once using case-insensitive names, reuse that index for collision selection, and preserve existing symlink safeguards and non-overwrite behavior. Added a JVM regression for case-insensitive collisions and occupied legacy suffixes.
+- Static review and `git diff --check` only; no local Kotlin, Rust, Gradle or APK compilation. CI is pending. The source change removes the repeated listing algorithm; no before/after device timing has yet been measured, so no speedup is claimed.
+- The same device report says 497 mod maps are staged in `Documents/RA2Harbor/Maps`; the incorrect `Configs/Maps` directory is absent. It also reports no usable `MPModesMD.ini` rows from the selected archive stack. That separate mode-catalog problem can still keep maps out of Choose Map; this patch does not claim to fix it.
+- `out/` remains untracked user data and is untouched.
+
 ## Current work — temporary mod maps and canonical shared Maps directory
 
 - User clarified the desired lifecycle: selecting a mod temporarily exposes its loose maps in `Documents/RA2Harbor/Maps`; unselecting/switching removes only Iron Harbor managed copies while preserving source files and personal maps.

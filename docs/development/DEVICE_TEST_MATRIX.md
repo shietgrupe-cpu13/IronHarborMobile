@@ -2,6 +2,14 @@
 
 Updated 2026-11-28. User-reported results are identified separately from CI. Device model/API and artifact hashes are recorded only when supplied.
 
+## Latest startup and map evidence — 2026-11-28
+
+| Device / API | ABI | Status | Observed checks |
+|---|---|---|---|
+| Xiaomi / Android 16 (exact model not captured in this archive) | ARM64 | User diagnostic, build 0.4.3/code 208 | Play preflight 7,747 ms; `documents_layout_check` 7,711 ms. The selected mod's 497 loose maps were recorded as staged under `Documents/RA2Harbor/Maps`; `Documents/RA2Harbor/Configs/Maps` was absent. Engine still logged that `MPModesMD.ini` from the selected archive stack had no usable rows. Migration-loop optimization is awaiting CI and a device retest; mode roster/map chooser remains unverified and unresolved. |
+
+The migration code previously rescanned the canonical target directory for every entry while moving legacy `Configs/Maps` contents. The new source diff indexes each target directory once and has a JVM collision-preservation regression. This identifies and removes the repeated-scan algorithm, but no equivalent before/after device timing exists yet. Do not report a measured startup improvement. The MPModes warning is a separate engine/resource-selection issue.
+
 ## Latest CI artifact — awaiting physical-device test
 
 | Device / API | ABI | Status | Observed checks |

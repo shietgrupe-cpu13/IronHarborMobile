@@ -52,4 +52,29 @@ class SharedDataMapsMigrationTest {
             root.deleteRecursively()
         }
     }
+
+    @Test
+    fun legacyMapCollisionLookupIsCaseInsensitiveAndSkipsOccupiedLegacyNames() {
+        val root = Files.createTempDirectory("ih-maps-case-collision").toFile()
+        try {
+            root.resolve("Configs/Maps/arena.yrm").apply {
+                parentFile.mkdirs()
+                writeText("legacy")
+            }
+            root.resolve("Maps/ARENA.YRM").apply {
+                parentFile.mkdirs()
+                writeText("current")
+            }
+            root.resolve("Maps/arena (legacy 2).yrm").writeText("older preserved file")
+
+            SharedDataStorage.migrateLegacyMaps(root)
+
+            assertEquals("current", root.resolve("Maps/ARENA.YRM").readText())
+            assertEquals("older preserved file", root.resolve("Maps/arena (legacy 2).yrm").readText())
+            assertEquals("legacy", root.resolve("Maps/arena (legacy 3).yrm").readText())
+            assertFalse(root.resolve("Configs/Maps").exists())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
 }
