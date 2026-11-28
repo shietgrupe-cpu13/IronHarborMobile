@@ -932,6 +932,10 @@ mod tests {
         let base = crate::assets::asset_manager::test_support::audio_test_install(
             "client-catalog-missing-map-base",
         );
+        base.write(
+            "MPModesMD.ini",
+            b"[Battle]\n1=GUI:Battle, STT:ModeBattle, MPBattleMD.ini, standard, true\n",
+        );
         let selected_mod = TestDirectory::new("client-catalog-missing-map-mod");
         std::fs::create_dir_all(selected_mod.path().join("Resources")).unwrap();
         std::fs::create_dir_all(selected_mod.path().join("INI")).unwrap();
