@@ -4,6 +4,18 @@ on:
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
+    inputs:
+      build_type:
+        description: "Build an installable debug APK or signed release APK"
+        type: choice
+        options: [debug, release]
+        default: debug
+        required: true
+      publish_release:
+        description: "Publish the validated release APK as a public GitHub Release"
+        type: boolean
+        default: false
+        required: true
   push:
     branches: [main, android-new]
     paths:
@@ -11,13 +23,12 @@ on:
       - "Cargo.lock"
       - "src/**"
       - "android/**"
-      - ".github/workflows/sync-upstream-android.yml"
 
 permissions:
   contents: write
 
 concurrency:
-  group: sync-android-new
+  group: sync-android-new-${{ github.event_name == 'workflow_dispatch' && inputs.build_type || 'debug' }}
   cancel-in-progress: true
 
 jobs:
@@ -25,11 +36,16 @@ jobs:
     name: Merge, test, and build android-new
     runs-on: ubuntu-latest
     timeout-minutes: 150
+    outputs:
+      source_sha: ${{ steps.upstream.outputs.source_sha }}
+      upstream_sha: ${{ steps.upstream.outputs.upstream_sha }}
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
       ANDROID_NDK_VERSION: "28.2.13676358"
       ANDROID_COMPILE_SDK: "36"
       ANDROID_BUILD_TOOLS: "36.1.0"
+      BUILD_TYPE: ${{ inputs.build_type || 'debug' }}
+      PUBLISH_RELEASE: ${{ inputs.publish_release || false }}
     steps:
       - name: Check out android-new
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -56,6 +72,10 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "Merged upstream $upstream_sha"
           fi
+          if [[ "$PUBLISH_RELEASE" == true && "$BUILD_TYPE" != release ]]; then
+            echo "::error::Public release publishing requires build_type=release."
+            exit 1
+          fi
           validate=false
           if [[ "$(git rev-parse HEAD)" != "$(git rev-parse origin/android-new)" ]] ||
              [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]] ||
@@ -63,6 +83,8 @@ jobs:
             validate=true
           fi
           echo "validate=$validate" >> "$GITHUB_OUTPUT"
+          echo "upstream_sha=$upstream_sha" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Set up Temurin JDK 17
         if: steps.upstream.outputs.validate == 'true'
@@ -135,7 +157,7 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: android-new-arm64
-          key: fast
+          key: ${{ inputs.build_type == 'release' && 'shipping' || 'fast' }}
 
       - name: Install Linux audio headers for host-side Rust tests
         if: steps.upstream.outputs.validate == 'true'
@@ -182,28 +204,68 @@ jobs:
         shell: bash
         run: cargo install cargo-ndk --version 4.1.2 --locked
 
+      - name: Prepare persistent release signing key
+        if: steps.upstream.outputs.validate == 'true' && inputs.build_type == 'release'
+        env:
+          ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
+          ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in ANDROID_RELEASE_KEYSTORE_BASE64 ANDROID_RELEASE_STORE_PASSWORD \
+                      ANDROID_RELEASE_KEY_ALIAS ANDROID_RELEASE_KEY_PASSWORD; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::Missing repository signing secret: $name"
+              exit 1
+            fi
+          done
+          keystore="$RUNNER_TEMP/iron-harbor-release.keystore"
+          printf '%s' "$ANDROID_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          chmod 600 "$keystore"
+          keytool -list -keystore "$keystore" \
+            -storepass "$ANDROID_RELEASE_STORE_PASSWORD" \
+            -alias "$ANDROID_RELEASE_KEY_ALIAS" >/dev/null
+          echo "ANDROID_RELEASE_STORE_FILE=$keystore" >> "$GITHUB_ENV"
+          echo "ANDROID_RELEASE_STORE_PASSWORD=$ANDROID_RELEASE_STORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "ANDROID_RELEASE_KEY_ALIAS=$ANDROID_RELEASE_KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "ANDROID_RELEASE_KEY_PASSWORD=$ANDROID_RELEASE_KEY_PASSWORD" >> "$GITHUB_ENV"
+
       - name: Build ARM64 native library
         if: steps.upstream.outputs.validate == 'true'
+        env:
+          BUILD_TYPE: ${{ env.BUILD_TYPE }}
         shell: bash
         run: |
           set -euo pipefail
+          profile=fast
+          if [[ "$BUILD_TYPE" == release ]]; then
+            profile=shipping
+          fi
           cargo ndk -t arm64-v8a --platform 26 -o android/app/src/main/jniLibs build \
-            --profile fast -p vera20k-android --no-default-features
+            --profile "$profile" -p vera20k-android --no-default-features
 
-      - name: Assemble debug APK
+      - name: Assemble APK
         if: steps.upstream.outputs.validate == 'true'
+        env:
+          BUILD_TYPE: ${{ env.BUILD_TYPE }}
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p android/.android
-          keytool -genkeypair -keystore android/.android/debug.keystore \
-            -storepass android -alias androiddebugkey -keypass android \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -dname "CN=Android Debug,O=Android,C=US"
-          bash "$RUNNER_TEMP/gradle-with-network-retry.sh" -p android :app:assembleDebug
+          if [[ "$BUILD_TYPE" == release ]]; then
+            bash "$RUNNER_TEMP/gradle-with-network-retry.sh" -p android :app:assembleRelease
+          else
+            mkdir -p android/.android
+            keytool -genkeypair -keystore android/.android/debug.keystore \
+              -storepass android -alias androiddebugkey -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+            bash "$RUNNER_TEMP/gradle-with-network-retry.sh" -p android :app:assembleDebug
+          fi
 
       - name: Apply persistent signing to the debug APK
-        if: steps.upstream.outputs.validate == 'true'
+        if: steps.upstream.outputs.validate == 'true' && inputs.build_type != 'release'
         shell: bash
         env:
           ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
@@ -238,16 +300,31 @@ jobs:
           mv "$signed" "$apk"
           rm -f "$keystore"
 
-      - name: Verify debug APK identity, signature, and native alignment
+      - name: Verify APK identity, persistent signature, and native alignment
         if: steps.upstream.outputs.validate == 'true'
+        env:
+          BUILD_TYPE: ${{ env.BUILD_TYPE }}
         shell: bash
         run: |
           set -euo pipefail
-          apk=android/app/build/outputs/apk/debug/app-debug.apk
+          version_name="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
+          version_code="$(sed -n 's/^val veraVersionCode = \([0-9][0-9]*\)$/\1/p' android/app/build.gradle.kts)"
+          build_label="$(sed -n 's/^val veraBuildLabel = "\([^"]*\)"$/\1/p' android/app/build.gradle.kts)"
+          if [[ "$BUILD_TYPE" == release ]]; then
+            expected_id=org.ironharbor.mobile
+            apk=android/app/build/outputs/apk/release/app-release.apk
+          else
+            expected_id=org.ironharbor.mobile.debug
+            apk=android/app/build/outputs/apk/debug/app-debug.apk
+          fi
           tools="$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS"
           test -s "$apk"
-          "$tools/aapt" dump badging "$apk" | grep -F "package: name='org.ironharbor.mobile.debug'"
-          "$tools/apksigner" verify --verbose --print-certs "$apk"
+          "$tools/aapt" dump badging "$apk" | tee "$RUNNER_TEMP/apk-badging.txt"
+          grep -F "package: name='$expected_id' versionCode='$version_code' versionName='$version_name'" "$RUNNER_TEMP/apk-badging.txt"
+          grep -F "native-code: 'arm64-v8a'" "$RUNNER_TEMP/apk-badging.txt"
+          signature="$RUNNER_TEMP/apk-signature.txt"
+          "$tools/apksigner" verify --verbose --print-certs "$apk" | tee "$signature"
+          grep -F 'Signer #1 certificate SHA-256 digest: 7440ad6a732f410f570b55b8d7e0138b0a9ab318ce5553afc02e8e0527ce1711' "$signature"
           "$tools/zipalign" -c -P 16 -v 4 "$apk"
           unzip -t "$apk"
           unzip -Z1 "$apk" | grep -Fx 'lib/arm64-v8a/libvera20k_android.so'
@@ -270,12 +347,20 @@ jobs:
           print(f"ARM64 ELF LOAD alignments: {alignments}")
           PY
 
-      - name: Upload ARM64 debug APK
+          mkdir -p dist
+          output="dist/IronHarborMobile-v${version_name}-${build_label}-${BUILD_TYPE}-arm64.apk"
+          cp "$apk" "$output"
+          sha256sum "$output" | tee dist/SHA256SUMS.txt
+          echo "APK: $output"
+
+      - name: Upload verified ARM64 APK artifact
         if: success() && steps.upstream.outputs.validate == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: IronHarborMobile-android-new-arm64-${{ github.sha }}
-          path: android/app/build/outputs/apk/debug/*.apk
+          name: IronHarborMobile-android-new-${{ inputs.build_type || 'debug' }}-${{ steps.upstream.outputs.source_sha }}
+          path: |
+            dist/*.apk
+            dist/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 14
 
@@ -295,3 +380,57 @@ jobs:
             echo "Refusing to overwrite or merge unvalidated commits; rerun synchronization on the new head." >&2
             exit 1
           fi
+
+      - name: Publish verified B61 release
+        if: >-
+          success() && steps.upstream.outputs.validate == 'true' &&
+          github.event_name == 'workflow_dispatch' && inputs.build_type == 'release' &&
+          inputs.publish_release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.upstream.outputs.source_sha }}
+          UPSTREAM_SHA: ${{ steps.upstream.outputs.upstream_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version_name="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
+          version_code="$(sed -n 's/^val veraVersionCode = \([0-9][0-9]*\)$/\1/p' android/app/build.gradle.kts)"
+          build_label="$(sed -n 's/^val veraBuildLabel = "\([^"]*\)"$/\1/p' android/app/build.gradle.kts)"
+          if [[ "$build_label" != B61 || "$version_code" -le 267 ]]; then
+            echo "::error::Refusing release: expected B61 and versionCode greater than B60's 267."
+            exit 1
+          fi
+          tag="android-${build_label,,}"
+          if git ls-remote --exit-code origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "::error::Refusing to replace existing tag $tag."
+            exit 1
+          fi
+          apk="dist/IronHarborMobile-v${version_name}-${build_label}-release-arm64.apk"
+          test -s "$apk"
+          sha="$(sha256sum "$apk" | cut -d ' ' -f1)"
+          notes="$RUNNER_TEMP/release-notes.md"
+          cat > "$notes" <<EOF
+          ## What's new since B60
+
+          - Updates the Android build to VERA20K 0.4.3, including the upstream engine revision \`$UPSTREAM_SHA\`.
+          - Fixes held-drag unit box selection so it begins at the original touch point and does not turn small hold jitter into a premature right-click.
+          - Adds a launcher option to disable automatic startup diagnostic snapshots; engine logs, crash reports, and manual exports remain available.
+
+          ## Compatibility
+
+          - Package: \`org.ironharbor.mobile\`; version code: \`$version_code\` (B60 was 267).
+          - ARM64 APK signed with the existing Iron Harbor release certificate for in-place updates.
+          - You provide your own legally obtained game files; none are included.
+
+          Fork source: \`$SOURCE_SHA\`
+
+          Upstream source: \`$UPSTREAM_SHA\`
+
+          SHA-256: \`$sha\`
+          EOF
+          printf 'SHA-256: %s\nAPK: %s\nFork source: %s\nUpstream source: %s\n' \
+            "$sha" "$(basename "$apk")" "$SOURCE_SHA" "$UPSTREAM_SHA" > dist/changelog.txt
+          gh release create "$tag" "$apk" dist/changelog.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Iron Harbor Mobile v${version_name} ${build_label}" \
+            --notes-file "$notes" --target "$SOURCE_SHA" --latest
