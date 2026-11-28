@@ -611,7 +611,9 @@ jobs:
           actual_native_sha="$(unzip -p "$apk" lib/arm64-v8a/libvera20k_android.so | sha256sum | cut -d ' ' -f1)"
           test "$actual_native_sha" = "$expected_native_sha"
           mkdir -p dist
-          output="dist/IronHarborMobile-v${version_name}-${build_label}-${BUILD_TYPE}-arm64.apk"
+          suffix=".debug"
+          if [[ "$BUILD_TYPE" == release ]]; then suffix=""; fi
+          output="dist/IronHarborMobile ${build_label}${suffix}.apk"
           cp "$apk" "$output"
           sha256sum "$output" | tee dist/SHA256SUMS.txt
           printf 'source_sha=%s\nupstream_sha=%s\nbuild_type=%s\nversion_name=%s\nversion_code=%s\n' \
@@ -669,7 +671,7 @@ jobs:
             echo "::error::Refusing to replace existing tag $tag."
             exit 1
           fi
-          apk="dist/IronHarborMobile-v${version_name}-${build_label}-release-arm64.apk"
+          apk="dist/IronHarborMobile ${build_label}.apk"
           test -s "$apk"
           sha="$(sha256sum "$apk" | cut -d ' ' -f1)"
           notes="$RUNNER_TEMP/release-notes.md"
