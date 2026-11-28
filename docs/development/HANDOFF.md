@@ -1,13 +1,13 @@
 # Iron Harbor Mobile handoff
 
-## Current checkpoint — HUD/control changes (2026-11-28; CI pending)
+## Current checkpoint — touch box selection and diagnostic toggle (2026-11-28; CI pending)
 
-- Repository `shietgrupe-cpu13/IronHarborMobile`, branch `android-new`; remote matched `9022149a829658d5cadcdb4633109f3c19b98438` before pending changes. Commit/push these changes and let Actions perform all compilation and tests; never compile locally.
-- The first new run [46116095627](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46116095627) failed at Kotlin compilation because `modifierModesHeld` lacked a field declaration. The declaration is now added; commit/push it and retry.
-- Pending changes: C1..C10 tap/hold group behavior routed through the Rust game loop; source-grounded PC hotkeys and modifier chords; modifier release when switching HUD sets; swipe/pinch camera input; mod map synchronization; faction flag cache invalidation. Focused workflow filters were added for touch, camera, groups and flag rendering.
-- `git diff --check` and leaf-file rustfmt passed. No local build/test or device validation. `out/` is user data: leave untracked and untouched, exclude from commits.
-- Next: stage exact source/workflow/docs paths, commit, push to `android-new`, monitor Actions, inspect APK verification and artifact. Diagnose CI failures from actual logs.
-- Cloaked/submersible opacity is not confirmed from logs; no rendering fix is claimed. Request a screenshot or capture with a named unit/mod after install. Physical tests should include C1 tap/hold/clear, keyboard Ctrl+1/1, modifier set switching, swipe pan versus drag-select, pinch anchoring, and mod-map stage/unselect cleanup.
+- Repository `shietgrupe-cpu13/IronHarborMobile`, branch `android-new`, current remote base `b1135666a` (fast-forwarded from `9ed5f2b3` after the upstream sync workflow advanced). Actions [46117788398](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46117788398) succeeded and uploaded artifact [15252099855](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46117788398/artifacts/15252099855). That artifact predates both the upstream fast-forward and the current uncommitted changes.
+- Current tracked edits are limited to `src/app/input/touch.rs`, `StartupDiagnostics.java`, `LauncherActivity.kt`, this handoff and `PROGRESS.md`. Untracked `out/` is user data: leave it untouched and exclude it from commits.
+- Latest IHLOGS: Xiaomi 2412DPC0AG, Android 16 / ARM64, app 0.4.3 code 208; last preflight 25 ms; latest engine startup selected Mali-G720 Vulkan, while earlier sessions selected OpenGL ES. Input log shows touch motion counts but no engine gesture classification. Source review identified long-hold jitter firing right-click before selection and the delayed-drag origin reset; both are corrected with focused touch regression tests.
+- Diagnostics tab now has a persistent toggle for automatic startup snapshots. Disabling it leaves engine logs, manual ZIP export and crash reports available. Automatic preference reads occur in the background capture worker to avoid blocking Application startup.
+- Performance evidence is limited to atlas-growth timings (roughly 13–138 ms chunks; 5–13 ms main-thread preparation); no equivalent gameplay FPS samples are in IHLOGS. Engine inspection confirms Rayon workers for CPU-side work and a dedicated simulation thread, while wgpu handles GPU rendering. Do not claim an FPS gain; profile identical gameplay workloads before optimizing.
+- No local Rust/Cargo/Gradle compilation or tests. Next: review diff, commit only tracked source/docs, push to `android-new`, monitor Actions (which already filters `app::input::touch::`), fix actual CI failures, then ask the user to verify held-drag selection and the diagnostics toggle on-device. Preserve C1..C10, swipe pan, mod maps and faction flags. Cloak/submersible appearance still needs a device screenshot/capture with a named unit and mod.
 
 ## Current checkpoint — skirmish mode/map regression (2026-11-28)
 

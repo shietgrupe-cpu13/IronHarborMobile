@@ -1549,7 +1549,26 @@ class LauncherActivity : Activity() {
         infoRow(device, "File/launch timing", if (preflight.isFile) preflight.readLines().take(5).joinToString("  /  ") else "Recorded after the next Play preflight")
         infoRow(device, "FPS comparison", "Use the in-game CPU/GPU overlay and matching workloads; the diagnostics ZIP does not yet record live frame samples")
         infoRow(device, "Log export", "Full retained engine logs and crash report in a ZIP")
-        infoRow(device, "Automatic startup log", "${StartupDiagnostics.locationDescription(this)} — refreshed at launch and after returning from a game; the same file is overwritten")
+        val automaticDiagnostics = CheckBox(this).apply {
+            text = "Automatic startup diagnostics"
+            setTextColor(color(R.color.launcher_text))
+            contentDescription = "Capture and overwrite the startup diagnostic report when the launcher opens or returns from gameplay"
+            isChecked = StartupDiagnostics.autoCaptureEnabled(this@LauncherActivity)
+            setOnCheckedChangeListener { _, enabled ->
+                StartupDiagnostics.setAutoCaptureEnabled(this@LauncherActivity, enabled)
+                Toast.makeText(
+                    this@LauncherActivity,
+                    if (enabled) "Automatic startup diagnostics enabled" else "Automatic startup diagnostics disabled",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
+        device.addView(automaticDiagnostics, margin(top = 8, bottom = 2))
+        device.addView(text(
+            "${StartupDiagnostics.locationDescription(this)}. When enabled, the same file is overwritten on launcher start and after gameplay. Disabling this stops those automatic snapshots; engine logs, manual ZIP export, and crash reports remain available.",
+            12,
+            R.color.launcher_muted,
+        ), margin(bottom = 8))
         pageBody.addView(device, margin(bottom = 12))
         pageBody.addView(actionButton("SHARE AUTOMATIC STARTUP LOG", primary = false) {
             StartupDiagnostics.shareLatest(this)

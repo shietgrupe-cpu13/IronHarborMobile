@@ -41,6 +41,8 @@ final class StartupDiagnostics {
     private static final String TAG = "IronHarborDiagnostics";
     private static final String FILE_NAME = "IronHarborMobile-startup-diagnostics.txt";
     private static final String RELATIVE_PATH = Environment.DIRECTORY_DOWNLOADS + "/";
+    private static final String CAPTURE_PREFERENCES = "iron_harbor_diagnostics";
+    private static final String AUTO_CAPTURE_ENABLED = "auto_capture_enabled";
     private static final int MAX_TRACE_BYTES = 256 * 1024;
     private static final int MAX_STARTUP_REPORT_BYTES = 2 * 1024 * 1024;
     private static final ScheduledExecutorService WORKER = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -83,6 +85,16 @@ final class StartupDiagnostics {
 
     static void captureAfterGame(Context context) {
         capture(context.getApplicationContext(), "Returned from game", 0, TimeUnit.SECONDS);
+    }
+
+    static boolean autoCaptureEnabled(Context context) {
+        return context.getSharedPreferences(CAPTURE_PREFERENCES, Context.MODE_PRIVATE)
+                .getBoolean(AUTO_CAPTURE_ENABLED, true);
+    }
+
+    static void setAutoCaptureEnabled(Context context, boolean enabled) {
+        context.getSharedPreferences(CAPTURE_PREFERENCES, Context.MODE_PRIVATE)
+                .edit().putBoolean(AUTO_CAPTURE_ENABLED, enabled).apply();
     }
 
     static boolean shareLatest(Activity activity) {
@@ -139,9 +151,11 @@ final class StartupDiagnostics {
     private static void capture(Context context, String reason, long delay, TimeUnit unit) {
         WORKER.schedule(() -> {
             try {
+                if (!autoCaptureEnabled(context)) return;
                 String report = baseReport(context, reason)
                         + "\n--- APP LOGCAT (UID FILTERED, BEST EFFORT) ---\n"
                         + AndroidLogcatCapture.capture(Process.myUid(), context.getCacheDir());
+                if (!autoCaptureEnabled(context)) return;
                 LATEST_REPORT.set(report);
                 writeReport(context, report);
             } catch (Throwable error) {

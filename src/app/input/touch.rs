@@ -50,7 +50,7 @@ use winit::dpi::PhysicalPosition;
 use winit::event::{DeviceId, ElementState, MouseButton, Touch, TouchPhase, WindowEvent};
 
 /// A pending touch held this long without leaving its origin becomes a right
-/// click immediately.
+/// click when it is released.
 const LONG_PRESS: Duration = Duration::from_millis(400);
 /// A short in-game one-finger drag pans; holding first makes the drag a select.
 const BOX_HOLD: Duration = Duration::from_millis(250);
@@ -347,12 +347,6 @@ impl TouchMouseMapper {
                     .started
                     .map(|start| now.duration_since(start))
                     .unwrap_or_default();
-                let held = !self.suppress_tap && elapsed >= LONG_PRESS;
-                if held && distance(touch.location, self.origin) <= threshold {
-                    // Long press: fire the context click right away.
-                    self.gesture = Gesture::Done;
-                    return TouchOutput::events(Self::click_at(touch, MouseButton::Right));
-                }
                 if distance(touch.location, self.origin) > threshold {
                     if self.allow_pan && !self.suppress_tap && elapsed < BOX_HOLD {
                         self.gesture = Gesture::Pan {
@@ -370,14 +364,12 @@ impl TouchMouseMapper {
                             ..TouchOutput::default()
                         };
                     }
-                    // Upgrade to the select box: press the left button where
-                    // the held finger moved, so the box starts there. The
-                    // same path drags sliders and lists over the UI.
+                    // Upgrade to a select box from the original touch-down
+                    // point. A stationary hold remains pending until release,
+                    // so small touch jitter cannot consume a later box drag as
+                    // a context click. The same path drags sliders and lists.
                     self.gesture = Gesture::Drag;
                     self.suppress_tap = false;
-                    if elapsed >= BOX_HOLD {
-                        self.origin = touch.location;
-                    }
                     TouchOutput::events([
                         Some(Self::cursor_at(touch.device_id, self.origin)),
                         Some(Self::mouse_input(
@@ -454,8 +446,8 @@ impl TouchMouseMapper {
                 let held = now.duration_since(start) >= LONG_PRESS;
                 let still = distance(touch.location, self.origin) <= threshold;
                 let button = if held && still {
-                    // Long-press fallback for coarse event delivery: the live
-                    // check in the move handler usually fires first.
+                    // Resolve a stationary hold only on release, leaving a
+                    // held finger free to become a selection drag.
                     MouseButton::Right
                 } else {
                     // A quick release clicks.
@@ -651,18 +643,18 @@ mod tests {
     }
 
     #[test]
-    fn a_held_single_finger_drag_starts_selection_at_the_drag_point() {
+    fn a_held_single_finger_drag_starts_selection_at_touch_down() {
         let mut mapper = TouchMouseMapper::new();
         let now = Instant::now();
         let _ = names(mapper.translate(&touch(1, TouchPhase::Started, 40.0, 60.0), now, true, 1.0));
 
-        // The select box presses where the finger landed, then follows it.
-        let upgrade = names(mapper.translate(
+        // The box starts at the original touch-down point, then follows the finger.
+        let upgrade = mapper.translate(
             &touch(1, TouchPhase::Moved, 40.0 + STEP, 60.0),
             now + BOX_HOLD,
             true,
             1.0,
-        ));
+        );
         let follow = names(mapper.translate(
             &touch(1, TouchPhase::Moved, 40.0 + STEP + 30.0, 60.0),
             now + BOX_HOLD + Duration::from_millis(20),
@@ -676,7 +668,19 @@ mod tests {
             1.0,
         ));
 
-        assert_eq!(upgrade, vec!["move".to_owned(), "Pressed Left".to_owned()]);
+        let box_origin = upgrade.events.iter().flatten().find_map(|event| match event {
+            WindowEvent::CursorMoved { position, .. } => Some(*position),
+            _ => None,
+        });
+        assert_eq!(box_origin, Some(PhysicalPosition::new(40.0, 60.0)));
+        assert!(matches!(
+            upgrade.events.iter().flatten().nth(1),
+            Some(WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            })
+        ));
         assert_eq!(follow, vec!["move".to_owned()]);
         assert_eq!(lift, vec!["move".to_owned(), "Released Left".to_owned()]);
     }
@@ -759,7 +763,7 @@ mod tests {
     // --- long press ------------------------------------------------------
 
     #[test]
-    fn a_long_still_touch_fires_the_right_button_immediately() {
+    fn a_long_hold_with_small_jitter_can_still_start_a_selection_box() {
         let mut mapper = TouchMouseMapper::new();
         let now = Instant::now();
         let _ = names(mapper.translate(&touch(1, TouchPhase::Started, 40.0, 60.0), now, true, 1.0));
@@ -770,22 +774,26 @@ mod tests {
             true,
             1.0,
         ));
-        let consumed = names(mapper.translate(
-            &touch(1, TouchPhase::Ended, 42.0, 60.0),
+        let upgrade = mapper.translate(
+            &touch(1, TouchPhase::Moved, 40.0 + STEP, 60.0),
             now + LONG_PRESS + Duration::from_millis(40),
             true,
             1.0,
-        ));
-
-        assert_eq!(
-            fired,
-            vec![
-                "move".to_owned(),
-                "Pressed Right".to_owned(),
-                "Released Right".to_owned()
-            ]
         );
-        assert!(consumed.is_empty());
+        assert_eq!(fired, vec!["move".to_owned()]);
+        let box_origin = upgrade.events.iter().flatten().find_map(|event| match event {
+            WindowEvent::CursorMoved { position, .. } => Some(*position),
+            _ => None,
+        });
+        assert_eq!(box_origin, Some(PhysicalPosition::new(40.0, 60.0)));
+        assert!(matches!(
+            upgrade.events.iter().flatten().nth(1),
+            Some(WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            })
+        ));
     }
 
     #[test]
