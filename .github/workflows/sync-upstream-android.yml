@@ -25,25 +25,26 @@ on:
       - "android/**"
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: sync-android-new-${{ github.event_name == 'workflow_dispatch' && inputs.build_type || 'debug' }}
   cancel-in-progress: true
 
 jobs:
-  sync-and-verify:
-    name: Merge, test, and build android-new
+  prepare:
+    name: Resolve and freeze Android source
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 15
     outputs:
+      base_sha: ${{ steps.upstream.outputs.base_sha }}
       source_sha: ${{ steps.upstream.outputs.source_sha }}
       upstream_sha: ${{ steps.upstream.outputs.upstream_sha }}
+      changed: ${{ steps.upstream.outputs.changed }}
+      validate: ${{ steps.upstream.outputs.validate }}
+      build_type: ${{ steps.upstream.outputs.build_type }}
+      build_profile: ${{ steps.upstream.outputs.build_profile }}
     env:
-      CARGO_TARGET_DIR: ${{ github.workspace }}/target
-      ANDROID_NDK_VERSION: "28.2.13676358"
-      ANDROID_COMPILE_SDK: "36"
-      ANDROID_BUILD_TOOLS: "36.1.0"
       BUILD_TYPE: ${{ inputs.build_type || 'debug' }}
       PUBLISH_RELEASE: ${{ inputs.publish_release || false }}
     steps:
@@ -53,7 +54,7 @@ jobs:
           ref: android-new
           fetch-depth: 0
 
-      - name: Merge latest upstream main
+      - name: Merge latest upstream main and freeze source revision
         id: upstream
         shell: bash
         run: |
@@ -62,150 +63,435 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote add upstream https://github.com/YuriPlanet/vera20k.git
           git fetch upstream main
+          base_sha="$(git rev-parse HEAD)"
           upstream_sha="$(git rev-parse upstream/main)"
-          if git merge-base --is-ancestor "$upstream_sha" HEAD; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
+          changed=false
+          if git merge-base --is-ancestor "$upstream_sha" "$base_sha"; then
             echo "android-new already contains upstream $upstream_sha"
           else
-            # On conflict, stop here: do not push a partial or forced update.
+            # Keep the candidate local until every dependent job validates it.
             git merge --no-ff --no-edit "$upstream_sha"
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "Merged upstream $upstream_sha"
+            changed=true
+            echo "Merged upstream $upstream_sha into candidate $(git rev-parse HEAD)"
           fi
           if [[ "$PUBLISH_RELEASE" == true && "$BUILD_TYPE" != release ]]; then
             echo "::error::Public release publishing requires build_type=release."
             exit 1
           fi
+          build_profile=fast
+          if [[ "$BUILD_TYPE" == release ]]; then build_profile=shipping; fi
           validate=false
           if [[ "$(git rev-parse HEAD)" != "$(git rev-parse origin/android-new)" ]] ||
-             [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]] ||
-             [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_ACTOR" != "github-actions[bot]" ]]; then
+             [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]] ||
+             [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_ACTOR" != github-actions\[bot\] ]]; then
             validate=true
           fi
-          echo "validate=$validate" >> "$GITHUB_OUTPUT"
-          echo "upstream_sha=$upstream_sha" >> "$GITHUB_OUTPUT"
-          echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          source_sha="$(git rev-parse HEAD)"
+          {
+            echo "base_sha=$base_sha"
+            echo "source_sha=$source_sha"
+            echo "upstream_sha=$upstream_sha"
+            echo "changed=$changed"
+            echo "validate=$validate"
+            echo "build_type=$BUILD_TYPE"
+            echo "build_profile=$build_profile"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### Frozen Android source"
+            echo "- Base fork revision: `$base_sha`"
+            echo "- Candidate revision: `$source_sha`"
+            echo "- Upstream revision: `$upstream_sha`"
+            echo "- Upstream merge required: `$changed`"
+            echo "- Build type: `$BUILD_TYPE`"
+            echo "- Rust profile: `$build_profile`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Bundle candidate merge for parallel jobs
+        if: steps.upstream.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git update-ref refs/heads/ci/android-new-candidate "${{ steps.upstream.outputs.source_sha }}"
+          git bundle create "$RUNNER_TEMP/android-new-source.bundle" \
+            refs/heads/ci/android-new-candidate "^${{ steps.upstream.outputs.base_sha }}"
+
+      - name: Upload candidate merge bundle
+        if: steps.upstream.outputs.changed == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: android-new-source-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/android-new-source.bundle
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+
+  engine-tests:
+    name: Rust engine regressions
+    needs: prepare
+    if: needs.prepare.outputs.validate == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+      SOURCE_CHANGED: ${{ needs.prepare.outputs.changed }}
+    steps:
+      - name: Check out frozen base revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.prepare.outputs.base_sha }}
+          fetch-depth: 1
+
+      - name: Download upstream merge bundle when needed
+        if: needs.prepare.outputs.changed == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: android-new-source-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}
+
+      - name: Check out frozen source revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$SOURCE_CHANGED" == true ]]; then
+            git fetch "$RUNNER_TEMP/android-new-source.bundle" \
+              refs/heads/ci/android-new-candidate:refs/remotes/ci/android-new-candidate
+            git checkout --detach refs/remotes/ci/android-new-candidate
+          else
+            git checkout --detach "$SOURCE_SHA"
+          fi
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        with:
+          toolchain: stable
+
+      - name: Cache host-side engine test artifacts
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: android-new-engine-tests
+          key: host-test-support
+
+      - name: Install Linux audio headers
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends pkg-config libasound2-dev
+
+      - name: Run focused storage, renderer, mod, and input regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build-logs
+          export VERA20K_COMMIT="$SOURCE_SHA"
+          {
+            python -m tools.cargo_run -- test -p vera20k-core --lib util::config::tests::android_config_folder_is_canonical_and_root_config_is_a_migration_fallback
+            python -m tools.cargo_run -- test -p vera20k-core --lib util::config::tests::android_and_desktop_maps_use_the_shared_maps_directory
+            python -m tools.cargo_run -- test -p vera20k --lib app::mods::tests::managed_mod_selection_does_not_treat_descendants_as_profiles
+            python -m tools.cargo_run -- test -p vera20k-core --lib assets::asset_manager::install_inspection_tests::shared_ares_support_is_mod_only_and_a_mod_archive_takes_precedence
+            python -m tools.cargo_run -- test -p vera20k-core --lib util::ini_roots::tests::explicit_mo_profile_resolves_its_roots_and_requires_the_complete_triplet
+            python -m tools.cargo_run -- test -p vera20k-core --lib util::mod_definition::tests::mo_profile_defaults_to_mo_resources_and_manifest_overrides_only_named_slots
+            python -m tools.cargo_run -- test -p vera20k-core --lib util::mod_definition::tests::mental_omega_manifest_identity_selects_mo_without_changing_unknown_mods
+            python -m tools.cargo_run -- test -p vera20k-core --lib map::scenario_sources::tests::mental_omega_loose_catalog_discovers_and_loads_nested_maps
+            python -m tools.cargo_run -- test -p vera20k-core --lib map::scenario_sources::tests::client_catalog_without_native_mode_match_keeps_native_modes_and_shared_maps
+            python -m tools.cargo_run -- test -p vera20k-core --lib assets::client_install::tests::legacy_catalog_infers_modes_from_map_memberships_without_game_modes_registry
+            python -m tools.cargo_run -- test -p vera20k-core --lib map::scenario_sources::tests::catalog_map_paths_reject_parent_and_absolute_components
+            python -m tools.cargo_run -- test -p vera20k --lib app::persistence::options_profile::tests::launcher_renderer_write_is_narrow_persistent_and_rejects_desktop_only_apis
+            python -m tools.cargo_run -- test -p vera20k --lib app::persistence::startup_backend::tests::android_renderer_fallback_tries_one_alternate_backend_without_a_cycle
+            python -m tools.cargo_run -- test -p vera20k-core --lib assets::asset_manager::tests::mo_profile_resolves_and_loads_mo_roots_expansion_archive_and_mod_ares
+            python -m tools.cargo_run -- test -p vera20k --lib app::input::touch::
+            python -m tools.cargo_run -- test -p vera20k --lib app::input::camera::
+            python -m tools.cargo_run -- test -p vera20k --lib app::input::dispatch::android_hud_group_tests::
+            python -m tools.cargo_run -- test -p vera20k --lib render::skirmish_shell_chrome::
+          } 2>&1 | tee build-logs/engine-tests.log
+
+      - name: Upload engine test log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: android-new-engine-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build-logs/engine-tests.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  launcher-tests:
+    name: Android launcher tests
+    needs: prepare
+    if: needs.prepare.outputs.validate == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+      SOURCE_CHANGED: ${{ needs.prepare.outputs.changed }}
+    steps:
+      - name: Check out frozen base revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.prepare.outputs.base_sha }}
+          fetch-depth: 1
+
+      - name: Download upstream merge bundle when needed
+        if: needs.prepare.outputs.changed == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: android-new-source-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}
+
+      - name: Check out frozen source revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$SOURCE_CHANGED" == true ]]; then
+            git fetch "$RUNNER_TEMP/android-new-source.bundle" \
+              refs/heads/ci/android-new-candidate:refs/remotes/ci/android-new-candidate
+            git checkout --detach refs/remotes/ci/android-new-candidate
+          else
+            git checkout --detach "$SOURCE_SHA"
+          fi
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
 
       - name: Set up Temurin JDK 17
-        if: steps.upstream.outputs.validate == 'true'
         uses: actions/setup-java@8df1039502a15bceb9433410b1a100fbe190c53b # v4.5.0
         with:
           distribution: temurin
           java-version: "17"
 
       - name: Configure Gradle cache
-        if: steps.upstream.outputs.validate == 'true'
         uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         with:
-          # setup-gradle defaults non-default branches to read-only. android-new
-          # is a long-lived build branch with its own GitHub cache scope.
-          cache-read-only: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/android-new' }}
+          cache-read-only: false
 
       - name: Set up Android SDK
-        if: steps.upstream.outputs.validate == 'true'
         uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
         with:
           packages: "platform-tools platforms;android-36 build-tools;36.1.0"
 
       - name: Compile launcher and run JVM tests
-        if: steps.upstream.outputs.validate == 'true'
         shell: bash
         run: |
           set -euo pipefail
           chmod +x android/gradlew
-          cat > "$RUNNER_TEMP/gradle-with-network-retry.sh" <<'SCRIPT'
-          #!/usr/bin/env bash
+          bash .github/scripts/gradle-with-network-retry.sh -p android \
+            :app:compileDebugKotlin :app:testDebugUnitTest --no-daemon --max-workers=2
+
+      - name: Upload launcher test reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: android-new-launcher-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: android/app/build/reports/tests/testDebugUnitTest/**
+          if-no-files-found: ignore
+          retention-days: 7
+
+  arm64-native:
+    name: Optimized ARM64 Rust library
+    needs: prepare
+    if: needs.prepare.outputs.validate == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      ANDROID_NDK_VERSION: "28.2.13676358"
+      SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+      SOURCE_CHANGED: ${{ needs.prepare.outputs.changed }}
+      BUILD_TYPE: ${{ needs.prepare.outputs.build_type }}
+      BUILD_PROFILE: ${{ needs.prepare.outputs.build_profile }}
+      VERA20K_COMMIT: ${{ needs.prepare.outputs.source_sha }}
+      CARGO_PROFILE_SHIPPING_STRIP: symbols
+    steps:
+      - name: Check out frozen base revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.prepare.outputs.base_sha }}
+          fetch-depth: 1
+
+      - name: Download upstream merge bundle when needed
+        if: needs.prepare.outputs.changed == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: android-new-source-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}
+
+      - name: Check out frozen source revision
+        shell: bash
+        run: |
           set -euo pipefail
-          for attempt in 1 2 3; do
-            log="$RUNNER_TEMP/gradle-attempt-$attempt.log"
-            set +e
-            ./android/gradlew "$@" --no-daemon --max-workers=2 2>&1 | tee "$log"
-            status=${PIPESTATUS[0]}
-            set -e
-            if [[ "$status" -eq 0 ]]; then
-              exit 0
-            fi
-            # Retry recognized repository/transport failures only. Kotlin,
-            # test, and other deterministic failures stop without another run.
-            if ! grep -Eiq \
-              'status code (429|5[0-9][0-9]) from server|HTTP/(1\.[01]|2) (429|5[0-9][0-9])|UnknownHostException|Temporary failure in name resolution|Connection reset|Connection refused|ConnectException|SocketTimeoutException|Read timed out|No route to host' \
-              "$log"; then
-              echo "Gradle failed without a recognized transient dependency/network error; not retrying."
-              exit "$status"
-            fi
-            if [[ "$attempt" -eq 3 ]]; then
-              exit "$status"
-            fi
-            delay=$((attempt * 30))
-            echo "Transient Gradle dependency/network failure; retrying in ${delay}s."
-            sleep "$delay"
-          done
-          SCRIPT
-          chmod +x "$RUNNER_TEMP/gradle-with-network-retry.sh"
-          bash "$RUNNER_TEMP/gradle-with-network-retry.sh" -p android \
-            :app:compileDebugKotlin :app:testDebugUnitTest
+          if [[ "$SOURCE_CHANGED" == true ]]; then
+            git fetch "$RUNNER_TEMP/android-new-source.bundle" \
+              refs/heads/ci/android-new-candidate:refs/remotes/ci/android-new-candidate
+            git checkout --detach refs/remotes/ci/android-new-candidate
+          else
+            git checkout --detach "$SOURCE_SHA"
+          fi
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
 
       - name: Set up Rust and ARM64 target
-        if: steps.upstream.outputs.validate == 'true'
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
         with:
           toolchain: stable
           targets: aarch64-linux-android
 
-      - name: Cache Android ARM64 Cargo artifacts
-        if: steps.upstream.outputs.validate == 'true'
+      - name: Cache ARM64 Cargo artifacts
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: android-new-arm64
-          key: ${{ inputs.build_type == 'release' && 'shipping' || 'fast' }}
+          key: arm64-${{ needs.prepare.outputs.build_profile }}
 
-      - name: Install Linux audio headers for host-side Rust tests
-        if: steps.upstream.outputs.validate == 'true'
-        shell: bash
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends pkg-config libasound2-dev
-
-      - name: Run focused Android storage, renderer, and Mental Omega regressions
-        if: steps.upstream.outputs.validate == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m tools.cargo_run -- test -p vera20k-core --lib util::config::tests::android_config_folder_is_canonical_and_root_config_is_a_migration_fallback
-          python -m tools.cargo_run -- test -p vera20k-core --lib util::config::tests::android_and_desktop_maps_use_the_shared_maps_directory
-          python -m tools.cargo_run -- test -p vera20k --lib app::mods::tests::managed_mod_selection_does_not_treat_descendants_as_profiles
-          python -m tools.cargo_run -- test -p vera20k-core --lib assets::asset_manager::install_inspection_tests::shared_ares_support_is_mod_only_and_a_mod_archive_takes_precedence
-          python -m tools.cargo_run -- test -p vera20k-core --lib util::ini_roots::tests::explicit_mo_profile_resolves_its_roots_and_requires_the_complete_triplet
-          python -m tools.cargo_run -- test -p vera20k-core --lib util::mod_definition::tests::mo_profile_defaults_to_mo_resources_and_manifest_overrides_only_named_slots
-          python -m tools.cargo_run -- test -p vera20k-core --lib util::mod_definition::tests::mental_omega_manifest_identity_selects_mo_without_changing_unknown_mods
-          python -m tools.cargo_run -- test -p vera20k-core --lib map::scenario_sources::tests::mental_omega_loose_catalog_discovers_and_loads_nested_maps
-          python -m tools.cargo_run -- test -p vera20k-core --lib map::scenario_sources::tests::client_catalog_without_native_mode_match_keeps_native_modes_and_shared_maps
-          python -m tools.cargo_run -- test -p vera20k-core --lib assets::client_install::tests::legacy_catalog_infers_modes_from_map_memberships_without_game_modes_registry
-          python -m tools.cargo_run -- test -p vera20k-core --lib map::scenario_sources::tests::catalog_map_paths_reject_parent_and_absolute_components
-          python -m tools.cargo_run -- test -p vera20k --lib app::persistence::options_profile::tests::launcher_renderer_write_is_narrow_persistent_and_rejects_desktop_only_apis
-          python -m tools.cargo_run -- test -p vera20k --lib app::persistence::startup_backend::tests::android_renderer_fallback_tries_one_alternate_backend_without_a_cycle
-          python -m tools.cargo_run -- test -p vera20k-core --lib assets::asset_manager::tests::mo_profile_resolves_and_loads_mo_roots_expansion_archive_and_mod_ares
-          python -m tools.cargo_run -- test -p vera20k --lib app::input::touch::
-          python -m tools.cargo_run -- test -p vera20k --lib app::input::camera::
-          python -m tools.cargo_run -- test -p vera20k --lib app::input::dispatch::android_hud_group_tests::
-          python -m tools.cargo_run -- test -p vera20k --lib render::skirmish_shell_chrome::
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+        with:
+          packages: "platform-tools platforms;android-36 build-tools;36.1.0"
 
       - name: Install pinned Android NDK
-        if: steps.upstream.outputs.validate == 'true'
         shell: bash
         run: |
           set -euo pipefail
           sdkmanager --install "ndk;${ANDROID_NDK_VERSION}"
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
-          echo "sdk.dir=$ANDROID_HOME" > android/local.properties
 
       - name: Install cargo-ndk
-        if: steps.upstream.outputs.validate == 'true'
         shell: bash
         run: cargo install cargo-ndk --version 4.1.2 --locked
 
+      - name: Build optimized ARM64 native library
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build-logs
+          cargo ndk -t arm64-v8a --platform 26 -o android/app/src/main/jniLibs build \
+            --profile "$BUILD_PROFILE" -p vera20k-android --no-default-features \
+            2>&1 | tee build-logs/rust-android-arm64.log
+
+      - name: Verify native library alignment and record hash
+        shell: bash
+        run: |
+          set -euo pipefail
+          native=android/app/src/main/jniLibs/arm64-v8a/libvera20k_android.so
+          test -s "$native"
+          readelf -lW "$native" | tee build-logs/native-program-headers.txt
+          python3 - "$native" "$SOURCE_SHA" "$BUILD_TYPE" <<'PY'
+          import re
+          import sys
+          from hashlib import sha256
+          from pathlib import Path
+
+          native = Path(sys.argv[1])
+          source_sha = sys.argv[2]
+          build_type = sys.argv[3]
+          text = __import__("subprocess").check_output(["readelf", "-lW", str(native)], text=True)
+          alignments = [
+              int(match.group(1), 16)
+              for line in text.splitlines()
+              if line.strip().startswith("LOAD")
+              for match in [re.search(r"0x([0-9a-fA-F]+)\s*$", line)]
+              if match
+          ]
+          if not alignments or min(alignments) < 16 * 1024:
+              raise SystemExit(f"ARM64 LOAD alignment is below 16 KB: {alignments}")
+          Path("dist").mkdir(exist_ok=True)
+          Path("dist/native-build-manifest.txt").write_text(
+              f"source_sha={source_sha}\nbuild_type={build_type}\n"
+              f"sha256={sha256(native.read_bytes()).hexdigest()}\n"
+              f"load_alignments={','.join(hex(value) for value in alignments)}\n"
+          )
+          print(f"Verified ARM64 LOAD alignments: {alignments}")
+          PY
+
+      - name: Stage native artifact with a flat download layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/native
+          cp android/app/src/main/jniLibs/arm64-v8a/libvera20k_android.so dist/native/
+          cp dist/native-build-manifest.txt dist/native/
+          cp build-logs/rust-android-arm64.log dist/native/
+
+      - name: Upload ARM64 native library for packaging
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: android-new-native-${{ needs.prepare.outputs.build_type }}-${{ needs.prepare.outputs.source_sha }}-${{ github.run_attempt }}
+          path: dist/native/**
+          if-no-files-found: error
+          retention-days: 14
+
+  android-package:
+    name: Package, verify, and publish Android APK
+    needs: [prepare, engine-tests, launcher-tests, arm64-native]
+    if: needs.prepare.outputs.validate == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    env:
+      ANDROID_BUILD_TOOLS: "36.1.0"
+      SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+      SOURCE_CHANGED: ${{ needs.prepare.outputs.changed }}
+      UPSTREAM_SHA: ${{ needs.prepare.outputs.upstream_sha }}
+      BUILD_TYPE: ${{ needs.prepare.outputs.build_type }}
+      PUBLISH_RELEASE: ${{ inputs.publish_release || false }}
+      CARGO_PROFILE_SHIPPING_STRIP: symbols
+    steps:
+      - name: Check out frozen base revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.prepare.outputs.base_sha }}
+          fetch-depth: 0
+
+      - name: Download upstream merge bundle when needed
+        if: needs.prepare.outputs.changed == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: android-new-source-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}
+
+      - name: Check out frozen source revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$SOURCE_CHANGED" == true ]]; then
+            git fetch "$RUNNER_TEMP/android-new-source.bundle" \
+              refs/heads/ci/android-new-candidate:refs/remotes/ci/android-new-candidate
+            git checkout --detach refs/remotes/ci/android-new-candidate
+          else
+            git checkout --detach "$SOURCE_SHA"
+          fi
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Set up Temurin JDK 17
+        uses: actions/setup-java@8df1039502a15bceb9433410b1a100fbe190c53b # v4.5.0
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Configure Gradle cache
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-read-only: true
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+        with:
+          packages: "platform-tools platforms;android-36 build-tools;36.1.0"
+
+      - name: Download native artifact for exact source revision
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: android-new-native-${{ needs.prepare.outputs.build_type }}-${{ needs.prepare.outputs.source_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/native-output
+
+      - name: Install native library into clean packaging checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          native="$RUNNER_TEMP/native-output/libvera20k_android.so"
+          test -s "$native"
+          grep -Fx "source_sha=$SOURCE_SHA" "$RUNNER_TEMP/native-output/native-build-manifest.txt"
+          mkdir -p android/app/src/main/jniLibs/arm64-v8a
+          cp "$native" android/app/src/main/jniLibs/arm64-v8a/libvera20k_android.so
+
       - name: Prepare persistent release signing key
-        if: steps.upstream.outputs.validate == 'true' && inputs.build_type == 'release'
+        if: env.BUILD_TYPE == 'release'
         env:
           ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
           ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
@@ -232,46 +518,34 @@ jobs:
           echo "ANDROID_RELEASE_KEY_ALIAS=$ANDROID_RELEASE_KEY_ALIAS" >> "$GITHUB_ENV"
           echo "ANDROID_RELEASE_KEY_PASSWORD=$ANDROID_RELEASE_KEY_PASSWORD" >> "$GITHUB_ENV"
 
-      - name: Build ARM64 native library
-        if: steps.upstream.outputs.validate == 'true'
-        env:
-          BUILD_TYPE: ${{ env.BUILD_TYPE }}
+      - name: Assemble selected APK variant
         shell: bash
+        env:
+          BUILD_TYPE: ${{ needs.prepare.outputs.build_type }}
         run: |
           set -euo pipefail
-          profile=fast
+          chmod +x android/gradlew
           if [[ "$BUILD_TYPE" == release ]]; then
-            profile=shipping
-          fi
-          cargo ndk -t arm64-v8a --platform 26 -o android/app/src/main/jniLibs build \
-            --profile "$profile" -p vera20k-android --no-default-features
-
-      - name: Assemble APK
-        if: steps.upstream.outputs.validate == 'true'
-        env:
-          BUILD_TYPE: ${{ env.BUILD_TYPE }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "$BUILD_TYPE" == release ]]; then
-            bash "$RUNNER_TEMP/gradle-with-network-retry.sh" -p android :app:assembleRelease
+            bash .github/scripts/gradle-with-network-retry.sh -p android \
+              :app:assembleRelease --no-daemon --max-workers=2
           else
             mkdir -p android/.android
             keytool -genkeypair -keystore android/.android/debug.keystore \
               -storepass android -alias androiddebugkey -keypass android \
               -keyalg RSA -keysize 2048 -validity 10000 \
               -dname "CN=Android Debug,O=Android,C=US"
-            bash "$RUNNER_TEMP/gradle-with-network-retry.sh" -p android :app:assembleDebug
+            bash .github/scripts/gradle-with-network-retry.sh -p android \
+              :app:assembleDebug --no-daemon --max-workers=2
           fi
 
-      - name: Apply persistent signing to the debug APK
-        if: steps.upstream.outputs.validate == 'true' && inputs.build_type != 'release'
-        shell: bash
+      - name: Apply persistent signing to debug APK
+        if: needs.prepare.outputs.build_type == 'debug'
         env:
           ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
           ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
           ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
           ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+        shell: bash
         run: |
           set -euo pipefail
           for name in ANDROID_RELEASE_KEYSTORE_BASE64 ANDROID_RELEASE_STORE_PASSWORD \
@@ -282,8 +556,7 @@ jobs:
             fi
           done
           keystore="$RUNNER_TEMP/iron-harbor-release.keystore"
-          printf '%s' "$ANDROID_RELEASE_KEYSTORE_BASE64" | base64 --decode \
-            > "$keystore"
+          printf '%s' "$ANDROID_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$keystore"
           chmod 600 "$keystore"
           keytool -list -keystore "$keystore" \
             -storepass "$ANDROID_RELEASE_STORE_PASSWORD" \
@@ -291,20 +564,17 @@ jobs:
           apk=android/app/build/outputs/apk/debug/app-debug.apk
           tools="$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS"
           signed="$RUNNER_TEMP/app-debug-persistent-signed.apk"
-          "$tools/apksigner" sign \
-            --ks "$keystore" \
+          "$tools/apksigner" sign --ks "$keystore" \
             --ks-key-alias "$ANDROID_RELEASE_KEY_ALIAS" \
             --ks-pass env:ANDROID_RELEASE_STORE_PASSWORD \
-            --key-pass env:ANDROID_RELEASE_KEY_PASSWORD \
-            --out "$signed" "$apk"
+            --key-pass env:ANDROID_RELEASE_KEY_PASSWORD --out "$signed" "$apk"
           mv "$signed" "$apk"
           rm -f "$keystore"
 
-      - name: Verify APK identity, persistent signature, and native alignment
-        if: steps.upstream.outputs.validate == 'true'
-        env:
-          BUILD_TYPE: ${{ env.BUILD_TYPE }}
+      - name: Verify APK identity, signer, native library, and ZIP alignment
         shell: bash
+        env:
+          BUILD_TYPE: ${{ needs.prepare.outputs.build_type }}
         run: |
           set -euo pipefail
           version_name="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
@@ -328,68 +598,53 @@ jobs:
           "$tools/zipalign" -c -P 16 -v 4 "$apk"
           unzip -t "$apk"
           unzip -Z1 "$apk" | grep -Fx 'lib/arm64-v8a/libvera20k_android.so'
-          native="$RUNNER_TEMP/libvera20k_android.so"
-          unzip -p "$apk" lib/arm64-v8a/libvera20k_android.so > "$native"
-          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -lW "$native" > "$RUNNER_TEMP/vera-elf-program-headers.txt"
-          python3 - "$RUNNER_TEMP/vera-elf-program-headers.txt" <<'PY'
-          import re
-          import sys
-          from pathlib import Path
-
-          text = Path(sys.argv[1]).read_text()
-          alignments = [
-              int(re.findall(r"0x[0-9a-fA-F]+", line)[-1], 16)
-              for line in text.splitlines()
-              if line.strip().startswith("LOAD") and re.findall(r"0x[0-9a-fA-F]+", line)
-          ]
-          if not alignments or min(alignments) < 16 * 1024:
-              raise SystemExit(f"ARM64 LOAD alignment is below 16 KB: {alignments}")
-          print(f"ARM64 ELF LOAD alignments: {alignments}")
-          PY
-
+          expected_native_sha="$(sed -n 's/^sha256=//p' "$RUNNER_TEMP/native-output/native-build-manifest.txt")"
+          actual_native_sha="$(unzip -p "$apk" lib/arm64-v8a/libvera20k_android.so | sha256sum | cut -d ' ' -f1)"
+          test "$actual_native_sha" = "$expected_native_sha"
           mkdir -p dist
           output="dist/IronHarborMobile-v${version_name}-${build_label}-${BUILD_TYPE}-arm64.apk"
           cp "$apk" "$output"
           sha256sum "$output" | tee dist/SHA256SUMS.txt
-          echo "APK: $output"
+          printf 'source_sha=%s\nupstream_sha=%s\nbuild_type=%s\nversion_name=%s\nversion_code=%s\n' \
+            "$SOURCE_SHA" "$UPSTREAM_SHA" "$BUILD_TYPE" "$version_name" "$version_code" \
+            > dist/build-manifest.txt
 
       - name: Upload verified ARM64 APK artifact
-        if: success() && steps.upstream.outputs.validate == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: IronHarborMobile-android-new-${{ inputs.build_type || 'debug' }}-${{ steps.upstream.outputs.source_sha }}
+          name: IronHarborMobile-android-new-${{ needs.prepare.outputs.build_type }}-${{ needs.prepare.outputs.source_sha }}-${{ github.run_attempt }}
           path: |
             dist/*.apk
             dist/SHA256SUMS.txt
+            dist/build-manifest.txt
           if-no-files-found: error
           retention-days: 14
 
-      - name: Push verified upstream merge
-        if: steps.upstream.outputs.changed == 'true'
+      - name: Push validated upstream merge
+        if: needs.prepare.outputs.changed == 'true'
         shell: bash
         run: |
           set -euo pipefail
           git fetch origin android-new
           remote="$(git rev-parse FETCH_HEAD)"
-          if git merge-base --is-ancestor HEAD "$remote"; then
-            echo "The validated candidate is already included in remote android-new ($remote)."
-          elif git merge-base --is-ancestor "$remote" HEAD; then
-            git push origin HEAD:refs/heads/android-new
+          if git merge-base --is-ancestor "$SOURCE_SHA" "$remote"; then
+            echo "The validated source is already included in android-new ($remote)."
+          elif git merge-base --is-ancestor "$remote" "$SOURCE_SHA"; then
+            git push origin "$SOURCE_SHA":refs/heads/android-new
           else
-            echo "Remote android-new advanced on a separate line after this candidate was validated." >&2
-            echo "Refusing to overwrite or merge unvalidated commits; rerun synchronization on the new head." >&2
+            echo "android-new advanced on a separate line while candidate $SOURCE_SHA was validated." >&2
+            echo "Refusing to overwrite or publish an unvalidated combination." >&2
             exit 1
           fi
 
       - name: Publish verified B61 release
         if: >-
-          success() && steps.upstream.outputs.validate == 'true' &&
-          github.event_name == 'workflow_dispatch' && inputs.build_type == 'release' &&
-          inputs.publish_release
+          success() && github.event_name == 'workflow_dispatch' &&
+          needs.prepare.outputs.build_type == 'release' && inputs.publish_release
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ steps.upstream.outputs.source_sha }}
-          UPSTREAM_SHA: ${{ steps.upstream.outputs.upstream_sha }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          UPSTREAM_SHA: ${{ needs.prepare.outputs.upstream_sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -412,21 +667,21 @@ jobs:
           cat > "$notes" <<EOF
           ## What's new since B60
 
-          - Updates the Android build to VERA20K 0.4.3, including the upstream engine revision \`$UPSTREAM_SHA\`.
+          - Updates the Android build to VERA20K 0.4.3, including the upstream engine revision `$UPSTREAM_SHA`.
           - Fixes held-drag unit box selection so it begins at the original touch point and does not turn small hold jitter into a premature right-click.
           - Adds a launcher option to disable automatic startup diagnostic snapshots; engine logs, crash reports, and manual exports remain available.
 
           ## Compatibility
 
-          - Package: \`org.ironharbor.mobile\`; version code: \`$version_code\` (B60 was 267).
+          - Package: `org.ironharbor.mobile`; version code: `$version_code` (B60 was 267).
           - ARM64 APK signed with the existing Iron Harbor release certificate for in-place updates.
           - You provide your own legally obtained game files; none are included.
 
-          Fork source: \`$SOURCE_SHA\`
+          Fork source: `$SOURCE_SHA`
 
-          Upstream source: \`$UPSTREAM_SHA\`
+          Upstream source: `$UPSTREAM_SHA`
 
-          SHA-256: \`$sha\`
+          SHA-256: `$sha`
           EOF
           printf 'SHA-256: %s\nAPK: %s\nFork source: %s\nUpstream source: %s\n' \
             "$sha" "$(basename "$apk")" "$SOURCE_SHA" "$UPSTREAM_SHA" > dist/changelog.txt
