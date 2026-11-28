@@ -9,6 +9,7 @@ Updated 2026-11-28. Current authoritative plan: [IRON_HARBOR_MASTER_PLAN.md](IRO
 - Added one-finger swipe camera pan, two-finger centroid pan and pinch zoom while retaining drag selection and stationary two-finger context click. Profile-only mod changes now synchronize selected-mod maps without repeating scans when already synchronized. Skirmish flag-atlas cache identity now includes active-mod flag filenames.
 - Added focused Rust workflow filters for touch, camera zoom, HUD group gestures and mod faction flag atlas behavior. `git diff --check` and leaf-file rustfmt passed locally; no Rust/Cargo/Gradle compilation or tests were run locally. CI/device verification is pending.
 - The cloaked/submersible opaque-light appearance was not established by available logs; no rendering fix is claimed. It needs a screenshot or device capture with a named unit and mod.
+- First hosted run [46116095627](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46116095627) failed at `:app:compileDebugKotlin` before tests or native compilation: `modifierModesHeld` was referenced by the overlay but its state field was missing. Added the missing field; corrected commit and a new Actions run are pending.
 
 ## 2026-11-28 — skirmish mode roster and staged mod maps (CI pending)
 

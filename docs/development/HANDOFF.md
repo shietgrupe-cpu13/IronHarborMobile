@@ -3,6 +3,7 @@
 ## Current checkpoint — HUD/control changes (2026-11-28; CI pending)
 
 - Repository `shietgrupe-cpu13/IronHarborMobile`, branch `android-new`; remote matched `9022149a829658d5cadcdb4633109f3c19b98438` before pending changes. Commit/push these changes and let Actions perform all compilation and tests; never compile locally.
+- The first new run [46116095627](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46116095627) failed at Kotlin compilation because `modifierModesHeld` lacked a field declaration. The declaration is now added; commit/push it and retry.
 - Pending changes: C1..C10 tap/hold group behavior routed through the Rust game loop; source-grounded PC hotkeys and modifier chords; modifier release when switching HUD sets; swipe/pinch camera input; mod map synchronization; faction flag cache invalidation. Focused workflow filters were added for touch, camera, groups and flag rendering.
 - `git diff --check` and leaf-file rustfmt passed. No local build/test or device validation. `out/` is user data: leave untracked and untouched, exclude from commits.
 - Next: stage exact source/workflow/docs paths, commit, push to `android-new`, monitor Actions, inspect APK verification and artifact. Diagnose CI failures from actual logs.

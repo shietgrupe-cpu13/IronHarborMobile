@@ -43,6 +43,7 @@ internal class TouchHudOverlay(private val activity: VeraActivity) {
             dispatchKey(keyCode, KeyEvent.ACTION_UP, downTime, now, 0)
         }
     }
+    private val modifierModesHeld = linkedSetOf<String>()
     private var routeModeHeld = false
     private var controlsVisible = preferences.getBoolean(TouchHudSettings.HUD_ENABLED, true) &&
         !preferences.getBoolean(TouchHudSettings.HUD_HIDDEN, false)
