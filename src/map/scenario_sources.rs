@@ -952,11 +952,24 @@ mod tests {
             "ihmod_staged.map",
             b"[Basic]\nName=Staged mod map\nGameMode=standard\n[Map]\nSize=0,0,2,1\n",
         );
+        let mod_folder = crate::util::mod_package::ModFolder::loose(selected_mod.path().to_owned());
+        let definition = crate::util::mod_definition::ModDefinition::parse(
+            "[Mod]\nName=Client catalog regression\n",
+        )
+        .unwrap();
+        let resources = crate::assets::asset_manager::mod_resources(
+            &mod_folder,
+            &definition,
+            &crate::util::ini_roots::IniRootConfig::default(),
+        )
+        .unwrap();
         let mut assets = AssetManager::with_mod(
             base.path(),
             Some(selected_mod.path()),
             MediaArchiveMode::STOCK_DIGITAL,
         )
+        .unwrap()
+        .with_resource_config(&resources)
         .unwrap();
         let client = assets.client_install().expect("selected mod client catalog");
         assert_eq!(client.maps.len(), 1);
