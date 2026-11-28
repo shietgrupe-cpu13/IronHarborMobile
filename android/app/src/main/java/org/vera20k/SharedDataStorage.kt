@@ -57,7 +57,7 @@ internal class SharedDataStorage(private val context: Context) {
         }
         if (!root.exists() && !root.mkdirs()) return null
         if (!root.isDirectory) return null
-        listOf("Saves", "Configs/Maps", "Mods", "Logs", "Config", "Mods/AresSupport").forEach { name ->
+        listOf("Saves", "Maps", "Mods", "Logs", "Config", "Mods/AresSupport").forEach { name ->
             val child = File(root, name)
             if (!child.isDirectory && !child.mkdirs() && !child.isDirectory) return null
         }
@@ -147,7 +147,7 @@ internal class SharedDataStorage(private val context: Context) {
             return
         }
         val root = rootUri()
-        listOf("Mods", "Configs/Maps", "Saves", "Logs", "Config", "Mods/AresSupport").forEach { ensureArea(it) }
+        listOf("Mods", "Maps", "Saves", "Logs", "Config", "Mods/AresSupport").forEach { ensureArea(it) }
         directRootPath()?.let(::migrateLegacyMaps)
     }
 
@@ -585,26 +585,21 @@ internal class SharedDataStorage(private val context: Context) {
         private const val ROOT_NAME = "RA2Harbor"
         private val LEGACY_ROOT_NAMES = listOf("IronHarborRA2YR", "RA2IRONHARBOR")
 
-        /** Move the former top-level Maps tree under Configs without replacing user files. */
+        /** Move legacy Configs/Maps content to the canonical Maps tree without replacing user files. */
         @JvmStatic
         @Throws(IOException::class)
         internal fun migrateLegacyMaps(root: File) {
             val canonicalRoot = root.canonicalFile
-            val legacy = File(canonicalRoot, "Maps")
-            if (Files.isSymbolicLink(legacy.toPath()) || !legacy.isDirectory) return
             val configs = File(canonicalRoot, "Configs")
-            val target = File(configs, "Maps")
-            if (Files.isSymbolicLink(configs.toPath()) || Files.isSymbolicLink(target.toPath())) {
+            val legacy = File(configs, "Maps")
+            val target = File(canonicalRoot, "Maps")
+            if (Files.isSymbolicLink(configs.toPath()) || Files.isSymbolicLink(legacy.toPath()) ||
+                Files.isSymbolicLink(target.toPath())
+            ) {
                 throw IOException("Cannot migrate maps through a symbolic link")
             }
-            if (!configs.isDirectory && !configs.mkdirs()) {
-                throw IOException("Cannot create ${configs.absolutePath} for existing maps")
-            }
-            if (!target.exists()) {
-                Files.move(legacy.toPath(), target.toPath())
-                return
-            }
-            if (!target.isDirectory) throw IOException("${target.absolutePath} exists and is not a folder")
+            if (!legacy.isDirectory) return
+            if (!target.isDirectory && !target.mkdirs()) throw IOException("Cannot create ${target.absolutePath}")
             mergeLegacyDirectory(legacy, target)
         }
 

@@ -12,7 +12,7 @@ class LauncherModMapStagingTest {
         val root = Files.createTempDirectory("ih-map-stage").toFile()
         try {
             val mod = root.resolve("mod").apply { mkdirs() }
-            val maps = root.resolve("Documents/RA2Harbor/Configs/Maps")
+            val maps = root.resolve("Documents/RA2Harbor/Maps")
             val nested = mod.resolve("MapsMO/Standard/arena.yrm").apply {
                 parentFile.mkdirs()
                 writeText("[Basic]\nName=MO Arena\n")
@@ -45,7 +45,7 @@ class LauncherModMapStagingTest {
     fun switchingAndUnselectingRemovesOnlyUnchangedManagedCopies() {
         val root = Files.createTempDirectory("ih-map-switch").toFile()
         try {
-            val maps = root.resolve("Documents/RA2Harbor/Configs/Maps").apply { mkdirs() }
+            val maps = root.resolve("Documents/RA2Harbor/Maps").apply { mkdirs() }
             val userMap = maps.resolve("my-map.map").apply { writeText("user-owned") }
             val firstMod = root.resolve("first").apply { mkdirs() }
             val oldSource = firstMod.resolve("Sub/old.yrm").apply { parentFile.mkdirs(); writeText("old map") }

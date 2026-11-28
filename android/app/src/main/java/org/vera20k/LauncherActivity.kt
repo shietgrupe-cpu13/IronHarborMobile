@@ -1309,7 +1309,7 @@ class LauncherActivity : Activity() {
         val card = card()
         card.addView(kicker("ENGINE MAP LIBRARY"))
         card.addView(text(mapDirectory?.absolutePath ?: "Engine map folder unavailable", 12, R.color.launcher_muted))
-        card.addView(text("Editable folder: Documents/RA2Harbor/Configs/Maps", 12, R.color.launcher_accent), margin(top = 6))
+        card.addView(text("Editable folder: Documents/RA2Harbor/Maps", 12, R.color.launcher_accent), margin(top = 6))
         modMapStagingNote?.let { note ->
             card.addView(text(note, 13, R.color.launcher_muted), margin(top = 6))
         }
@@ -1390,7 +1390,7 @@ class LauncherActivity : Activity() {
             val groups = modMapScanResult.groupingBy { it.group }.eachCount().toSortedMap(String.CASE_INSENSITIVE_ORDER)
             val engineMaps = modMapScanResult.count { File(it.relativePath).extension.lowercase(Locale.ROOT) in setOf("map", "yrm", "mpr") }
             card.addView(text(
-                "$engineMaps engine map${if (engineMaps == 1) "" else "s"} are mirrored temporarily into Documents/RA2Harbor/Configs/Maps. The original mod files stay in place; unselecting the mod removes only unchanged Iron Harbor copies.",
+                "$engineMaps engine map${if (engineMaps == 1) "" else "s"} are mirrored temporarily into Documents/RA2Harbor/Maps. The original mod files stay in place; unselecting the mod removes only unchanged Iron Harbor copies.",
                 13,
                 R.color.launcher_muted,
             ), margin(top = 6))
@@ -1511,7 +1511,7 @@ class LauncherActivity : Activity() {
                         if (page == Page.MAPS) renderPage()
                     }
                 }
-                result = "Imported ${imported.size} map file${if (imported.size == 1) "" else "s"} into Documents/RA2Harbor/Configs/Maps. The engine reads maps from this folder directly."
+                result = "Imported ${imported.size} map file${if (imported.size == 1) "" else "s"} into Documents/RA2Harbor/Maps. The engine reads maps from this folder directly."
             } catch (_: MapImportJob.Cancelled) {
                 result = "Map import cancelled. $completedCount completed file${if (completedCount == 1) " remains" else "s remain"}; existing files were not replaced."
             } catch (error: Throwable) {
@@ -1721,7 +1721,7 @@ class LauncherActivity : Activity() {
             val destination = when (name) {
                 "saves" -> "Saves"
                 "logs" -> "Logs"
-                "Maps" -> "Configs/Maps"
+                "Maps" -> "Maps"
                 "AresSupport" -> "Mods/AresSupport"
                 else -> name
             }
