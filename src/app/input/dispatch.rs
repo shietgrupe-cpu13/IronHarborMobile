@@ -137,7 +137,7 @@ pub(crate) fn handle_android_hud_control_group(
         .unwrap_or_default();
     let selected = selected_stable_ids_in_order(
         sim,
-        state.rules(),
+        crate::app::state::active_rules(&state.frontend, &state.match_state),
         &state.match_state.input.selection_order,
         state.match_state.input.selection_order_pending,
     );

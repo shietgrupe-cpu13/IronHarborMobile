@@ -11,6 +11,10 @@ Updated 2026-11-28. Current authoritative plan: [IRON_HARBOR_MASTER_PLAN.md](IRO
 - The cloaked/submersible opaque-light appearance was not established by available logs; no rendering fix is claimed. It needs a screenshot or device capture with a named unit and mod.
 - First hosted run [46116095627](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46116095627) failed at `:app:compileDebugKotlin` before tests or native compilation: `modifierModesHeld` was referenced by the overlay but its state field was missing. Added the missing field; corrected commit and a new Actions run are pending.
 
+## 2026-11-28 — current CI follow-up
+
+- Corrected run [46116323930](https://github.com/shietgrupe-cpu13/IronHarborMobile/actions/runs/46116323930) passed Kotlin/JVM and focused Rust tests, then ARM64 compile found the new group dispatcher calling nonexistent `AppState::rules()`. It now uses existing `active_rules(frontend, match_state)`; another Actions run is pending.
+
 ## 2026-11-28 — skirmish mode roster and staged mod maps (CI pending)
 
 - Compared the two newest IHLOGS with earlier successful sessions. The same 964-byte `MPModesMD.ini` from `ra2md.mix -> localmd.mix` loads successfully with another mod; Red Resurrection alone logs that no mode rows survive. This points to the client catalog's mode names filtering out every native YR mode, not a missing/corrupt common archive. The separate earlier Mental Omega/YR profile mismatch remains distinct.
